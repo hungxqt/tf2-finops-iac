@@ -1,0 +1,55 @@
+variable "project_name" {
+  type        = string
+  description = "The prefix name of the project"
+}
+
+variable "environment" {
+  type        = string
+  description = "The environment name (e.g., sandbox, staging, prod)"
+}
+
+variable "member_account_ids" {
+  type        = list(string)
+  description = "AWS Member Account IDs for cross-account roles"
+  default     = []
+}
+
+variable "lakehouse_bucket_arn" {
+  type        = string
+  description = "ARN of the lakehouse S3 bucket"
+}
+
+variable "audit_bucket_arn" {
+  type        = string
+  description = "ARN of the audit S3 bucket"
+}
+
+variable "dynamodb_table_arns" {
+  type        = list(string)
+  description = "List of DynamoDB table ARNs"
+  default     = []
+}
+
+variable "kms_key_arns" {
+  type        = list(string)
+  description = "List of KMS Key ARNs for decryption"
+  default     = []
+}
+
+variable "ai_engine_secret_arn" {
+  type        = string
+  description = "ARN of the Secrets Manager secret containing AI client endpoint/token credentials"
+  default     = ""
+}
+
+variable "containment_apply_enabled" {
+  type        = bool
+  description = "Whether automatic containment action apply is enabled"
+  default     = false
+}
+
+variable "tags" {
+  type        = map(string)
+  description = "Common resource tags"
+  default     = {}
+}
