@@ -158,7 +158,7 @@ data "aws_iam_policy_document" "lambda_trust" {
 }
 
 locals {
-  worker_names = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker"]
+  worker_names = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
 }
 
 # Lambda Worker Roles

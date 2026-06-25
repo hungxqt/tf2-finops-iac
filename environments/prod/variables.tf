@@ -71,3 +71,27 @@ variable "dashboard_geo_restriction_locations" {
   description = "List of ISO 3166-1-alpha-2 country codes for geo restriction"
   default     = ["CU", "IR", "KP", "SY"]
 }
+
+variable "alb_certificate_arn" {
+  type        = string
+  description = "ACM Certificate ARN for the internal ALB HTTPS listener"
+}
+
+variable "private_hosted_zone_id" {
+  type        = string
+  description = "Private Hosted Zone ID for internal Route 53 record"
+  default     = ""
+}
+
+variable "private_dns_name" {
+  type        = string
+  description = "Private DNS name to assign to the internal ALB"
+  default     = ""
+}
+
+variable "sigv4_service_name" {
+  type        = string
+  description = "SigV4 service name for authentication"
+  default     = "ai-engine"
+}
+

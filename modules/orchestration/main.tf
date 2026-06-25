@@ -266,7 +266,7 @@ resource "aws_sfn_state_machine" "workflow" {
     state_lambda_arn                 = var.lambda_function_arns["state"]
     cost_puller_lambda_arn           = var.lambda_function_arns["cost_puller"]
     normalizer_lambda_arn            = var.lambda_function_arns["normalizer"]
-    ai_request_lambda_arn            = var.lambda_function_arns["ai_request"]
+    ai_request_lambda_arn            = var.lambda_function_arns["vpc_alb_caller"]
     router_lambda_arn                = var.lambda_function_arns["router"]
     audit_writer_lambda_arn          = var.lambda_function_arns["audit_writer"]
     containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]

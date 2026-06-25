@@ -286,20 +286,22 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 
 ### Conflict handling
 
-- `AGENTS.md` and explicit user instructions decide repository ownership and platform target. If a contract names a runtime platform, application gateway, or application delivery flow while this repo is scoped to Terraform platform and workflow integration, implement only the equivalent infrastructure/control requirement without adding application runtime deployment files or changing platform target.
-- The runtime-platform source of truth is `docs/tf2-finops/01_requirements_analysis.md`, `docs/tf2-finops/02_infra_design.md`, `docs/tf2-finops/04_deployment_design.md`, and `docs/tf2-finops/08_adrs.md`. Where these documents supersede stale ECS/ALB/API Gateway transport wording in `docs/contracts/ai-api-contract.md` or `docs/contracts/deployment-contract.md`, agents must follow the updated Lambda container architecture from the architecture documents.
-- ECS Cluster, Fargate/Fargate Spot capacity providers, internal ALB, target groups, HTTPS listeners, Route 53 private DNS, Private API Gateway, EKS, Kubernetes, and Argo CD are **not** part of the current AI hosting platform. Any remaining references to these in `docs/contracts/**` are stale transport wording. Agents must preserve the behavioral contract intent behind that wording — private execution, immutable image references, tenant isolation, SQS buffering, DynamoDB/S3 result storage, result polling, SLO monitoring, and fail-closed behavior — and implement it using the Lambda container architecture.
-- Preserve contract intent even when product names are stale. For example, "private service behind an internal load balancer" maps to private Lambda execution in VPC subnets with VPC endpoints and security groups, not ECS/ALB infrastructure, unless the user explicitly changes ownership.
-- Record stale or conflicting contract wording in the relevant paired progress files and final response. Do not edit `docs/contracts/**` unless the user explicitly asks for contract changes.
+- `AGENTS.md` and explicit user instructions decide repository ownership and platform target. Future implementation agents must follow the active `docs/tf2-finops` architecture, which describes the AI Engine integration via a private internal HTTPS ALB.
+- The active, approved AI Engine integration path is: `Step Functions` -> `VpcAlbCallerLambda` -> `private internal ALB` -> `AI Request Lambda (live alias)`.
+- AGENTS.md must enforce repository safety and implementation rules, but must not contradict active `docs/tf2-finops` architecture or `docs/contracts`.
+- ECS Cluster, Fargate/Fargate Spot capacity providers, Private API Gateway, EKS, Kubernetes, and Argo CD are **not** part of the active AI hosting platform. Any references to these in `docs/contracts/**` or older ADRs are stale or superseded transport wording.
+- Where contracts or design documents mention transport mechanisms like ECS Fargate clusters or Private API Gateways, these are treated as stale or superseded transport names. The physical private internal ALB is active, and it is the physical integration target of the `VpcAlbCallerLambda`.
+- Specifically, the logical HTTPS `/v1/*` endpoints are mapped to standard Lambda target group invocations via the internal ALB, keeping the API contract behaviorally compatible.
 
 ### AI API contract requirements
 
-- `ai_client` must call the versioned AI Engine contract. In the Lambda container architecture, Step Functions invokes the AI Engine Request Lambda directly with `/v1/detect` semantics, and polls results directly from DynamoDB via `getItem`. The logical `/v1/detect` submission and `/v1/detect/result/{audit_id}` polling contracts are preserved as Lambda payload and DynamoDB key conventions.
-- AI Engine calls must include required contract context: `Content-Type`, `Accept`, `X-Tenant-Id`, `Authorization` using IAM SigV4, `X-Idempotency-Key`, and `X-Correlation-Id` where applicable.
+- AI integration requires implementing these logical operations: `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}` (for remediation/self-healing status only), `/v1/audit/{audit_id}/rollback` (for result notification), and `/health`.
+- Step Functions invokes the `VpcAlbCallerLambda` with the target path (e.g. `/v1/detect`), which forwards the request to the internal HTTPS ALB, which in turn invokes the AI Engine Request Lambda live alias. The logical `/v1/detect` submission and result polling contracts are fully preserved.
+- AI Engine calls must require secure context headers: `Content-Type`, `Accept`, `X-Tenant-Id` (tenant isolation), `X-Idempotency-Key` (idempotency check), `X-Correlation-Id` (correlation ID), `X-Payload-SHA256` (payload hash), `X-Request-Timestamp` (request timestamp), and `X-Dry-Run-Mode` (dry-run mode). Communication is secured via AWS IAM SigV4 (`Authorization`).
 - Do not use static API keys or bearer tokens as the long-term authentication design. If placeholder secret material exists for local tests, keep it non-production, non-real, and document it as a stub.
-- Support both `RAW_JSON` and `S3_POINTER` ingestion modes at the CDO/AI boundary when data size requires it. Prefer S3 pointer for large CUR payloads.
+- Support both `RAW_JSON` and `S3_POINTER` ingestion modes at the CDO/AI boundary. CUR/Data Exports via `S3_POINTER` is the default ingestion mode; Cost Explorer daily data via `RAW_JSON` is the fallback mode when CUR delay is detected (delayed > 36 hours).
 - Handle AI API error codes defensively: invalid schema, idempotency mismatch, auth failure, cross-tenant denial, not found, duplicate in progress, rollback unsupported, rate limiting, model timeout, and service down must not trigger automatic containment.
-- AI timeout, unavailability, invalid schema, unsafe recommendation, low telemetry quality, or forced dry-run must still preserve audit evidence and alert operators through the allowed static/rule-based path.
+- SQS/DLQ queues are used strictly for alert retry and audit notification buffers (`finops-watch-rollback`) unless a contract explicitly adds another queue use.
 
 ### Telemetry contract requirements
 
@@ -308,6 +310,18 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 - `cost_puller` owns raw telemetry acquisition. `normalizer` owns schema validation, field normalization, S3 raw-to-curated transformation, partition conventions, quality scoring, and Glue/Athena readiness hooks.
 - Preserve untagged spend signals instead of dropping incomplete ownership fields. Missing owner/team/cost-center tags are a Finance escalation signal.
 - If CUR is delayed, CloudWatch is missing, Cost Explorer is stale, data is estimated, or telemetry completeness is below the contract threshold, the workflow must degrade to dry-run/alert-only containment and write audit evidence.
+
+### Storage and State Policy
+
+- **Idempotency Hot Path**: DynamoDB `finops-idempotency-{env}` is the hot path for idempotency validation (keyed on composite key with a 24-hour TTL (`ttl_expiry`)).
+- **Durable Audit Trail**: S3 with Object Lock (compliance mode) remains the authoritative evidence store for audit and telemetry retention, and must retain containment logs for at least 90 days.
+- **Rollback Caching**: DynamoDB `finops-rollback-cache` stores the `rollback_payload.boto3_equivalent` cached from `/v1/decide` for 90 days (backed by Object Lock S3 copies).
+- **Rollback Execution**: CDO workers execute rollbacks directly using the cached Boto3 payload from `finops-rollback-cache` (enabling independent execution even when the AI Engine is offline). The SQS queue `finops-watch-rollback` is for audit completion notification only, not rollback command dispatch.
+
+### Dashboard and Presentation Policy
+
+- **Dashboard Target**: The dashboard is hosted as static assets in S3, delivered via CloudFront, and authenticated by Cognito user/identity pools.
+- **Finance Usability**: The dashboard must support finance-readable, SQL-free views (reading from DynamoDB dashboard read-caches). QuickSight remains an optional/future BI integration.
 
 ### Deployment, SLO, and telemetry operations
 

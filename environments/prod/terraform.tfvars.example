@@ -22,3 +22,12 @@ cloudfront_aliases             = ["dashboard.example.com"]
 # CloudFront Geo-restrictions
 dashboard_geo_restriction_type      = "blacklist"
 dashboard_geo_restriction_locations = ["CU", "IR", "KP", "SY"]
+
+# ACM Certificate ARN for the internal ALB HTTPS listener
+alb_certificate_arn = "arn:aws:acm:ap-southeast-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+
+# Route 53 parameters (Optional)
+private_hosted_zone_id = ""
+private_dns_name       = ""
+sigv4_service_name     = "ai-engine"
+

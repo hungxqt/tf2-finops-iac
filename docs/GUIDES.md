@@ -67,7 +67,7 @@ If the bootstrap has already been run once and the S3 backend configuration is a
    *Note: Teammates do not need to run `apply` or `migrate-state` in the bootstrap folder unless making changes to the bootstrap infrastructure itself.*
 
 ### Step 2.3: Package Lambda Zip Files
-Package the 6 Python adapter functions into the `.build/lambda/` folder:
+Package the 7 Python adapter functions into the `.build/lambda/` folder:
 ```powershell
 cd ..
 .\scripts\package-lambdas.ps1
@@ -87,6 +87,7 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
    cp terraform.tfvars.example terraform.tfvars
    # Initialize and connect to remote state
    terraform init
+   # Provide the required alb_certificate_arn variable (e.g. via tfvars or command line)
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
    ```
@@ -116,11 +117,15 @@ Once applied, fetch the Outputs to feed the Application Layer (`tf2-finops-gitop
 terraform output
 ```
 
-* `request_lambda_function_name`: AI Engine Request Lambda function name (container-based, handles synchronous /v1/detect, /v1/decide, and /v1/verify).
+* `private_alb_endpoint`: The HTTPS base URL for accessing the private ALB (either Route 53 private DNS alias or internal ALB DNS name).
+* `private_alb_dns_name`: The raw DNS name of the internal ALB.
+* `private_alb_security_group_id`: The security group ID of the internal ALB.
+* `request_lambda_function_name`: AI Engine Request Lambda function name (container-based, invoked via internal ALB target group on port 443).
 * `worker_lambda_function_name`: AI Engine Worker Lambda function name (container-based, processes asynchronous anomaly ingestion).
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
 * `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
+
 
 ### Step 3.1: Dashboard Deployment & Asset Handoff
 Once the Terraform plan is applied, the dashboard infrastructure is ready. The handoff process follows these rules:

@@ -445,6 +445,13 @@ module "ai_runtime_lambda" {
   curated_bucket_name  = module.lakehouse.lakehouse_bucket_name
   evidence_bucket_name = module.lakehouse.audit_bucket_name
 
+  vpc_id                 = module.networking.vpc_id
+  vpc_cidr_block         = module.networking.vpc_cidr_block
+  alb_certificate_arn    = var.alb_certificate_arn
+  private_hosted_zone_id = var.private_hosted_zone_id
+  private_dns_name       = var.private_dns_name
+  alb_access_logs_bucket = module.lakehouse.logging_bucket_name
+
   secret_arns  = []
   kms_key_arns = [module.lakehouse.data_kms_key_arn]
   tags         = var.tags
@@ -468,6 +475,8 @@ module "compute_lambda" {
   cloudwatch_log_kms_key_arn     = module.lakehouse.data_kms_key_arn
   lambda_env_kms_key_arn         = module.lakehouse.data_kms_key_arn
   sqs_kms_key_arn                = module.lakehouse.data_kms_key_arn
+  alb_base_url                   = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? "https://${var.private_dns_name}" : "https://${module.ai_runtime_lambda.alb_dns_name}"
+  sigv4_service_name             = var.sigv4_service_name
   tags                           = var.tags
 }
 

@@ -183,4 +183,25 @@ output "rollback_status_queue_arn" {
   value       = module.orchestration.rollback_status_queue_arn
 }
 
+output "private_alb_dns_name" {
+  description = "The DNS name of the internal ALB"
+  value       = module.ai_runtime_lambda.alb_dns_name
+}
+
+output "private_alb_arn" {
+  description = "The ARN of the internal ALB"
+  value       = module.ai_runtime_lambda.alb_arn
+}
+
+output "private_alb_security_group_id" {
+  description = "The ID of the security group for the internal ALB"
+  value       = module.ai_runtime_lambda.alb_security_group_id
+}
+
+output "private_alb_endpoint" {
+  description = "The HTTPS base URL for accessing the private ALB"
+  value       = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? "https://${var.private_dns_name}" : "https://${module.ai_runtime_lambda.alb_dns_name}"
+}
+
+
 

@@ -328,3 +328,150 @@ resource "aws_lambda_event_source_mapping" "worker" {
     }
   }
 }
+
+# Internal ALB for AI Request Lambda integration
+resource "aws_security_group" "alb" {
+  name        = "${var.project_name}-${var.environment}-ai-alb-sg"
+  description = "Security group for AI Engine internal ALB"
+  vpc_id      = var.vpc_id
+  tags        = var.tags
+}
+
+resource "aws_security_group_rule" "alb_ingress_https" {
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [var.vpc_cidr_block]
+  security_group_id = aws_security_group.alb.id
+  description       = "Allow HTTPS from within the VPC"
+}
+
+resource "aws_security_group_rule" "alb_egress_all" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.alb.id
+  description       = "Allow all outbound traffic"
+}
+
+resource "aws_lb" "ai" {
+  # checkov:skip=CKV_AWS_150: "Deletion protection is disabled for non-prod environments to allow teardown"
+  # checkov:skip=CKV_AWS_91: "Access logging is optional and configurable"
+  name                       = "${var.project_name}-${var.environment}-ai-alb"
+  internal                   = true
+  load_balancer_type         = "application"
+  subnets                    = var.private_subnet_ids
+  security_groups            = [aws_security_group.alb.id]
+  enable_deletion_protection = false
+  drop_invalid_header_fields = true
+
+  dynamic "access_logs" {
+    for_each = var.alb_access_logs_bucket != "" ? [1] : []
+    content {
+      bucket  = var.alb_access_logs_bucket
+      prefix  = var.alb_access_logs_prefix
+      enabled = true
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_lb_target_group" "ai" {
+  name        = "${var.project_name}-${var.environment}-ai-tg"
+  target_type = "lambda"
+  vpc_id      = var.vpc_id
+
+  tags = var.tags
+}
+
+resource "aws_lb_target_group_attachment" "ai" {
+  target_group_arn = aws_lb_target_group.ai.arn
+  target_id        = aws_lambda_alias.request.arn
+  depends_on       = [aws_lambda_permission.alb_invoke_request]
+}
+
+resource "aws_lambda_permission" "alb_invoke_request" {
+  statement_id  = "AllowALBInvokeRequestLambda"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.request.function_name
+  principal     = "elasticloadbalancing.amazonaws.com"
+  source_arn    = aws_lb_target_group.ai.arn
+  qualifier     = aws_lambda_alias.request.name
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.ai.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.alb_certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.ai.arn
+  }
+}
+
+resource "aws_wafv2_web_acl" "alb" {
+  # checkov:skip=CKV_AWS_84: "WAF logging is disabled to reduce costs in sandbox"
+  name        = "${var.project_name}-${var.environment}-ai-waf"
+  description = "WAF for AI Engine internal ALB"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "RateLimit"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 1000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AIRateLimitMetric"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "AIWebACLMetric"
+    sampled_requests_enabled   = true
+  }
+
+  tags = var.tags
+}
+
+resource "aws_wafv2_web_acl_association" "alb" {
+  resource_arn = aws_lb.ai.arn
+  web_acl_arn  = aws_wafv2_web_acl.alb.arn
+}
+
+resource "aws_route53_record" "alb" {
+  count   = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? 1 : 0
+  zone_id = var.private_hosted_zone_id
+  name    = var.private_dns_name
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.ai.dns_name
+    zone_id                = aws_lb.ai.zone_id
+    evaluate_target_health = true
+  }
+}
+

@@ -13,7 +13,7 @@ def test_step_function_lambda_coverage():
     workers_dir = os.path.join(base_dir, "lambda_src/src/workers")
     
     # 6 source-owned workers
-    expected_source_workers = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker"]
+    expected_source_workers = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
     
     # 1. Assert required files exist
     assert os.path.exists(asl_path), "statemachine.json file does not exist"

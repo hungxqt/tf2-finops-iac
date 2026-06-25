@@ -143,3 +143,43 @@ variable "tags" {
   description = "Resource tags"
   default     = {}
 }
+
+variable "vpc_id" {
+  type        = string
+  description = "VPC ID where the ALB and Target Group will be created"
+}
+
+variable "vpc_cidr_block" {
+  type        = string
+  description = "CIDR block of the VPC for security group rules"
+}
+
+variable "alb_certificate_arn" {
+  type        = string
+  description = "ACM Certificate ARN for the internal ALB HTTPS listener"
+}
+
+variable "private_hosted_zone_id" {
+  type        = string
+  description = "Private Hosted Zone ID for internal Route 53 record"
+  default     = ""
+}
+
+variable "private_dns_name" {
+  type        = string
+  description = "Private DNS name to assign to the internal ALB"
+  default     = ""
+}
+
+variable "alb_access_logs_bucket" {
+  type        = string
+  description = "S3 bucket name for ALB access logs"
+  default     = ""
+}
+
+variable "alb_access_logs_prefix" {
+  type        = string
+  description = "S3 prefix for ALB access logs"
+  default     = "alb-access-logs"
+}
+

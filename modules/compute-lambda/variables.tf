@@ -76,3 +76,15 @@ variable "vpc_endpoint_security_group_id" {
   type        = string
   description = "The security group ID of the VPC interface endpoints"
 }
+
+variable "alb_base_url" {
+  type        = string
+  description = "The private internal ALB base URL"
+}
+
+variable "sigv4_service_name" {
+  type        = string
+  description = "SigV4 service name for authentication"
+  default     = "ai-engine"
+}
+

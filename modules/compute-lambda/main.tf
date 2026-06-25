@@ -3,7 +3,7 @@
 
 locals {
   lambda_archive_dir = "${path.module}/../../.build/lambda"
-  workers            = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker"]
+  workers            = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
 
   worker_configs = {
     state = {
@@ -47,6 +47,15 @@ locals {
       memory_size = 256
       env = {
         CONTAINMENT_APPLY_ENABLED = tostring(var.containment_apply_enabled)
+      }
+    }
+    vpc_alb_caller = {
+      timeout     = 90
+      memory_size = 256
+      env = {
+        ALB_BASE_URL            = var.alb_base_url
+        SIGV4_SERVICE_NAME      = var.sigv4_service_name
+        REQUEST_TIMEOUT_SECONDS = "60"
       }
     }
   }

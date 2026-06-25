@@ -67,7 +67,7 @@ Nếu bootstrap đã được chạy trước đó và cấu hình S3 backend đ
    *Lưu ý: Các thành viên khác không cần chạy `apply` hoặc `migrate-state` trong thư mục bootstrap trừ khi cần thực hiện thay đổi đối với chính hạ tầng bootstrap.*
 
 ### Bước 2.3: Đóng gói các hàm Lambda dưới dạng tệp Zip
-Đóng gói 6 hàm adapter Python vào thư mục `.build/lambda/`:
+Đóng gói 7 hàm adapter Python vào thư mục `.build/lambda/`:
 ```powershell
 cd ..
 .\scripts\package-lambdas.ps1
@@ -87,6 +87,7 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
    cp terraform.tfvars.example terraform.tfvars
    # Khởi tạo và kết nối tới remote state
    terraform init
+   # Cung cấp biến alb_certificate_arn bắt buộc (qua tfvars hoặc dòng lệnh)
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
    ```
@@ -116,7 +117,10 @@ Sau khi quá trình deploy hoàn tất, hãy lấy các dữ liệu đầu ra đ
 terraform output
 ```
 
-* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda (chạy bằng container image, xử lý các yêu cầu đồng bộ /v1/detect, /v1/decide, và /v1/verify).
+* `private_alb_endpoint`: URL HTTPS cơ sở để truy cập private ALB (qua Route 53 private DNS alias hoặc DNS name của internal ALB).
+* `private_alb_dns_name`: Tên miền DNS thô của internal ALB.
+* `private_alb_security_group_id`: ID security group của internal ALB.
+* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda (chạy bằng container image, được gọi qua target group của internal ALB trên cổng 443).
 * `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda (chạy bằng container image, xử lý việc nhập bất thường bất đồng bộ).
 * `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
