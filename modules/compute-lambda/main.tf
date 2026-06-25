@@ -90,7 +90,7 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_lambda" {
 # AWS Signer Profile for Code Signing
 resource "aws_signer_signing_profile" "lambda_signer" {
   platform_id = "AWSLambda-SHA384-ECDSA"
-  name_prefix = "${var.project_name}_${var.environment}_signer_"
+  name_prefix = replace("${var.project_name}${var.environment}signer", "/[^a-zA-Z0-9]/", "")
   tags        = var.tags
 }
 
