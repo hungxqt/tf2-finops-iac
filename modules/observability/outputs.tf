@@ -15,3 +15,13 @@ output "alarm_names" {
     values({ for k, v in aws_cloudwatch_metric_alarm.lambda_errors : k => v.alarm_name })
   )
 }
+
+output "finance_topic_arn" {
+  description = "The passed finance topic ARN"
+  value       = var.finance_topic_arn
+}
+
+output "log_retention_days" {
+  description = "The passed log retention days"
+  value       = var.log_retention_days
+}

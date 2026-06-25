@@ -17,6 +17,8 @@ output "dynamodb_table_names" {
     audit           = aws_dynamodb_table.audit.name
     dashboard_views = aws_dynamodb_table.dashboard_views.name
     account_policy  = aws_dynamodb_table.account_policy.name
+    error_budget    = aws_dynamodb_table.error_budget.name
+    ai_results      = aws_dynamodb_table.ai_results.name
   }
 }
 
@@ -29,5 +31,43 @@ output "dynamodb_table_arns" {
     audit           = aws_dynamodb_table.audit.arn
     dashboard_views = aws_dynamodb_table.dashboard_views.arn
     account_policy  = aws_dynamodb_table.account_policy.arn
+    error_budget    = aws_dynamodb_table.error_budget.arn
+    ai_results      = aws_dynamodb_table.ai_results.arn
   }
 }
+
+output "detection_queue_url" {
+  description = "The URL of the primary detection SQS queue"
+  value       = aws_sqs_queue.detection_queue.id
+}
+
+output "detection_queue_arn" {
+  description = "The ARN of the primary detection SQS queue"
+  value       = aws_sqs_queue.detection_queue.arn
+}
+
+output "detection_dlq_url" {
+  description = "The URL of the detection DLQ"
+  value       = aws_sqs_queue.detection_dlq.id
+}
+
+output "detection_dlq_arn" {
+  description = "The ARN of the detection DLQ"
+  value       = aws_sqs_queue.detection_dlq.arn
+}
+
+output "rollback_status_queue_url" {
+  description = "The URL of the rollback and status SQS queue"
+  value       = aws_sqs_queue.rollback_status_queue.id
+}
+
+output "rollback_status_queue_arn" {
+  description = "The ARN of the rollback and status SQS queue"
+  value       = aws_sqs_queue.rollback_status_queue.arn
+}
+
+output "audit_bucket_name" {
+  description = "The passed audit bucket name"
+  value       = var.audit_bucket_name
+}
+

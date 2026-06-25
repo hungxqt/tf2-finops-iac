@@ -1,40 +1,37 @@
 # Security Design - Task Force 2 · FinOps Watch CDO
 
 <!-- Doc owner: CDO Team
-     Status: Final (W11 T6 Pack #1) → Updated (W12 T4 Pack #2)
+     Status: Final (W11 T6 Pack #1) -> Updated (W12 T4 Pack #2)
 -->
 
 ## 1. Network Security
 
 ### 1.1 Network Diagram
 
-The CDO platform enforces isolation within a dedicated VPC. All compute resources run in isolated private subnets with no internet gateway route. All AWS API communications and external model endpoint calls occur privately using AWS VPC Endpoints.
+The CDO platform enforces isolation within a dedicated VPC. All compute resources run in isolated private subnets with no internet gateway route. All AWS API communications occur privately using AWS VPC Endpoints.
 
-The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The AIOps-owned AI Engine is reachable only through an internal EKS service endpoint; it does not receive direct credentials for member account containment actions.
+The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The Step Functions orchestrator invokes the AI Engine Request Lambda directly. An asynchronous queueing model using SQS/DLQ isolates heavy inference workloads from request validation. The Request Lambda processes incoming detection requests, publishes them to SQS, and returns status immediately. Note that `/v1/detect` and `/v1/detect/result/{audit_id}` represent logical contract semantics for model integration, not deployed REST/HTTP routes, as no Private API Gateway is deployed. The AI Engine does not receive direct credentials for member account containment actions.
 
 ```mermaid
 graph TD
     subgraph "CDO Management Account VPC (ap-southeast-1)"
-        subgraph "Private Subnets (EKS & Core Logic)"
-            subgraph "EKS Cluster"
-                API_P[ai-engine-api Pods]
-                WRK_P[ai-engine-worker Pods]
-                ESO_P[External Secrets Pods]
-            end
+        subgraph "Private Subnets (Serverless Compute & Queue)"
+            AILambdaReq[AI Engine Request Lambda]
+            AILambdaWorker[AI Engine Worker Lambda]
+            SQSQueue[SQS Ingest Queue]
             L_Pull[Ingestion Lambda]
             L_Cont[Containment Lambda]
-            ALB[Internal Application Load Balancer]
         end
 
         subgraph "VPC Endpoint Subnet"
-            VPCE[VPC Endpoints: S3, DDB, Secrets Mgr, ECR]
+            VPCE[VPC Endpoints: S3, DDB, Secrets Mgr, ECR, KMS, Logs, STS, Lambda]
         end
     end
 
     subgraph "External Cloud Environment"
         S3Raw[(S3 Raw Zone)]
         S3Cur[(S3 Curated Zone)]
-        DDB[(DynamoDB Run State)]
+        DDB[(DynamoDB Run State & Results)]
         SM[Secrets Manager]
     end
 
@@ -44,14 +41,15 @@ graph TD
     L_Cont -->|VPC Endpoint HTTPS| VPCE
     VPCE -->|Private link| DDB
     
-    %% EKS traffic
-    ALB -->|HTTPS Port 8443| API_P
-    API_P -->|gRPC/REST| WRK_P
-    ESO_P -->|VPC Endpoint HTTPS| VPCE
-    VPCE -->|Fetch API Key| SM
+    %% Serverless traffic
+    AILambdaReq -->|Enqueue| SQSQueue
+    SQSQueue -->|Trigger| AILambdaWorker
+    AILambdaReq -->|Fetch secrets via SDK| VPCE
+    AILambdaWorker -->|Fetch secrets via SDK| VPCE
+    VPCE -->|Private link| SM
 ```
 
-*Caption: The EKS cluster, load balancer, and orchestration Lambda functions are deployed within private-only subnets. They utilize dedicated AWS VPC Interface Endpoints (Privatelink) to connect to AWS services, preventing data transmission over the public internet.*
+*Caption: The AI Engine Request and Worker Lambda functions, along with orchestration and data adapters, are deployed within private-only subnets. They utilize dedicated AWS VPC Interface Endpoints (PrivateLink) to connect to AWS services, preventing data transmission over the public internet. No Private API Gateway is deployed; Step Functions invokes the Request Lambda function directly, and Worker execution is driven asynchronously via SQS.*
 
 ### 1.2 Security Groups
 
@@ -59,11 +57,8 @@ Traffic between compute components is regulated using stateful security groups e
 
 | SG name | Inbound | Outbound | Attached to |
 |---|---|---|---|
-| `alb-sg` | TCP 443 (from Step Functions / Lambda Client) | TCP 8443 (to `eks-node-sg`) | internal ALB |
-| `eks-cluster-sg` | TCP 443 (from CI/CD runner and bastion hosts) | TCP 10250, TCP 53 (to Node groups) | EKS Control Plane |
-| `eks-node-sg` | TCP 10250 (from Control Plane), TCP 8443 (from `alb-sg`), TCP/UDP 53 (DNS) | TCP 443 (to `vpce-sg`), TCP 10250, TCP/UDP 53 | EKS managed node groups (On-Demand & Spot) |
-| `lambda-sg` | None | TCP 443 (to `vpce-sg`), TCP 443 (to `alb-sg`) | Lambda functions |
-| `vpce-sg` | TCP 443 (from `eks-node-sg` and `lambda-sg`) | None | VPC endpoints (S3, DynamoDB, ECR, Secrets Mgr) |
+| `lambda-sg` | None (Direct programmatic invocation via execution service) | TCP 443 (to `vpce-sg`) | Ingestion, Containment, and AI Engine Request & Worker Lambda functions |
+| `vpce-sg` | TCP 443 (from `lambda-sg`) | None | VPC endpoints (S3, DynamoDB, ECR, Secrets Mgr, KMS, Logs, STS, Lambda) |
 
 ### 1.3 Network ACL / VPC Endpoint
 
@@ -74,8 +69,11 @@ VPC interface endpoints are configured with private DNS enabled, routing all tra
 - `com.amazonaws.ap-southeast-1.ecr.api` (Interface Endpoint)
 - `com.amazonaws.ap-southeast-1.ecr.dkr` (Interface Endpoint)
 - `com.amazonaws.ap-southeast-1.logs` (Interface Endpoint - CloudWatch logs)
+- `com.amazonaws.ap-southeast-1.kms` (Interface Endpoint - Key Management Service)
+- `com.amazonaws.ap-southeast-1.sts` (Interface Endpoint - Security Token Service)
+- `com.amazonaws.ap-southeast-1.lambda` (Interface Endpoint - Lambda execution)
 
-Network policies are deployed in the EKS cluster to restrict pod-to-pod communications (e.g., blocking `ai-engine-worker` pods on spot nodes from initiating connections to anything other than the `ai-engine-api` pods).
+Security groups and IAM resource policies are deployed to restrict communications (e.g., the Request Lambda only accepts invocation actions initiated by the Step Functions role, and the SQS Queue policy allows message publishing exclusively from the Request Lambda role).
 
 Endpoint policies are scoped to the smallest practical action set. The S3 gateway endpoint allows reads from approved CUR export prefixes and writes only to the CDO raw/curated buckets. The DynamoDB endpoint allows access only to run-state, idempotency, audit, and dashboard-materialization tables. Interface endpoints for Secrets Manager, ECR, and CloudWatch Logs are restricted to the CDO VPC security groups and execution roles. Network ACLs remain simple and stateless, with public ingress denied and ephemeral return traffic allowed only inside private subnet ranges.
 
@@ -89,32 +87,27 @@ AWS IAM service roles enforce strict separation. Crucially, no service role has 
 |---|---|---|
 | `FinOpsStepFunctionsRole` | Step Functions | `states:StartExecution`, `states:DescribeExecution`, `lambda:InvokeFunction` |
 | `FinOpsCURPullerRole` | `LambdaCURPuller` | `s3:GetObject` (on target account CUR S3 bucket), `s3:PutObject` (on raw S3 bucket), `ce:GetCostAndUsage` |
-| `EksClusterRole` | EKS Control Plane | Standard `AmazonEKSClusterPolicy` and `AmazonEKSVPCResourceController` |
-| `EksNodeGroupRole` | EC2 Node Instances | `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryReadOnly`, `AmazonEKS_CNI_Policy` |
+| `FinOpsAiRequestExecutionRole` | AI Engine Request Lambda | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `secretsmanager:GetSecretValue` (via SDK), `sqs:SendMessage` (to queue detect requests), `dynamodb:GetItem` / `dynamodb:Query` (to fetch result state) |
+| `FinOpsAiWorkerExecutionRole` | AI Engine Worker Lambda | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `secretsmanager:GetSecretValue` (via SDK), `sqs:ReceiveMessage` / `sqs:DeleteMessage` (to poll queue), `s3:GetObject` / `s3:PutObject` (read cost data and write checkpoints/features), `dynamodb:PutItem` (to store inference outputs) |
 | `FinOpsContainmentRole` | `LambdaContainment` | `ec2:CreateTags` (non-prod), `asg:UpdateAutoScalingGroup` (non-prod). Explicit deny for `iam:*`, `s3:Delete*`, and prod resource termination. |
-| `FinOpsAiApiIamRole` | `ai-engine-api` via IRSA | Read model config, read curated feature inputs, write invocation health metrics; no member account access. |
-| `FinOpsAiWorkerIamRole` | `ai-engine-worker` via IRSA | Read curated feature inputs and write batch output/checkpoints; no IAM mutation and no direct containment permissions. |
-| `FinOpsExternalSecretsRole` | External Secrets Operator | Read only approved Secrets Manager keys needed by EKS workloads. |
 
 > [!IMPORTANT]
 > **Hard Security Boundary**: Every CDO execution role has an attached Service Control Policy (SCP) ensuring it can **NEVER terminate prod, delete data, or modify IAM**. Production containment tasks are strictly restricted to tag, suggest, or dry-run audits.
 
-### 2.2 K8s RBAC & IRSA (IAM Roles for Service Accounts)
+### 2.2 Lambda Execution Roles
 
-Kubernetes Access Control is mapped to AWS IAM using **IAM Roles for Service Accounts (IRSA)**. Pods assume specific IAM roles via OIDC federation rather than inheriting permissions from host EC2 instances.
+AWS Lambda functions utilize Execution Roles to enforce the principle of least privilege:
+1. **Lambda Execution Role** (`FinOpsAiRequestExecutionRole`, `FinOpsAiWorkerExecutionRole`): Used by the Lambda service to run the function code, pull container images from ECR, and write execution logs to CloudWatch.
+2. **Access Isolation**: Application code running inside the Lambda functions uses these roles to query Secrets Manager (via SDK), read/write to S3 curated cost data, poll from SQS queues, or record results in DynamoDB. The CDO team owns these execution roles as part of the hosting platform, while the AIOps team provides the versioned container image artifacts.
 
-- **K8s Service Accounts & Roles**:
-  - `ai-engine-api-sa`: Federated to `FinOpsAiApiIamRole` with read-only S3 access to fetch model artifacts.
-  - `ai-engine-worker-sa`: Federated to `FinOpsAiWorkerIamRole` with read-write access to S3 checkpoint and output buckets.
-  - `external-secrets-sa`: Federated to `FinOpsSecretsReaderIamRole` with access only to the model configuration secret in Secrets Manager.
+Workloads do not inherit host permissions. Each Lambda function is explicitly associated with its own execution role in the function configuration.
 
-- **RBAC Mapping**:
+- **Lambda Function Role Mappings**:
 
-| Role / ClusterRole | Subject (Service Account) | Namespace | Verbs | Resources |
-|---|---|---|---|---|
-| `ai-api-role` | `ai-engine-api-sa` | `ai-inference` | `get`, `list`, `watch` | `pods`, `services` |
-| `job-runner-role` | `ai-engine-api-sa` | `ai-batch-jobs` | `create`, `get`, `list`, `watch`, `delete` | `jobs`, `cronjobs` |
-| `eso-role` | `external-secrets-sa` | `kube-system` | `get`, `list`, `create`, `update` | `secrets` |
+| Function Name | IAM Execution Role | Managed Policies / Custom Scoped Policies |
+|---|---|---|
+| AI Engine Request Lambda | `FinOpsAiRequestExecutionRole` | Read-only Secrets Manager (contract and API keys), SQS send messages, DynamoDB query run state, CloudWatch Logs write. |
+| AI Engine Worker Lambda | `FinOpsAiWorkerExecutionRole` | Read-write S3 access (cost files & checkpoints), SQS poll messages, DynamoDB write results, CloudWatch Logs write. |
 
 ### 2.3 Cross-account Access
 
@@ -122,6 +115,18 @@ Cross-account access to member account CUR buckets is governed by target account
 Containment actions in member accounts are triggered via cross-account IAM Role Assumption (`AssumeRole`). The management account `LambdaContainment` role assumes `FinOpsContainmentWorkerRole` in the target account, executing tag additions or scaling down sandbox ASGs.
 
 Every cross-account role trust policy includes an external ID, source account condition, and session tagging requirement so audit logs can map each action back to a CDO run. Production roles include explicit deny statements for termination, destructive storage operations, and IAM mutation. Non-production roles may allow limited containment actions only when the incoming request includes an approved `execution_mode`, environment tag, anomaly ID, and policy decision ID. If any of those fields are missing, the containment worker records a denied audit event and exits without retrying.
+
+### 2.4 Dashboard Authentication & Authorization (Cognito)
+
+Access control for the static S3 + CloudFront Finance Dashboard is enforced through integration with Amazon Cognito and Lambda@Edge viewer-request authorization:
+- **CloudFront OAC Protection**: The S3 bucket containing dashboard assets is completely private. Direct public access is blocked using Origin Access Control (OAC). The only access path is through the CloudFront distribution, which enforces authentication.
+- **Hosted UI Code Flow**: Users access the Hosted UI endpoints via CloudFront redirects. Authentication is processed using the Authorization Code Flow with PKCE. Cognito issues ID, Access, and Refresh JWT tokens upon successful login.
+- **Secure Token Storage**: The application exchanges the authorization code for tokens, storing them as secure cookies (`Secure`, `HttpOnly`, `SameSite=Strict` flags) with a short 1-hour session lifetime.
+- **Lambda@Edge Token Validation**: The CloudFront viewer-request Lambda@Edge function intercepts all requests, parses JWT cookies, checks signatures against the Cognito JWKS endpoint, and validates claims (expiration, audience, issuer). Invalid or expired tokens trigger automatic redirects to the Hosted UI login page.
+- **Group-Based Access Policies**:
+  - `finops-finance-readonly`: Members are authorized for read-only visualization of spend trends, anomaly summaries, and audit trail records. The UI blocks rendering of CLI commands, raw rollback scripts, or containment execution triggers.
+  - `finops-engineering-operator`: Members are authorized to access technical detail, view the raw `rollback_script_encapsulated` execution commands, and trigger approved programmatic snoozing (representing `/v1/action/extend` semantics) and rollback (representing `/v1/action/rollback` semantics) actions.
+  - `finops-cdo-admin`: Members are granted permissions to manage access policies, adjust user group assignments, and configure global platform control flags.
 
 ## 3. Secrets Management
 
@@ -131,38 +136,29 @@ The following secrets are stored in AWS Secrets Manager:
 
 | Secret | Storage | Rotation | Accessed by |
 |---|---|---|---|
-| `finops/ai-engine/api-key` | AWS Secrets Manager (KMS CMK encrypted) | 30 days automatic | `ai-engine-api` pod (via External Secrets Operator) |
-| `finops/dashboard/db-creds` | AWS Secrets Manager | 60 days automatic | QuickSight dataset engine / Athena crawler |
+| `finops/ai-engine/api-key` | AWS Secrets Manager (KMS CMK encrypted) | 30 days automatic | AI Engine Request Lambda (via SDK during cold start) |
+| `finops/dashboard/db-creds` | AWS Secrets Manager | 60 days automatic | Athena crawler / Future QuickSight dataset engine |
 | `finops/alerting/slack-webhook` | AWS Secrets Manager | 90 days manual | `LambdaAlertRouting` |
-| `finops/ai-engine/contract-signing-key` | AWS Secrets Manager | 90 days automatic | Step Functions validation Lambda and `ai-engine-api` |
+| `finops/ai-engine/contract-signing-key` | AWS Secrets Manager | 90 days automatic | Step Functions validation Lambda and AI Engine Request Lambda |
 | `finops/containment/external-id-seed` | AWS Secrets Manager | Manual rotation on incident | Containment role provisioning workflow |
 
 ### 3.2 Inject Pattern
 
-We use the **External Secrets Operator (ESO)** in EKS to sync secrets from AWS Secrets Manager into Kubernetes native Secrets. The secrets are mounted as read-only files within tmpfs volumes in the containers.
-```yaml
-apiVersion: external-secrets.io/v1beta1
-kind: ExternalSecret
-metadata:
-  name: ai-engine-api-key
-  namespace: ai-inference
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: aws-secretsmanager-store
-    kind: SecretStore
-  target:
-    name: k8s-ai-api-key
-    creationPolicy: Owner
-  data:
-    - secretKey: api-key
-      remoteRef:
-        key: finops/ai-engine/api-key
-        property: apiKey
-```
-For Lambda functions, secrets are resolved during function cold-starts, cached in the `/tmp` memory directory, and validated with cache TTL policies to avoid direct API invocation overhead.
+We use AWS Secrets Manager SDK to retrieve secrets in Lambda functions at runtime, rather than passing them as plaintext environment variables. Secrets are resolved during function cold-starts, cached in the function's global execution context, and checked against cache TTL policies (e.g. 5 minutes) to avoid direct API invocation overhead on subsequent requests.
 
-The injection path intentionally differs by runtime. Lambda functions read secrets directly through the Secrets Manager SDK because they are short-lived adapters. EKS workloads receive secrets through ESO so Kubernetes manifests never contain plaintext values. Terraform creates secret containers and IAM permissions, but it does not store secret values in `.tfvars`, Terraform state, Helm values, or GitOps manifests.
+For example, the Lambda container function retrieves its API key dynamically using the AWS SDK:
+```python
+import boto3
+import os
+
+def get_api_key():
+    secret_name = os.environ["API_KEY_SECRET_ARN"]
+    client = boto3.client("secretsmanager")
+    response = client.get_secret_value(SecretId=secret_name)
+    return response["SecretString"]
+```
+
+The injection path uses secure runtime lookup. Lambda functions read secrets directly through the Secrets Manager SDK because they are short-lived, containerized tasks. Terraform creates secret containers and IAM permissions, but it does not store secret values in `.tfvars`, Terraform state, or build configurations.
 
 ### 3.3 Anti-leak Controls
 
@@ -170,7 +166,7 @@ The injection path intentionally differs by runtime. Lambda functions read secre
 - **VPC Endpoint Restriction**: Secrets Manager VPC Endpoints enforce policies restricting access to only the CDO management VPC CIDR.
 - **Log Redaction**: Outbound application logs are passed through a regex-based masking filter, replacing API keys, tokens, and authorization headers with `[REDACTED]`.
 - **Terraform State Control**: Terraform state is encrypted, access-controlled, and reviewed so sensitive values are modeled as secret references rather than plaintext outputs.
-- **Container Boundary**: EKS workloads run as non-root, mount secrets read-only, and avoid writing secret material to persistent volumes or checkpoints.
+- **Container Boundary**: Lambda workloads run inside secure execution environments as non-root, mount ephemeral `/tmp` storage (which is encrypted) as read-only by default except for temp scratch directories, and avoid writing secret material to persistent volumes.
 - **Incident Response**: Suspected secret exposure triggers secret rotation, Git history review, CloudTrail lookup for `GetSecretValue`, and temporary suspension of affected deployment credentials.
 
 ## 4. Encryption
@@ -184,22 +180,22 @@ All platform data is encrypted at rest using Customer Managed Keys (CMKs) in AWS
 | Raw/Curated Cost Data | S3 | `aws/s3` or custom CMK | S3 Bucket Key enabled to reduce KMS API costs. |
 | Run State & Metadata | DynamoDB | `aws/dynamodb` or custom CMK | Encrypted using KMS. |
 | Secrets Store | Secrets Manager | `finops-secrets-key` | Decryption requires role trust. |
-| Node Disk Volumes | EC2 EBS (EKS Nodes) | `finops-ebs-key` | All node storage volumes are encrypted. |
+| Lambda Ephemeral / Container Storage | Lambda Storage | `aws/lambda` or custom CMK | All function storage (including /tmp up to 10 GB) is encrypted by default. |
 | Audit Trail Logs | S3 Object Lock | `finops-audit-key` | Retained for 90 days with compliance lock. |
 
 ### 4.2 In Transit
 
-- **TLS Requirements**: All ingress and egress traffic requires TLS 1.3 (with TLS 1.2 as a minimum fallback). Weak ciphers are disabled on the internal ALB.
-- **Internal Service Traffic**: EKS pod-to-pod communications for API-to-worker traffic use HTTP/2 with mTLS via Linkerd/App Mesh (or Kubernetes internal ClusterIP services mapped to TLS endpoints).
-- **AI Engine Calls**: Step Functions and Lambda invoke the internal AI Engine endpoint through private networking only. The request includes a contract version and correlation ID, and the response is rejected if the signature, schema, or required fields are invalid.
+- **TLS Requirements**: All ingress and egress traffic requires TLS 1.3 (with TLS 1.2 as a minimum fallback).
+- **Internal Service Traffic**: Function-to-function communication and SQS messaging are fully encrypted in transit natively by AWS services using TLS.
+- **AI Engine Invocations**: Step Functions invokes the internal AI Engine Request Lambda function directly through private VPC networking. The request payload contains standard contract fields such as a version schema pointer and correlation ID, and the payload is validated within the execution environment.
 - **Alert Webhooks**: Slack or email integrations are called from the alerting Lambda after payload minimization. Sensitive cost evidence is linked through internal dashboard/audit references instead of embedded directly in external messages.
 
 ### 4.3 Key Management
 
 - **Rotation**: CMK keys rotate automatically every 365 days.
-- **Access Policies**: Key policies enforce separation of duties, ensuring only the deployment pipelines can modify key settings, and only execution roles (Lambda/EKS) can call decrypt operations.
+- **Access Policies**: Key policies enforce separation of duties, ensuring only the deployment pipelines can modify key settings, and only execution roles (Lambda container and platform functions) can call decrypt operations.
 - **Audit**: All key usage is monitored and logged in AWS CloudTrail.
-- **Blast-radius control**: Separate CMKs are preferred for cost data, audit records, secrets, and EKS node volumes unless Finance and Security approve consolidation for cost reasons.
+- **Blast-radius control**: Separate CMKs are preferred for cost data, audit records, secrets, and Lambda temporary storage unless Finance and Security approve consolidation for cost reasons.
 - **Break-glass access**: Manual decrypt access is not granted to day-to-day developers. Temporary access requires incident approval, ticket reference, expiry time, and post-use review.
 
 ## 5. Audit Logging
@@ -237,11 +233,16 @@ Every action taken by the CDO platform is documented. For containment actions, t
   },
   "approval_status": "pending_squad_response",
   "retention_location": "s3://cdo-audit-trail-bucket/audit/year=2026/month=06/",
-  "retention_period_days": 90
+  "retention_period_days": 90,
+  "audit_chain": {
+    "audit_id": "8f3b610c-18a4-4e2b-9801-bde901844b20",
+    "event_hash": "673f8a0dc...",
+    "previous_hash": "a4f891b0d..."
+  }
 }
 ```
 
-The audit record is written before any apply-mode operation is attempted, and it is updated after the operation with the final status. Dry-run operations still produce audit records because Finance needs to see what the platform would have done and why the action remained safe. AI model training datasets are not logged by CDO; CDO logs only invocation metadata, returned decision fields, and operational evidence references needed for alerting and containment.
+The audit record is written before any apply-mode operation is attempted, and it is updated after the operation with the final status. Every containment action record is cryptographically linked to the previous one in an append-only chain stored in DynamoDB and S3, with the integrity hash calculated as `sha256(current_payload + previous_hash)` nhằm đảm bảo khả năng chống giả mạo (tamper-evident). Hoạt động dry-run vẫn tạo ra các bản ghi kiểm toán vì Finance cần xem nền tảng sẽ làm gì và tại sao hành động đó vẫn an toàn. Bộ dữ liệu huấn luyện mô hình AI không được CDO ghi nhật ký; CDO chỉ ghi nhật ký metadata cuộc gọi, các trường quyết định được trả về và các tham chiếu bằng chứng vận hành cần thiết cho việc cảnh báo và containment. Telemetry gửi tới AI Engine để phát hiện bất thường là dữ liệu chi phí CUR-only và tuyệt đối không bao gồm các tín hiệu hiệu năng CloudWatch. Hệ thống log và metrics của CloudWatch chỉ phục vụ cho việc giám sát vận hành của CDO và cảnh báo SRE. All dashboard authentication activities (successful logins, logouts, expired session renewals), authentication failures (failed login attempts, invalid token signatures, replay window breaches), and unauthorized group access attempts (such as a readonly Finance user attempting to invoke an operator action) are logged immediately to CloudWatch Logs and streamed to S3 for audit trail preservation.
 
 ### 5.2 Storage + Retention
 
@@ -251,7 +252,7 @@ Audit logs are stored securely with immutable controls:
 |---|---|---|---|
 | Containment Audits | S3 + Object Lock | 90 days minimum | Athena / DynamoDB |
 | AWS API Calls | CloudTrail (S3 Raw) | 1 year | Athena |
-| EKS Cluster Logs | CloudWatch Logs | 30 days | CloudWatch Logs Insights |
+| AI Engine Lambda Logs | CloudWatch Logs | 30 days | CloudWatch Logs Insights |
 | App/Lambda Logs | CloudWatch Logs | 14 days | CloudWatch Logs Insights |
 
 Containment audit storage is append-only by design. DynamoDB supports low-latency dashboard lookup, while S3 with Object Lock is the durable evidence store. The dashboard should link to the audit record ID rather than duplicating sensitive before/after state in alert messages. Retention shorter than 90 days is not allowed for containment records, even in sandbox, because the capstone requirement measures traceability of automated decisions.
@@ -260,16 +261,16 @@ Containment audit storage is append-only by design. DynamoDB supports low-latenc
 
 To prevent mixing synthetic anomaly logs with real account settings during testing:
 - CDO-owned demo injections are marked with `source = "synthetic-demo"`.
-- QuickSight dashboard filters allow toggling between real and synthetic data displays.
+- Dashboard filters (S3 + CloudFront UI) allow toggling between real and synthetic data displays.
 - Synthetic containment actions are routed to a mock target endpoint, leaving real AWS resources untouched.
 - AIOps-owned model training, enhancement, and backtest datasets remain outside CDO ownership. CDO may store AIOps-provided model metrics as integration evidence, but it does not copy or reclassify the AI team's training dataset as CDO operational data.
 
 ## 6. CI Security Controls
 
 - **Image & Dependency Scanning**: Trivy is integrated into the CI/CD pipeline. Build actions fail automatically if container images contain `CRITICAL` or `HIGH` severity CVEs.
-- **Non-Root Execution**: Container configurations enforce running workloads as a non-root user (`securityContext.runAsNonRoot: true`).
-- **Pod Security Standards**: EKS namespaces are configured with Pod Security Admission (PSA) set to `restricted` mode, preventing privileged escalations, host network binding, and unsafe system calls.
-- **Spot Workload Isolation**: Worker pods running batch tasks are scheduled with node selectors, tolerations, and node affinity rules, ensuring they compile and compute exclusively on designated spot node instances, avoiding resource starvation on stable service nodes.
+- **Non-Root Execution**: Container configurations enforce running workloads as a non-root user (e.g. running as user `1000` in the Dockerfile).
+- **Lambda Function Isolation**: Lambda container functions run in isolated, read-only sandboxes (except for `/tmp` storage) and execute with minimal task permissions using distinct execution roles.
+- **Resource Throttling**: Concurrency limits (Reserved Concurrency) are set on Lambda functions to prevent denial of service or resource exhaustion on the rest of the account.
 
 ## 7. Compliance Touchpoints
 
@@ -290,5 +291,5 @@ The compliance mapping is intentionally limited to capstone-relevant controls. T
 
 ## Related documents
 
-- [`02_infra_design.md`](02_infra_design.md) - Architecture design, VPC layout, and managed node groups.
-- [`04_deployment_design.md`](04_deployment_design.md) - CI/CD pipeline, GitOps orchestration, and secret rotation gates.
+- [`02_infra_design.md`](02_infra_design.md) - Architecture design, VPC layout, and serverless compute integration.
+- [`04_deployment_design.md`](04_deployment_design.md) - CI/CD pipeline, GitHub Actions deployment pipelines, and secret rotation gates.

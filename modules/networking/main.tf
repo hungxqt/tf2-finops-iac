@@ -218,7 +218,7 @@ resource "aws_vpc_endpoint" "dynamodb" {
 
 # Interface Endpoints
 locals {
-  interface_services = ["kms", "secretsmanager", "athena", "logs", "xray", "sts"]
+  interface_services = ["kms", "secretsmanager", "athena", "logs", "xray", "sts", "ecr.api", "ecr.dkr", "sqs", "bedrock-runtime"]
 }
 
 resource "aws_vpc_endpoint" "interfaces" {
@@ -236,3 +236,4 @@ resource "aws_vpc_endpoint" "interfaces" {
     }
   )
 }
+

@@ -1,7 +1,6 @@
 # IAM Module Resources
 # This module creates least-privilege execution roles and guardrails.
 
-data "aws_caller_identity" "current" {}
 
 # Permissions boundary to deny destructive operations
 resource "aws_iam_policy" "boundary" {
@@ -169,8 +168,20 @@ data "aws_iam_policy_document" "ai_client" {
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
-      actions   = ["kms:Decrypt"]
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
       resources = var.kms_key_arns
+    }
+  }
+  dynamic "statement" {
+    for_each = length(var.queue_arns) > 0 ? [1] : []
+    content {
+      actions = [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ]
+      resources = var.queue_arns
     }
   }
 }
@@ -287,6 +298,10 @@ data "aws_iam_policy_document" "step_functions" {
     actions   = ["sns:Publish"]
     resources = ["*"]
   }
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = var.queue_arns
+  }
 }
 
 # Cross-account cost data read and containment documents for outputs
@@ -340,4 +355,36 @@ data "aws_iam_policy_document" "scheduler" {
     resources = ["*"]
   }
 }
+
+# SigV4-compatible CDO caller role for calling AI Engine
+resource "aws_iam_role" "cdo_caller" {
+  name                 = "${var.project_name}-${var.environment}-cdo-caller"
+  assume_role_policy   = data.aws_iam_policy_document.cdo_caller_trust.json
+  permissions_boundary = aws_iam_policy.boundary.arn
+  tags                 = var.tags
+}
+
+data "aws_iam_policy_document" "cdo_caller_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "cdo_caller" {
+  name   = "cdo-caller-policy"
+  role   = aws_iam_role.cdo_caller.id
+  policy = data.aws_iam_policy_document.cdo_caller.json
+}
+
+data "aws_iam_policy_document" "cdo_caller" {
+  statement {
+    actions   = ["execute-api:Invoke"]
+    resources = ["*"]
+  }
+}
+
 

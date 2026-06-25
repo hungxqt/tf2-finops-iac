@@ -40,10 +40,21 @@ def handle_request(event_data: dict, context: Any) -> dict:
     curated_key = f"cost/curated/{partition_path}/{event.run_id}_curated.parquet"
     curated_data_uri = f"s3://{bucket_name}/{curated_key}"
     
+    completeness_score = float(event_data.get("completeness_score") or event_data.get("telemetry_quality") or 1.0)
+    delayed_cur = bool(event_data.get("delayed_cur") or False)
+    stale_cost_explorer = bool(event_data.get("stale_cost_explorer") or False)
+    missing_cloudwatch = bool(event_data.get("missing_cloudwatch") or False)
+    estimated_billing = bool(event_data.get("estimated_billing") or False)
+    
     details = {
         "curated_data_uri": curated_data_uri,
         "schema": "finops-cost-window-v1",
-        "partition_keys": ["account_id", "year", "month"]
+        "partition_keys": ["account_id", "year", "month"],
+        "completeness_score": completeness_score,
+        "delayed_cur": delayed_cur,
+        "stale_cost_explorer": stale_cost_explorer,
+        "missing_cloudwatch": missing_cloudwatch,
+        "estimated_billing": estimated_billing
     }
     
     # 2. Read raw S3 cost file
@@ -125,5 +136,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
         
     response = finops_common.create_response("NORMALIZED", event.run_id, event.correlation_id, "normalizer", details)
     response.curated_data_uri = curated_data_uri
+    response.telemetry_quality = completeness_score
     logger.info("Response: %s", response.to_dict())
     return response.to_dict()

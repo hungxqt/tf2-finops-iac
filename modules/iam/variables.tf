@@ -8,11 +8,6 @@ variable "environment" {
   description = "The environment name (e.g., sandbox, staging, prod)"
 }
 
-variable "member_account_ids" {
-  type        = list(string)
-  description = "AWS Member Account IDs for cross-account roles"
-  default     = []
-}
 
 variable "lakehouse_bucket_arn" {
   type        = string
@@ -53,3 +48,10 @@ variable "tags" {
   description = "Common resource tags"
   default     = {}
 }
+
+variable "queue_arns" {
+  type        = list(string)
+  description = "List of SQS queue ARNs for worker access"
+  default     = []
+}
+

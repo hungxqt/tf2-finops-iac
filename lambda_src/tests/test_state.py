@@ -96,3 +96,67 @@ def test_state_db_check_fresh_and_duplicate():
     # Clean up
     del os.environ["RUN_STATE_TABLE_NAME"]
     handler.ddb_client = None
+
+
+def test_state_prepare_run_context():
+    event_data = {
+        "account_id": "123456",
+        "operation": "prepare",
+        "is_ad_hoc": True,
+        "ai_contract_version": "v2"
+    }
+    
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["tenant_id"] == "123456"
+    assert resp["is_ad_hoc"] is True
+    assert resp["ai_contract_version"] == "v2"
+    assert "run_id" in resp
+    assert "correlation_id" in resp
+    assert resp["force_dry_run"] is False
+    assert resp["cur_retry"]["max"] == 4
+    assert resp["ai_retry"]["max"] == 6
+
+
+def test_state_check_quota():
+    # 1. Quota ok
+    event_data = {
+        "run_id": "run-1",
+        "correlation_id": "corr-1",
+        "cost_period": "2026-06",
+        "operation": "check_quota",
+        "is_ad_hoc": True,
+        "tenant_id": "tenant-1"
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+
+    # 2. Quota exceeded
+    event_data_exceeded = event_data.copy()
+    event_data_exceeded["simulate_quota_exceeded"] = True
+    resp2 = handler.handle_request(event_data_exceeded, None)
+    assert resp2["status"] == "QUOTA_EXCEEDED"
+
+
+def test_state_check_error_budget():
+    # 1. Budget locked
+    event_data = {
+        "run_id": "run-1",
+        "correlation_id": "corr-1",
+        "cost_period": "2026-06",
+        "operation": "check_error_budget",
+        "tenant_id": "tenant-1",
+        "simulate_error_budget_locked": True
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "LOCKED"
+    assert resp["locked"] is True
+    assert resp["force_dry_run"] is True
+
+    # 2. Budget OK
+    event_data["simulate_error_budget_locked"] = False
+    resp2 = handler.handle_request(event_data, None)
+    assert resp2["status"] == "OK"
+    assert resp2["locked"] is False
+    assert resp2["force_dry_run"] is False
+

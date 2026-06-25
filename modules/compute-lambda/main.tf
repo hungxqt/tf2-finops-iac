@@ -34,7 +34,10 @@ locals {
         AI_ENGINE_ENDPOINT_URL     = var.ai_engine_endpoint_url
         AI_ENGINE_SECRET_NAME      = var.ai_engine_secret_name
         AI_ENGINE_CONTRACT_VERSION = "v1.0"
-        AI_ENGINE_ALLOWED_HOSTS    = "ai-engine-service.ai-engine.svc.cluster.local"
+        AI_ENGINE_ALLOWED_HOSTS    = "ai-engine.${var.project_name}-${var.environment}.local"
+        AI_ENGINE_TIMEOUT_SECONDS  = "10"
+        AI_ENGINE_RETRY_ATTEMPTS   = "3"
+        AWS_REGION                 = var.aws_region
       }
     }
     router = {

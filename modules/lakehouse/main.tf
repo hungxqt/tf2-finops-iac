@@ -26,7 +26,9 @@ resource "aws_kms_key" "data" {
   lifecycle {
     prevent_destroy = true
   }
-  tags = var.tags
+  tags = merge(var.tags, {
+    Region = var.aws_region
+  })
 }
 
 resource "aws_kms_alias" "data" {

@@ -24,6 +24,17 @@ variable "enable_quicksight" {
   default     = false
 }
 
+variable "dashboard_kms_key_arn" {
+  type        = string
+  description = "The KMS Master Key ARN used to encrypt the S3 buckets"
+}
+
+variable "dashboard_data_prefix" {
+  type        = string
+  description = "The S3 folder prefix where precomputed dashboard JSON summaries are stored"
+  default     = "summaries/"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Common resource tags"

@@ -1,21 +1,47 @@
 {
   "Comment": "TF2 FinOps Watch CDO daily workflow",
-  "StartAt": "InitializeRunContext",
+  "StartAt": "PrepareRunContext",
   "States": {
-    "InitializeRunContext": {
-      "Type": "Pass",
-      "Result": {
-        "count": 0,
-        "max": 12
+    "PrepareRunContext": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "prepare",
+        "account_id.$": "$.account_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version": "v1",
+        "ai_retry_max": "6",
+        "ai_poll_interval": "10"
       },
-      "ResultPath": "$.cur_retry",
-      "Next": "LoadAccountPolicy"
+      "ResultPath": "$",
+      "Next": "LoadAccountPolicy",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
     },
     "LoadAccountPolicy": {
       "Type": "Task",
       "Resource": "arn:aws:states:::dynamodb:getItem",
       "Parameters": {
-        "TableName": "tf2-finops-account-policy",
+        "TableName": "tf2-finops-sandbox-account-policy",
         "Key": {
           "account_id": {
             "S.$": "$.account_id"
@@ -57,7 +83,15 @@
     },
     "CheckRunState": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-state",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "check",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
       "ResultPath": "$.state",
       "Next": "DuplicateRun",
       "Retry": [
@@ -96,11 +130,139 @@
           "Next": "DuplicateIgnored"
         }
       ],
-      "Default": "IngestCostData"
+      "Default": "CheckAdHocQuotaDecision"
+    },
+    "CheckAdHocQuotaDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.is_ad_hoc",
+          "BooleanEquals": true,
+          "Next": "CheckAdHocQuota"
+        }
+      ],
+      "Default": "CheckErrorBudgetLock"
+    },
+    "CheckAdHocQuota": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "check_quota",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "tenant_id.$": "$.tenant_id"
+      },
+      "ResultPath": "$.quota_check",
+      "Next": "EvaluateAdHocQuota",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "EvaluateAdHocQuota": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.quota_check.status",
+          "StringEquals": "QUOTA_EXCEEDED",
+          "Next": "SetQuotaExceededError"
+        }
+      ],
+      "Default": "CheckErrorBudgetLock"
+    },
+    "SetQuotaExceededError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AdHocQuotaExceeded",
+        "Cause": "Tenant ad hoc run quota limit of 5 runs per day exceeded."
+      },
+      "ResultPath": "$.error",
+      "Next": "MarkRunFailed"
+    },
+    "CheckErrorBudgetLock": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "check_error_budget",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "force_dry_run.$": "$.force_dry_run"
+      },
+      "ResultPath": "$.error_budget_check",
+      "Next": "EvaluateErrorBudgetLock",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "EvaluateErrorBudgetLock": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "cur_retry.$": "$.cur_retry",
+        "ai_retry.$": "$.ai_retry",
+        "retry_after_seconds.$": "$.retry_after_seconds",
+        "account_policy.$": "$.account_policy",
+        "environment.$": "$.environment",
+        "state.$": "$.state",
+        "force_dry_run.$": "$.error_budget_check.force_dry_run",
+        "error_budget_locked.$": "$.error_budget_check.locked"
+      },
+      "ResultPath": "$",
+      "Next": "IngestCostData"
     },
     "IngestCostData": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-cost-puller",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-cost_puller",
       "ResultPath": "$.ingestion",
       "Next": "IngestionReady",
       "Retry": [
@@ -160,7 +322,7 @@
       "Choices": [
         {
           "Variable": "$.cur_retry.count",
-          "NumericGreaterThanEquals": 12,
+          "NumericGreaterThanEquals": 4,
           "Next": "SetCURDelayExceededError"
         }
       ],
@@ -170,9 +332,33 @@
       "Type": "Pass",
       "Result": {
         "Error": "CURDelayExceeded",
-        "Cause": "Billing reports (CUR) export delayed beyond 24 hours."
+        "Cause": "Billing reports (CUR) export delayed beyond 4 hours."
       },
       "ResultPath": "$.error",
+      "Next": "SendCURDelayAlert"
+    },
+    "SendCURDelayAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
+        "Subject": "FinOps Watch CUR Export Delay Alert",
+        "Message.$": "States.Format('CUR billing export delayed beyond 4 hours for Run ID: {}', $.run_id)"
+      },
+      "ResultPath": "$.cur_delay_alert_result",
+      "Next": "WriteCURDelayAudit"
+    },
+    "WriteCURDelayAudit": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "tenant_id.$": "$.tenant_id",
+        "action": "fail-closed-cur-delay",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.cur_delay_audit_result",
       "Next": "MarkRunFailed"
     },
     "SetDefaultIngestionError": {
@@ -186,7 +372,7 @@
     },
     "WaitForCURExport": {
       "Type": "Wait",
-      "Seconds": 7200,
+      "Seconds": 3600,
       "Next": "IngestCostData"
     },
     "WaitForCostExplorer": {
@@ -196,9 +382,9 @@
     },
     "NormalizeCostWindow": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-normalizer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-normalizer",
       "ResultPath": "$.normalized",
-      "Next": "CallAIContract",
+      "Next": "CheckTelemetryQuality",
       "Retry": [
         {
           "ErrorEquals": [
@@ -221,11 +407,82 @@
         }
       ]
     },
-    "CallAIContract": {
+    "CheckTelemetryQuality": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.normalized.details.completeness_score",
+              "NumericLessThan": 0.8
+            },
+            {
+              "Variable": "$.normalized.details.delayed_cur",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.stale_cost_explorer",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.missing_cloudwatch",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.estimated_billing",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "SetTelemetryForceDryRun"
+        }
+      ],
+      "Default": "SubmitAIRequest"
+    },
+    "SetTelemetryForceDryRun": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "cur_retry.$": "$.cur_retry",
+        "ai_retry.$": "$.ai_retry",
+        "retry_after_seconds.$": "$.retry_after_seconds",
+        "account_policy.$": "$.account_policy",
+        "environment.$": "$.environment",
+        "state.$": "$.state",
+        "error_budget_locked.$": "$.error_budget_locked",
+        "ingestion.$": "$.ingestion",
+        "normalized.$": "$.normalized",
+        "force_dry_run": true
+      },
+      "ResultPath": "$",
+      "Next": "SubmitAIRequest"
+    },
+    "SubmitAIRequest": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-ai-client",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-ai_request",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "force_dry_run.$": "$.force_dry_run",
+        "state.$": "$.state",
+        "account_policy.$": "$.account_policy",
+        "ingestion.$": "$.ingestion",
+        "normalized.$": "$.normalized"
+      },
       "ResultPath": "$.ai",
-      "Next": "AIResponseValid",
+      "Next": "AIRequestDecision",
       "TimeoutSeconds": 60,
       "Retry": [
         {
@@ -249,35 +506,164 @@
         }
       ]
     },
-    "AIResponseValid": {
+    "AIRequestDecision": {
       "Type": "Choice",
       "Choices": [
         {
           "Variable": "$.ai.status",
-          "StringEquals": "UNAVAILABLE",
-          "Next": "FailClosed"
+          "StringEquals": "ACCEPTED",
+          "Next": "WaitForAIResult"
         },
         {
           "Variable": "$.ai.status",
-          "StringEquals": "TIMEOUT",
-          "Next": "FailClosed"
+          "StringEquals": "PROCESSING",
+          "Next": "WaitForAIResult"
         },
         {
           "Variable": "$.ai.status",
-          "StringEquals": "CONTRACT_MISMATCH",
+          "StringEquals": "COMPLETED",
+          "Next": "ValidateAIResult"
+        }
+      ],
+      "Default": "FailClosed"
+    },
+    "WaitForAIResult": {
+      "Type": "Wait",
+      "SecondsPath": "$.ai.retry_after_seconds",
+      "Next": "IncrementAIPollRetry"
+    },
+    "IncrementAIPollRetry": {
+      "Type": "Pass",
+      "Parameters": {
+        "count.$": "States.MathAdd($.ai_retry.count, 1)",
+        "max.$": "$.ai_retry.max"
+      },
+      "ResultPath": "$.ai_retry",
+      "Next": "CheckAIPollRetryExceeded"
+    },
+    "CheckAIPollRetryExceeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai_retry.count",
+          "NumericGreaterThanEquals": 6,
+          "Next": "SetAIPollTimeoutError"
+        }
+      ],
+      "Default": "PollAIResult"
+    },
+    "SetAIPollTimeoutError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AIPollTimeout",
+        "Cause": "AI Engine detection polling exceeded maximum attempts."
+      },
+      "ResultPath": "$.error",
+      "Next": "FailClosed"
+    },
+    "PollAIResult": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "tf2-finops-sandbox-ai-results",
+        "Key": {
+          "audit_id": {
+            "S.$": "$.ai.audit_id"
+          }
+        }
+      },
+      "ResultPath": "$.ai_db_result",
+      "Next": "CheckDBResultExists",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.SdkClientException",
+            "DynamoDb.AmazonDynamoDBException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
           "Next": "FailClosed"
+        }
+      ]
+    },
+    "CheckDBResultExists": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai_db_result.Item",
+          "IsPresent": true,
+          "Next": "FormatAIResult"
+        }
+      ],
+      "Default": "SetDBResultProcessing"
+    },
+    "FormatAIResult": {
+      "Type": "Pass",
+      "Parameters": {
+        "audit_id.$": "$.ai.audit_id",
+        "status.$": "$.ai_db_result.Item.status.S",
+        "retry_after_seconds.$": "$.ai.retry_after_seconds",
+        "anomaly_found.$": "$.ai_db_result.Item.anomaly_found.BOOL",
+        "required_fields_valid.$": "$.ai_db_result.Item.required_fields_valid.BOOL",
+        "recommended_containment_mode.$": "$.ai_db_result.Item.recommended_containment_mode.S",
+        "raw_result.$": "$.ai_db_result.Item.raw_result.S"
+      },
+      "ResultPath": "$.ai",
+      "Next": "AIResultDecision"
+    },
+    "SetDBResultProcessing": {
+      "Type": "Pass",
+      "Parameters": {
+        "audit_id.$": "$.ai.audit_id",
+        "status": "PROCESSING",
+        "retry_after_seconds.$": "$.ai.retry_after_seconds"
+      },
+      "ResultPath": "$.ai",
+      "Next": "AIResultDecision"
+    },
+    "AIResultDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "COMPLETED",
+          "Next": "ValidateAIResult"
         },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "PROCESSING",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "ACCEPTED",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "RATE_LIMITED",
+          "Next": "WaitForAIResult"
+        }
+      ],
+      "Default": "FailClosed"
+    },
+    "ValidateAIResult": {
+      "Type": "Choice",
+      "Choices": [
         {
           "Variable": "$.ai.required_fields_valid",
           "BooleanEquals": false,
           "Next": "FailClosed"
-        }
-      ],
-      "Default": "AnomalyFound"
-    },
-    "AnomalyFound": {
-      "Type": "Choice",
-      "Choices": [
+        },
         {
           "Variable": "$.ai.anomaly_found",
           "BooleanEquals": true,
@@ -288,7 +674,7 @@
     },
     "RouteAlert": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-router",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-router",
       "ResultPath": "$.alert",
       "Next": "FinanceAlertRequired",
       "Retry": [
@@ -328,7 +714,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-southeast-1:ACCOUNT_ID:tf2-finops-finance-alerts",
+        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-finance-alerts",
         "Subject.$": "$.alert.details.finance_route.subject",
         "Message.$": "$.alert.details.finance_route.message"
       },
@@ -369,7 +755,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-southeast-1:ACCOUNT_ID:tf2-finops-engineering-alerts",
+        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
         "Subject.$": "$.alert.details.engineering_route.subject",
         "Message.$": "$.alert.details.engineering_route.message"
       },
@@ -397,7 +783,7 @@
     },
     "WriteAlertDeliveryFailureAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.alert_failure_audit",
       "Next": "MarkRunFailed",
       "Retry": [
@@ -457,6 +843,33 @@
         {
           "And": [
             {
+              "Variable": "$.force_dry_run",
+              "BooleanEquals": true
+            },
+            {
+              "Not": {
+                "Or": [
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "dry-run"
+                  },
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "tag"
+                  },
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "suggest"
+                  }
+                ]
+              }
+            }
+          ],
+          "Next": "WriteDeniedAudit"
+        },
+        {
+          "And": [
+            {
               "Variable": "$.account_policy.environment",
               "StringEquals": "prod"
             },
@@ -495,13 +908,38 @@
             }
           ],
           "Next": "WritePreActionAudit"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.account_policy.environment",
+              "StringEquals": "sandbox"
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "tag"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "suggest"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "dry-run"
+                }
+              ]
+            }
+          ],
+          "Next": "WritePreActionAudit"
         }
       ],
       "Default": "WritePendingApprovalAudit"
     },
     "WritePreActionAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.pre_audit",
       "Next": "ExecuteContainment",
       "Retry": [
@@ -528,7 +966,7 @@
     },
     "ExecuteContainment": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-containment-worker",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-containment_worker",
       "ResultPath": "$.containment",
       "Next": "WritePostActionAudit",
       "Retry": [
@@ -555,9 +993,9 @@
     },
     "WritePostActionAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.post_audit",
-      "Next": "MarkRunComplete",
+      "Next": "SendAppliedStatusMessage",
       "Retry": [
         {
           "ErrorEquals": [
@@ -579,12 +1017,29 @@
           "Next": "MarkRunFailed"
         }
       ]
+    },
+    "SendAppliedStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "APPLIED",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_applied_result",
+      "Next": "MarkRunComplete"
     },
     "WriteDeniedAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.denied_audit",
-      "Next": "MarkRunComplete",
+      "Next": "SendDeniedStatusMessage",
       "Retry": [
         {
           "ErrorEquals": [
@@ -606,12 +1061,29 @@
           "Next": "MarkRunFailed"
         }
       ]
+    },
+    "SendDeniedStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "DENIED",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_denied_result",
+      "Next": "MarkRunComplete"
     },
     "WritePendingApprovalAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.pending_audit",
-      "Next": "MarkRunComplete",
+      "Next": "SendPendingStatusMessage",
       "Retry": [
         {
           "ErrorEquals": [
@@ -633,12 +1105,36 @@
           "Next": "MarkRunFailed"
         }
       ]
+    },
+    "SendPendingStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "PENDING",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_pending_result",
+      "Next": "MarkRunComplete"
     },
     "FailClosed": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "tenant_id.$": "$.tenant_id",
+        "action": "fail-closed",
+        "error.$": "$.error"
+      },
       "ResultPath": "$.failure_audit",
-      "Next": "MarkRunFailed",
+      "Next": "SendFailClosedAlert",
       "Retry": [
         {
           "ErrorEquals": [
@@ -661,9 +1157,20 @@
         }
       ]
     },
+    "SendFailClosedAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
+        "Subject": "FinOps Watch Fail-Closed Alert",
+        "Message.$": "States.Format('CDO daily workflow failed closed. Run ID: {}, Error: {}, Cause: {}', $.run_id, $.error.Error, $.error.Cause)"
+      },
+      "ResultPath": "$.fail_closed_alert_result",
+      "Next": "MarkRunFailed"
+    },
     "WriteContainmentFailureAudit": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.containment_failure_audit",
       "Next": "MarkRunFailed",
       "Retry": [
@@ -690,7 +1197,15 @@
     },
     "MarkRunComplete": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-state",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "complete",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
       "ResultPath": "$.completion",
       "Next": "RunCompleted",
       "Retry": [
@@ -717,7 +1232,15 @@
     },
     "MarkRunFailed": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-state",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "failed",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
       "ResultPath": "$.completion",
       "Next": "RunFailed",
       "Retry": [

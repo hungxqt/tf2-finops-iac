@@ -1,3 +1,3 @@
 locals {
-  name_prefix = "${var.project_name}-${var.environment}"
+  # Placeholder for local variables
 }

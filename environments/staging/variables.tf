@@ -25,3 +25,14 @@ variable "tags" {
     ManagedBy   = "Terraform"
   }
 }
+
+variable "request_image_uri" {
+  type        = string
+  description = "ECR image URI with immutable digest for the AI Request Lambda function"
+}
+
+variable "worker_image_uri" {
+  type        = string
+  description = "ECR image URI with immutable digest for the AI Worker Lambda function"
+}
+

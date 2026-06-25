@@ -94,11 +94,18 @@ Sau khi quá trình deploy hoàn tất, hãy lấy các dữ liệu đầu ra đ
 terraform output
 ```
 
-Các dữ liệu đầu ra này cung cấp thông tin kết nối quan trọng:
-* `cluster_name`: Tên của cụm Kubernetes EKS.
-* `ecr_repository_urls`: Các URL của kho lưu trữ ECR để push các hình ảnh container của AI Engine.
+* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda.
+* `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda.
+* `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
-* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy và audit.
+* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả và audit.
+
+### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
+Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:
+1. **Vai trò của Terraform**: Terraform chỉ khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution, Cognito Identity & User Pools, các Athena named queries và vai trò IAM truy cập dữ liệu).
+2. **Tải lên Tài nguyên Static (Asset Upload)**: Các tài nguyên static của frontend (ứng dụng giao diện UI) phải được tải lên riêng biệt vào S3 bucket chứa static assets (được cấu hình trong giá trị đầu ra `dashboard_asset_bucket_name`).
+3. **Quản trị Cognito**: Các tài khoản người dùng, nhóm (groups) và mật khẩu thật trong Cognito phải được quản trị trực tiếp trên AWS Console hoặc qua Cognito API/CLI bên ngoài Terraform.
+4. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi/tóm hợp dữ liệu chi phí (ví dụ: Lambda hoặc các batch jobs) phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).
 
 ---
 
@@ -115,8 +122,8 @@ terraform -chdir=environments/staging validate
 terraform -chdir=environments/prod validate
 
 # Quét phân tích bảo mật tĩnh
-trivy config modules/eks
-checkov -d modules/eks --framework terraform
+trivy config .
+checkov -d modules/orchestration --framework terraform
 ```
 
 ---

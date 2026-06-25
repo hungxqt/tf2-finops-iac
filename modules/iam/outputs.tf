@@ -28,3 +28,9 @@ output "scheduler_role_arn" {
   value       = aws_iam_role.scheduler.arn
 }
 
+output "cdo_caller_role_arn" {
+  description = "The ARN of the SigV4-compatible CDO caller role"
+  value       = aws_iam_role.cdo_caller.arn
+}
+
+

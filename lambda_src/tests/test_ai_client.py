@@ -196,3 +196,74 @@ def test_ai_client_http_post_success_and_failures():
             del os.environ[var]
     handler.secrets_client = None
     handler.http_client = handler.RealHTTPClient()
+
+
+def test_ai_client_split_operations():
+    os.environ["AI_ENGINE_ENDPOINT_URL"] = "https://my-ai-engine.internal"
+    os.environ["AI_ENGINE_SECRET_NAME"] = "my-secret"
+    os.environ["AI_ENGINE_CONTRACT_VERSION"] = "v1"
+    os.environ["AI_ENGINE_ALLOWED_HOSTS"] = "my-ai-engine.internal"
+
+    handler.secrets_client = finops_common.FakeSecretsManager(
+        get_secret_value_func=lambda secret_id: "my-bearer-token"
+    )
+
+    event_data = {
+        "run_id": "run-10",
+        "correlation_id": "corr-10",
+        "cost_period": "2026-06",
+        "environment": "sandbox",
+        "operation": "submit_detect",
+        "tenant_id": "tenant-123",
+        "is_ad_hoc": True
+    }
+
+    # 1. Test submit returns ACCEPTED (202)
+    handler.http_client = handler.FakeHTTPClient(
+        post_func=lambda url, headers, body, timeout: (
+            202,
+            b'{"audit_id": "ANOM-SIM-123"}'
+        )
+    )
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "ACCEPTED"
+    assert resp["details"]["audit_id"] == "ANOM-SIM-123"
+
+    # 2. Test poll returns PROCESSING
+    poll_event_data = event_data.copy()
+    poll_event_data["operation"] = "poll_detect_result"
+    poll_event_data["ai"] = {"status": "ACCEPTED", "details": {"audit_id": "ANOM-SIM-123"}}
+
+    handler.http_client = handler.FakeHTTPClient(
+        get_func=lambda url, headers, timeout: (
+            200,
+            b'{"status": "processing", "audit_id": "ANOM-SIM-123"}',
+            {"retry-after": "15"}
+        )
+    )
+    resp_poll = handler.handle_request(poll_event_data, None)
+    assert resp_poll["status"] == "PROCESSING"
+    assert resp_poll["retry_after_seconds"] == 15
+
+    # 3. Test poll returns COMPLETED
+    handler.http_client = handler.FakeHTTPClient(
+        get_func=lambda url, headers, timeout: (
+            200,
+            b'{"status": "completed", "audit_id": "ANOM-SIM-123", "anomalies_list": [{"anomaly_metadata": {"anomaly_id": "ANOM-SIM-123", "confidence_score": 0.99}, "engineering_dashboard_data": {"mitigation_action": {"immediate_action": "dry-run"}}, "finance_dashboard_data": {"metrics": {"severity": "critical"}}}]}'
+        )
+    )
+    resp_comp = handler.handle_request(poll_event_data, None)
+    assert resp_comp["status"] == "COMPLETED"
+    assert resp_comp["anomaly_found"] is True
+    assert resp_comp["recommended_containment_mode"] == "dry-run"
+    assert resp_comp["anomaly_id"] == "ANOM-SIM-123"
+    assert resp_comp["severity"] == "critical"
+    assert resp_comp["confidence"] == 0.99
+
+    # Clean up
+    for var in ["AI_ENGINE_ENDPOINT_URL", "AI_ENGINE_SECRET_NAME", "AI_ENGINE_CONTRACT_VERSION", "AI_ENGINE_ALLOWED_HOSTS"]:
+        if var in os.environ:
+            del os.environ[var]
+    handler.secrets_client = None
+    handler.http_client = handler.RealHTTPClient()
+

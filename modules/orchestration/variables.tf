@@ -55,3 +55,28 @@ variable "engineering_alerts_topic_arn" {
   description = "ARN of the SNS topic for engineering alerts"
 }
 
+variable "sqs_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for SQS encryption"
+}
+
+variable "ai_engine_contract_version" {
+  type        = string
+  description = "Version of the AI Engine contract"
+  default     = "v1"
+}
+
+variable "ai_poll_max_attempts" {
+  type        = number
+  description = "Maximum attempts for AI Engine async result polling"
+  default     = 6
+}
+
+variable "ai_poll_interval_seconds" {
+  type        = number
+  description = "Wait duration in seconds between AI polling attempts"
+  default     = 10
+}
+
+
+

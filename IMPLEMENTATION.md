@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Terraform repository skeleton for TF2 FinOps Watch so the team can provision the AWS platform foundation for lakehouse ingestion, scheduled orchestration, CDO-hosted AI Engine integration on EKS, alerting, safe containment, audit evidence, and CI/CD-controlled deployments.
+**Goal:** Build the Terraform repository skeleton for TF2 FinOps Watch so the team can provision the AWS platform foundation for lakehouse ingestion, scheduled orchestration, CDO-hosted AI Engine integration on ECS/Fargate, alerting, safe containment, audit evidence, and CI/CD-controlled deployments.
 
-**Architecture:** Terraform is the single source of truth for AWS infrastructure. The platform uses S3/Glue/Athena as the lakehouse data plane, EventBridge Scheduler and Step Functions for 24h orchestration, Lambda for short CDO adapters and policy workers, and EKS for the CDO-hosted AIOps AI Engine runtime. Runtime Kubernetes desired state remains in `tf2-finops-gitops`; this repo owns the EKS cluster, managed node groups, ECR repositories, IRSA/OIDC foundations, private networking, secrets plumbing, and infrastructure integration points.
+**Architecture:** Terraform is the single source of truth for AWS infrastructure. The platform uses S3/Glue/Athena as the lakehouse data plane, EventBridge Scheduler and Step Functions for 24h orchestration, Lambda for short CDO adapters and policy workers, and ECS/Fargate for the CDO-hosted AIOps AI Engine runtime. This repo owns the ECS cluster, Fargate and Fargate Spot services, ECR repository, Route 53 private DNS, private networking, task execution/task roles, secrets plumbing, and infrastructure integration points.
 
-**Tech Stack:** Terraform `>= 1.10`, AWS provider `>= 5.47, < 6.0`, Python 3.13 Lambda workers, Amazon EKS, managed on-demand and spot node groups, ECR, IRSA/OIDC, Secrets Manager, External Secrets Operator or Secrets Store CSI support, CloudWatch Container Insights, GitHub Actions OIDC, TFLint, Trivy, Checkov, S3 backend with `use_lockfile = true`.
+**Tech Stack:** Terraform `>= 1.15.6`, AWS provider `>= 5.47, < 6.0`, Python 3.13 Lambda workers, Amazon ECS, AWS Fargate and Fargate Spot, ECR, Route 53 private DNS, Secrets Manager, CloudWatch container metrics/logs, GitHub Actions OIDC, TFLint, Trivy, Checkov, S3 backend with `use_lockfile = true`.
 
 ---
 
@@ -51,16 +51,16 @@ If `README.md` or in-repo docs still describe the older Lambda-only scenario, re
 - **Secret exposure:** no committed `.tfvars`, no provider credentials in HCL, Secrets Manager references only, and no webhook/API secret values in examples.
 - **Blast radius:** separate environment roots, prod manual approval, `prevent_destroy` on critical resources.
 - **CI drift:** pinned runtime/provider versions, reviewed plan artifacts, apply consumes the saved artifact.
-- **Compliance gaps:** Trivy, Checkov, TFLint, encrypted storage, audit retention, Object Lock, OIDC, ECR scan-on-push, and EKS private access controls.
+- **Compliance gaps:** Trivy, Checkov, TFLint, encrypted storage, audit retention, Object Lock, OIDC, ECR scan-on-push, and ECS task isolation/private access controls.
 - **Provider upgrade risk:** version constraints and lockfile committed after first `terraform init`.
-- **Testing blind spots:** module validation, environment validate, Lambda unit tests, EKS static scans, AI contract checks, and security scans.
+- **Testing blind spots:** module validation, environment validate, Lambda unit tests, ECS static scans, AI contract checks, and security scans.
 
 ### Non-Negotiable Guardrails
 
 - AWS only.
 - Synthetic data unless real billing access is explicitly granted.
 - Default cadence is 24h unless the user changes the approved design.
-- CDO owns ingestion, scheduling, idempotency, dashboard views, alert routing, containment guardrails, audit logs, platform SLOs, and the EKS hosting platform.
+- CDO owns ingestion, scheduling, idempotency, dashboard views, alert routing, containment guardrails, audit logs, platform SLOs, and the ECS hosting platform.
 - AIOps owns anomaly detection logic, model selection, model training/retraining design, model versions, confidence scoring, classification, explanation text, AI Engine code/model internals, and backtest metrics.
 - Finance and Engineering alert routes stay separate.
 - Audit retention is at least 90 days.
@@ -164,7 +164,7 @@ Create this structure under `tf2-finops-iac/`:
 │   ├── alerting/
 │   ├── compute-lambda/
 │   ├── dashboard/
-│   ├── eks/
+│   ├── ai-runtime-lambda/
 │   ├── iam/
 │   ├── lakehouse/
 │   ├── networking/
@@ -200,25 +200,24 @@ Use `locals.tf`, `data.tf`, or `policies.tf` inside a module only when `main.tf`
 
 ### `modules/networking`
 
-Creates the private network foundation for Lambda workers, EKS nodes, VPC endpoints, and internal AI Engine traffic.
+Creates the private network foundation for Lambda workers, ECS Fargate tasks, VPC endpoints, and internal AI Engine traffic.
 
 Resources:
 
 - VPC with DNS hostnames and DNS support enabled.
 - Two public subnets for NAT gateways.
-- Private subnets shared by Lambda workers, EKS nodes, internal load balancer resources, and VPC endpoints.
+- Private subnets shared by Lambda workers, ECS Fargate tasks, internal load balancer resources, and VPC endpoints.
 - Internet gateway for public subnets.
 - NAT gateway count controlled by environment:
   - sandbox: one NAT gateway.
   - staging/prod: two NAT gateways unless cost override is explicitly set.
 - Route tables and associations.
 - Lambda security group with no ingress.
-- EKS cluster security group.
-- EKS node security group.
+- ECS task security group.
 - Internal AI Engine load balancer security group.
-- VPC endpoint security group with HTTPS ingress from Lambda and EKS node security groups.
+- VPC endpoint security group with HTTPS ingress from Lambda and ECS task security groups.
 - Gateway endpoints for S3 and DynamoDB.
-- Interface endpoints for KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, and ECR Docker registry.
+- Interface endpoints for KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, ECR Docker registry, SQS, and Bedrock runtime.
 
 Inputs:
 
@@ -238,8 +237,7 @@ Outputs:
 - `private_subnet_ids`
 - `public_subnet_ids`
 - `lambda_security_group_id`
-- `eks_cluster_security_group_id`
-- `eks_node_security_group_id`
+- `ecs_task_security_group_id`
 - `ai_engine_internal_lb_security_group_id`
 - `vpc_endpoint_security_group_id`
 - `vpc_cidr_block`
@@ -251,7 +249,7 @@ Security requirements:
 - Restrict Lambda egress to HTTPS where service behavior allows it.
 - Keep AI Engine traffic private. Do not expose an internet-facing AI endpoint.
 - Allow Lambda to reach the internal AI Engine endpoint on HTTPS only.
-- Allow EKS nodes to reach VPC endpoints for ECR, Secrets Manager, CloudWatch Logs, S3, and DynamoDB.
+- Allow ECS Fargate tasks to reach VPC endpoints for ECR, Secrets Manager, CloudWatch Logs, S3, and DynamoDB.
 
 ### `modules/lakehouse`
 
@@ -263,7 +261,7 @@ Resources:
   - data key
   - audit key
   - DynamoDB key
-  - EKS node-volume key, if not placed in `modules/eks`
+  - ECS volume/container storage key, if needed
 - S3 lakehouse bucket for raw and curated prefixes.
 - S3 audit bucket with Object Lock enabled in compliance mode.
 - S3 public access blocks for every bucket.
@@ -319,12 +317,9 @@ Resources:
   - router
   - containment worker
   - audit writer
-- EKS cluster role.
-- EKS node group role.
-- IRSA roles:
-  - `ai-engine-api` role with read-only model artifact and curated-feature access.
-  - `ai-engine-worker` role with scoped checkpoint/output access.
-  - external-secrets role with read-only access to named Secrets Manager secrets.
+- ECS Task Execution role.
+- ECS Task role.
+- SigV4-compatible CDO caller role for AI Engine service invocation.
 - Permission boundary or explicit deny policy for unsafe automation.
 - Cross-account read role policy document for member-account deployment.
 - Cross-account containment role policy document for member-account deployment.
@@ -334,14 +329,11 @@ Inputs:
 
 - `project_name`
 - `environment`
-- `member_account_ids`
 - `lakehouse_bucket_arn`
 - `audit_bucket_arn`
 - `dynamodb_table_arns`
 - `kms_key_arns`
 - `ai_engine_secret_arn`
-- `eks_oidc_provider_arn`
-- `eks_oidc_provider_url`
 - `containment_apply_enabled`
 - `tags`
 
@@ -350,11 +342,9 @@ Outputs:
 - `step_functions_role_arn`
 - `scheduler_role_arn`
 - `lambda_role_arns`
-- `eks_cluster_role_arn`
-- `eks_node_role_arn`
-- `ai_engine_api_irsa_role_arn`
-- `ai_engine_worker_irsa_role_arn`
-- `external_secrets_irsa_role_arn`
+- `ecs_task_role_arn`
+- `ecs_execution_role_arn`
+- `cdo_caller_role_arn`
 - `permissions_boundary_arn`
 - `member_read_policy_json`
 - `member_containment_policy_json`
@@ -367,36 +357,21 @@ Security requirements:
 - Explicit deny must include IAM modification, organization modification, S3 deletes, DynamoDB deletes, RDS deletes, and EC2 termination.
 - Prod roles must not allow `ec2:StopInstances` or other destructive containment apply actions.
 
-### `modules/eks`
+### `modules/ai-runtime-lambda`
 
-Creates the CDO-owned EKS hosting platform for the AIOps-provided AI Engine.
+Creates the CDO-owned ECS hosting platform for the AIOps-provided AI Engine.
 
 Resources:
 
-- EKS control plane in private subnets.
-- EKS access configuration for CI and platform operators.
-- EKS managed on-demand node group for stable workloads:
-  - `ai-engine-api`
-  - `ai-engine-explainer`
-  - monitoring
-  - ingress/controller support
-  - core CDO services that must stay available
-- EKS managed spot node group for interruptible workloads:
-  - `ai-engine-worker`
-  - batch scoring jobs
-  - feature engineering jobs
-  - model retraining jobs
-- ECR repositories for AIOps-provided AI Engine images with scan-on-push enabled.
-- EKS add-ons required for secure operation:
-  - VPC CNI
-  - CoreDNS
-  - kube-proxy
-  - EBS CSI driver when persistent volumes are needed
-- OIDC provider output for IRSA if not created in IAM.
-- Internal ALB/NLB prerequisites or private service integration values for the AI Engine endpoint.
-- Secrets Manager plumbing for External Secrets Operator or Secrets Store CSI driver.
-- CloudWatch Container Insights and EKS control plane logging.
-- Autoscaling prerequisites for HPA/KEDA and Cluster Autoscaler or Karpenter.
+- ECS Cluster with Container Insights enabled.
+- Capacity provider strategies mapping to FARGATE and FARGATE_SPOT capacity providers.
+- Internal ALB, target groups on port 8080 (health check /health), HTTPS listener on port 443.
+- ACM Self-Signed TLS certificate for secure private transit.
+- Route 53 private hosted zone and record alias (`ai-engine.<project>-<env>.local`).
+- ECR repository with KMS encryption, immutable image tags, and scan-on-push enabled.
+- ECS Task Execution role and ECS Task role with SQS and logging permissions.
+- CloudWatch log group with 14-day retention.
+- Target tracking autoscaling policies for ECS service based on CPU and memory utilization.
 
 Inputs:
 
@@ -405,46 +380,32 @@ Inputs:
 - `aws_region`
 - `vpc_id`
 - `private_subnet_ids`
-- `cluster_version`
-- `cluster_role_arn`
-- `node_role_arn`
-- `on_demand_node_group_config`
-- `spot_node_group_config`
-- `cluster_security_group_id`
-- `node_security_group_id`
-- `ai_engine_internal_lb_security_group_id`
-- `ai_engine_namespace`
-- `ai_engine_service_name`
-- `ai_engine_contract_version`
-- `ai_engine_secret_name`
-- `ecr_repository_names`
-- `node_volume_kms_key_arn`
-- `enable_karpenter`
-- `enable_container_insights`
+- `internal_alb_security_group_id`
+- `ecs_task_security_group_id`
+- `ai_engine_image_digest`
+- `ai_engine_cpu`
+- `ai_engine_memory`
+- `ai_engine_min_tasks`
+- `ai_engine_max_tasks`
+- `queue_urls`
+- `secret_arns`
 - `tags`
 
 Outputs:
 
-- `cluster_name`
-- `cluster_arn`
-- `cluster_endpoint`
-- `cluster_security_group_id`
-- `oidc_provider_arn`
-- `oidc_provider_url`
-- `on_demand_node_group_name`
-- `spot_node_group_name`
-- `ecr_repository_urls`
-- `ai_engine_internal_endpoint`
-- `ai_engine_contract_version`
-- `container_insights_log_group_name`
+- `ecs_cluster_name`
+- `ecs_service_name`
+- `ecr_repository_url`
+- `internal_alb_dns_name`
+- `ai_engine_internal_endpoint_url`
+- `task_role_arn`
+- `task_execution_role_arn`
+- `log_group_name`
 
 Rules:
 
-- Do not create AI Engine source code, model weights, Helm values, Kubernetes Deployments, or Argo CD `Application` resources in this repo.
-- Do not expose the AI Engine publicly.
-- Encrypt node EBS volumes.
-- Enable ECR scan on push.
-- Keep stable API workloads on on-demand capacity and interruptible batch workloads on spot capacity.
+- Do not deploy `latest` or mutable container tags; reference images by immutable digests.
+- Enforce private HTTPS endpoints inside the VPC (no public ingress).
 
 ### `modules/compute-lambda`
 
@@ -498,7 +459,7 @@ Outputs:
 Implementation rules:
 
 - Lambda code is intentionally minimal but deployable. It validates required event fields, logs structured JSON, returns a typed status object, and never applies prod containment.
-- `ai-client` calls the internal EKS AI Engine endpoint through the versioned contract.
+- `ai-client` calls the internal ECS/ALB AI Engine endpoint through the versioned contract.
 - If the endpoint URL, secret, contract version, or response schema is invalid, `ai-client` returns an unavailable/error status and never triggers containment directly.
 
 ### `modules/orchestration`
@@ -591,7 +552,7 @@ Security requirements:
 
 ### `modules/observability`
 
-Creates platform visibility for Step Functions, Lambda, lakehouse freshness, EKS, and AI Engine hosting.
+Creates platform visibility for Step Functions, Lambda, lakehouse freshness, ECS/Fargate, and AI Engine hosting.
 
 Resources:
 
@@ -602,8 +563,8 @@ Resources:
   - AI Engine endpoint unavailable
   - audit write failed
   - stale workflow over 26h
-  - EKS node group unhealthy
-  - spot interruption or excessive pending pods
+  - ECS Service CPU utilization high
+  - ECS Service Memory utilization high
   - drift detected custom metric emitted by CI
 - Log metric filters for structured Lambda status logs.
 - Container Insights log groups or integration hooks.
@@ -614,9 +575,8 @@ Inputs:
 - `environment`
 - `state_machine_arn`
 - `lambda_function_names`
-- `eks_cluster_name`
-- `on_demand_node_group_name`
-- `spot_node_group_name`
+- `ecs_cluster_name`
+- `ecs_service_name`
 - `ai_engine_internal_endpoint`
 - `engineering_topic_arn`
 - `finance_topic_arn`
@@ -668,9 +628,9 @@ Each environment root calls all modules and provides only environment-specific v
 - `containment_apply_enabled = true` only for non-prod/synthetic examples.
 - `scheduler_expression = "rate(24 hours)"`
 - Log retention: 14 days
-- Minimal EKS sizing:
-  - on-demand node group: small baseline capacity for `ai-engine-api`.
-  - spot node group: enabled only when batch testing is in scope.
+- Minimal ECS Fargate sizing:
+  - Fargate task count: min 1, max 2.
+  - Fargate capacity provider strategy mapping FARGATE and FARGATE_SPOT.
 - Email subscriptions can be empty by default.
 - Used for base build, W12 testing, and synthetic E2E runs.
 
@@ -681,7 +641,7 @@ Each environment root calls all modules and provides only environment-specific v
 - `containment_apply_enabled = false`
 - `scheduler_expression = "rate(24 hours)"`
 - Log retention: 30 days
-- EKS on-demand and spot node groups enabled for integration testing.
+- ECS service task scaling using Fargate and Fargate Spot capacity providers.
 - Used for AI contract validation, AIOps container artifact validation, E2E testing, and chaos/failure tests.
 
 ### Prod
@@ -691,7 +651,7 @@ Each environment root calls all modules and provides only environment-specific v
 - `containment_apply_enabled = false`
 - `scheduler_expression = "rate(24 hours)"`
 - Log retention: 30 days
-- EKS control plane and AI Engine endpoint are private only.
+- ECS tasks, internal ALB, and Route 53 DNS are private only.
 - Critical resources use `prevent_destroy`.
 - Apply only through GitHub environment approval.
 - Production containment is tag, suggest, or dry-run only.
@@ -700,10 +660,9 @@ Each root must expose stable outputs for:
 
 - S3 bucket names and ARNs.
 - DynamoDB table names and ARNs.
-- EKS cluster name and ARN.
-- EKS node group names.
-- ECR repository URLs.
-- AI Engine internal endpoint.
+- ECS cluster name and ECS service name.
+- ECR repository URL.
+- AI Engine internal endpoint URL.
 - Step Functions ARN.
 - EventBridge Scheduler ARN.
 - Lambda names and ARNs.
@@ -716,12 +675,11 @@ Module call order:
 2. lakehouse
 3. alerting
 4. base IAM
-5. EKS
-6. IAM bindings that need the EKS OIDC provider, if split from base IAM
-7. compute-lambda
-8. orchestration
-9. observability
-10. dashboard.
+5. ai_runtime_lambda
+6. compute-lambda
+7. orchestration
+8. observability
+9. dashboard.
 
 ---
 
@@ -835,9 +793,9 @@ Expected: all tests pass without AWS credentials.
 Steps:
 
 - [ ] Implement VPC, subnets, internet gateway, NAT, routes, and route table associations.
-- [ ] Implement Lambda, EKS cluster, EKS node, internal load balancer, and endpoint security groups with separate rule resources.
+- [ ] Implement Lambda, ECS task, internal load balancer, and endpoint security groups with separate rule resources.
 - [ ] Implement S3 and DynamoDB gateway endpoints.
-- [ ] Implement KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, and ECR Docker interface endpoints.
+- [ ] Implement KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, ECR Docker registry, SQS, and Bedrock runtime interface endpoints.
 - [ ] Add variable validations for subnet counts and CIDR shape.
 - [ ] Add outputs listed in the module contract.
 - [ ] Add `README.md` with input/output tables and example module call.
@@ -858,7 +816,7 @@ Validate through `environments/sandbox` after environment composition exists.
 
 Steps:
 
-- [ ] Implement KMS keys and aliases for data, audit, DynamoDB, and optional EKS node-volume encryption.
+- [ ] Implement KMS keys and aliases for data, audit, and DynamoDB encryption.
 - [ ] Implement lakehouse bucket with raw and curated prefixes represented by documented key conventions.
 - [ ] Implement audit bucket with Object Lock enabled.
 - [ ] Enable versioning, SSE-KMS, lifecycle, public access blocks, and TLS-only policies.
@@ -894,8 +852,8 @@ Steps:
 - [ ] Create Step Functions role with Lambda invoke, DynamoDB access, SNS publish, CloudWatch logging, X-Ray permissions, and internal AI invocation permissions where applicable.
 - [ ] Create EventBridge Scheduler role.
 - [ ] Create one Lambda role per worker class.
-- [ ] Create EKS cluster and node group roles.
-- [ ] Create IRSA roles for `ai-engine-api`, `ai-engine-worker`, and external-secrets access after the EKS OIDC provider is available.
+- [ ] Create ECS task execution and task roles.
+- [ ] Create SigV4 CDO caller role for AI Engine service invocation.
 - [ ] Scope S3 permissions by bucket and prefix.
 - [ ] Scope DynamoDB permissions by exact table ARNs.
 - [ ] Scope Secrets Manager access to the AI Engine secret only.
@@ -911,37 +869,32 @@ checkov -d modules/iam --framework terraform
 
 Expected: no wildcard-admin or wildcard-trust findings.
 
-### Task 7: EKS AI Engine Hosting Module
+### Task 7: ECS Fargate AI Engine Hosting Module
 
 **Files:**
 
-- Create: `modules/eks/*`
-- Create or update: `docs/progress/eks_hosting_progress.md`
-- Create or update: `docs/progress/eks_hosting_progress_vi.md`
+- Create: `modules/ai-runtime-lambda/*`
+- Create or update: `docs/progress/ai_runtime_lambda_progress.md`
+- Create or update: `docs/progress/ai_runtime_lambda_progress_vi.md`
 
 Steps:
 
-- [ ] Create EKS control plane in private subnets.
-- [ ] Enable EKS control plane logs for API, audit, authenticator, controller manager, and scheduler where supported.
-- [ ] Create managed on-demand node group for `ai-engine-api`, `ai-engine-explainer`, monitoring, ingress/controller support, and stable CDO platform pods.
-- [ ] Create managed spot node group for `ai-engine-worker`, batch scoring, feature engineering, and retraining jobs.
-- [ ] Encrypt node EBS volumes using the configured KMS key.
-- [ ] Create ECR repositories for AIOps-provided images with scan-on-push enabled.
-- [ ] Configure EKS add-ons for VPC CNI, CoreDNS, kube-proxy, and EBS CSI driver when needed.
-- [ ] Expose outputs needed for IRSA role binding: OIDC provider ARN and URL.
-- [ ] Provide private AI Engine endpoint integration values for internal ALB/NLB or private ClusterIP-facing integration.
-- [ ] Add support flags for External Secrets Operator or Secrets Store CSI driver infrastructure.
-- [ ] Add support flags for Container Insights.
-- [ ] Add support values for HPA/KEDA and Cluster Autoscaler or Karpenter prerequisites.
-- [ ] Document that Kubernetes Deployments, Helm values, and Argo CD applications belong in `tf2-finops-gitops`.
-- [ ] Update paired English and Vietnamese EKS progress files with identical facts and section order.
+- [x] Create ECS Cluster with Container Insights enabled.
+- [x] Configure ECS Capacity Provider strategy supporting FARGATE and FARGATE_SPOT capacity providers.
+- [x] Provision an internal HTTPS Application Load Balancer with self-signed certificate.
+- [x] Set up Route 53 private hosted zone and record alias for `ai-engine` service DNS lookup.
+- [x] Provision ECR repository with scan-on-push and immutability enforced.
+- [x] Configure task execution role and task role with SQS and CloudWatch log access.
+- [x] Set up ECS task definition with logging options and service configuration.
+- [x] Set up Service Autoscaling based on CPU and memory utilization.
+- [x] Update paired English and Vietnamese ECS progress files with identical facts and section order.
 
 Validation:
 
 ```powershell
-terraform fmt -check -recursive modules/eks
-trivy config modules/eks
-checkov -d modules/eks --framework terraform
+terraform fmt -check -recursive modules/ai-runtime-lambda
+trivy config modules/ai-runtime-lambda
+checkov -d modules/ai-runtime-lambda --framework terraform
 ```
 
 ### Task 8: Compute Lambda Module
@@ -1018,8 +971,8 @@ Steps:
 
 - [ ] Create separate encrypted SNS topics for Finance and Engineering.
 - [ ] Add optional email subscriptions controlled by variables.
-- [ ] Create CloudWatch alarms for workflow failure, AI timeout, AI Engine endpoint unavailable, audit write failure, stale workflow, EKS node group health, spot interruption or excessive pending pods, and drift-detected metrics emitted by CI.
-- [ ] Create CloudWatch dashboard for CDO operations, Lambda status, Step Functions state, EKS node groups, and AI Engine availability.
+- [ ] Create CloudWatch alarms for workflow failure, AI timeout, AI Engine endpoint unavailable, audit write failure, stale workflow, ECS service health, task count, and drift-detected metrics emitted by CI.
+- [ ] Create CloudWatch dashboard for CDO operations, Lambda status, Step Functions state, ECS services, and AI Engine availability.
 - [ ] Create Athena named queries for finance-readable spend and anomaly views.
 - [ ] Keep QuickSight disabled by default.
 
@@ -1047,16 +1000,15 @@ Steps:
   2. lakehouse
   3. alerting
   4. base iam
-  5. eks
-  6. iam bindings that need the EKS OIDC provider, if split from base IAM
-  7. compute-lambda
-  8. orchestration
-  9. observability
-  10. dashboard
+  5. ai_runtime_lambda
+  6. compute-lambda
+  7. orchestration
+  8. observability
+  9. dashboard
 - [ ] Add `terraform.tfvars.example` only; do not commit real `.tfvars`.
 - [ ] Set environment-specific containment behavior exactly as defined in Section 4.
-- [ ] Set environment-specific EKS node group sizing defaults.
-- [ ] Wire `modules/eks` outputs into IAM, Lambda, orchestration, and observability modules.
+- [ ] Set environment-specific ECS service task sizing defaults.
+- [ ] Wire `modules/ai-runtime-lambda` outputs into IAM, Lambda, orchestration, and observability modules.
 - [ ] Add environment READMEs with init, plan, and apply commands.
 
 Validation:
@@ -1081,7 +1033,7 @@ terraform -chdir=environments/prod validate
 Steps:
 
 - [ ] Add PR workflow for fmt, validate, tflint, Lambda tests, Trivy, and Checkov.
-- [ ] Add EKS/module-specific static checks for `modules/eks`.
+- [ ] Add ECS/module-specific static checks for `modules/ai-runtime-lambda`.
 - [ ] Add AI contract compatibility check against the configured contract version and AIOps-provided schema artifact when available.
 - [ ] Add ECR scan-on-push requirement for AI Engine images.
 - [ ] Use GitHub OIDC role assumption; do not use static AWS keys.
@@ -1114,8 +1066,8 @@ Steps:
 - [ ] Run `tflint --recursive`.
 - [ ] Run `trivy config .`.
 - [ ] Run `checkov -d . --framework terraform`.
-- [ ] Run `trivy config modules/eks`.
-- [ ] Run `checkov -d modules/eks --framework terraform`.
+- [ ] Run `trivy config modules/ai-runtime-lambda`.
+- [ ] Run `checkov -d modules/ai-runtime-lambda --framework terraform`.
 - [ ] Run `Push-Location lambda_src; python -m pytest; Pop-Location`.
 - [ ] Capture outputs in a local evidence note or PR comment.
 - [ ] Confirm no tracked files include real secrets, `.tfvars`, state, or plan JSON.
@@ -1131,7 +1083,7 @@ Acceptance criteria:
 
 - All Terraform roots validate locally with `-backend=false`.
 - Lambda tests pass without AWS credentials.
-- EKS module static checks pass or findings are documented with accepted capstone rationale.
+- ECS module static checks pass or findings are documented with accepted capstone rationale.
 - No security scan finding contradicts the hard guardrails.
 - The AI Engine endpoint is private by design.
 - ECR repositories have scan-on-push enabled.
@@ -1148,8 +1100,8 @@ Acceptance criteria:
 - To roll back non-destructive changes, revert the PR and apply the previous reviewed plan.
 - To roll back Lambda code, use alias rollback or re-apply the previous Terraform revision.
 - To roll back Step Functions, re-apply the previous state machine definition from Git.
-- To roll back EKS workload desired state, revert the corresponding `tf2-finops-gitops` commit; do not manage workload manifests directly here.
-- To roll back EKS infrastructure, review the Terraform plan carefully and preserve cluster, node group, IAM, and data dependencies unless a full teardown is explicitly approved.
+- To roll back ECS workload desired state, update the task definition with the previous immutable image digest or revert the commit in this repo.
+- To roll back ECS infrastructure, review the Terraform plan carefully and preserve cluster, services, IAM, and data dependencies unless a full teardown is explicitly approved.
 - Do not delete state bucket, KMS state key, audit bucket, lakehouse bucket, ECR repositories, or DynamoDB tables during normal rollback.
 - If a lock is stuck, investigate active CI/local Terraform processes before using `terraform force-unlock`.
 - Keep S3 state bucket versioning enabled; state recovery uses object version restore, not manual state editing.
@@ -1161,11 +1113,10 @@ Acceptance criteria:
 - Terraform over AWS SAM, CDK, CloudFormation, or Pulumi for platform IaC.
 - S3 native lockfile over DynamoDB lock table.
 - Lambda for CDO adapters and policy workers.
-- EKS for CDO-hosted AIOps AI Engine runtime and batch workloads.
-- On-demand node groups for stable API, explainer, ingress/controller support, monitoring, and core CDO services.
-- Spot node groups for `ai-engine-worker`, batch scoring, feature engineering, and retraining jobs.
-- ECR scan-on-push for AIOps-provided images.
-- IRSA for pod-level AWS access.
+- ECS/Fargate for CDO-hosted AIOps AI Engine runtime and batch workloads.
+- Fargate capacity provider for stable workloads, and Fargate Spot capacity provider for batch/worker workloads.
+- ECR scan-on-push for AIOps-provided images with immutability enforced.
+- IAM task execution role and task role for task-level AWS access.
 - Private internal AI Engine endpoint only.
 - CloudWatch-native observability plus Container Insights for capstone scope.
 - QuickSight disabled by default until dashboard ownership is confirmed.
@@ -1185,11 +1136,11 @@ Acceptance criteria:
 - [ ] No public AI Engine endpoint.
 - [ ] All S3 buckets encrypted and versioned.
 - [ ] DynamoDB tables encrypted with CMK.
-- [ ] EKS node EBS volumes encrypted.
+- [ ] ECS volumes/ephemeral storage encrypted.
 - [ ] ECR scan-on-push enabled for AI Engine repositories.
-- [ ] IRSA configured for AI Engine API, worker, and external secrets access.
-- [ ] AI Engine pods do not rely on broad node-instance permissions.
-- [ ] On-demand and spot node groups are separated by labels, taints, tolerations, or documented scheduling constraints.
+- [ ] ECS execution role and task role configured for SQS, ECR, and CloudWatch Logs.
+- [ ] AI Engine tasks do not rely on broad execution roles.
+- [ ] ECS tasks utilize Fargate and Fargate Spot capacity providers.
 - [ ] SNS topics encrypted.
 - [ ] GitHub Actions use OIDC and environment approval for prod.
 - [ ] Drift detection alerts instead of auto-applying.
@@ -1201,6 +1152,6 @@ Acceptance criteria:
 - [ ] `tflint --recursive` passes.
 - [ ] `trivy config .` passes or findings are documented with accepted capstone rationale.
 - [ ] `checkov -d . --framework terraform` passes or findings are documented with accepted capstone rationale.
-- [ ] `trivy config modules/eks` passes or findings are documented with accepted capstone rationale.
-- [ ] `checkov -d modules/eks --framework terraform` passes or findings are documented with accepted capstone rationale.
+- [ ] `trivy config modules/ai-runtime-lambda` passes or findings are documented with accepted capstone rationale.
+- [ ] `checkov -d modules/ai-runtime-lambda --framework terraform` passes or findings are documented with accepted capstone rationale.
 - [ ] `Push-Location lambda_src; python -m pytest; Pop-Location` passes.

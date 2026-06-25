@@ -1,10 +1,51 @@
+output "dashboard_url" {
+  description = "The URL of the CloudFront dashboard distribution"
+  value       = "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+}
+
+output "cloudfront_distribution_id" {
+  description = "The ID of the CloudFront distribution"
+  value       = aws_cloudfront_distribution.dashboard.id
+}
+
+output "cloudfront_domain_name" {
+  description = "The domain name of the CloudFront distribution"
+  value       = aws_cloudfront_distribution.dashboard.domain_name
+}
+
+output "asset_bucket_name" {
+  description = "The name of the static asset S3 bucket"
+  value       = aws_s3_bucket.dashboard_assets.id
+}
+
+output "data_bucket_name" {
+  description = "The name of the dashboard data S3 bucket"
+  value       = aws_s3_bucket.dashboard_data.id
+}
+
+output "data_prefix" {
+  description = "The S3 folder prefix where precomputed dashboard JSON summaries are stored"
+  value       = var.dashboard_data_prefix
+}
+
+output "cognito_user_pool_id" {
+  description = "The Cognito User Pool ID"
+  value       = aws_cognito_user_pool.dashboard.id
+}
+
+output "cognito_user_pool_client_id" {
+  description = "The Cognito User Pool Client ID"
+  value       = aws_cognito_user_pool_client.dashboard.id
+}
+
+output "cognito_identity_pool_id" {
+  description = "The Cognito Identity Pool ID"
+  value       = aws_cognito_identity_pool.dashboard.id
+}
+
 output "athena_named_query_ids" {
-  description = "List of IDs for the Athena named queries created"
-  value = [
-    aws_athena_named_query.spend_by_service.id,
-    aws_athena_named_query.spend_by_account.id,
-    aws_athena_named_query.anomaly_spend_trends.id
-  ]
+  description = "Map of Athena named query names to their IDs"
+  value       = { for k, v in aws_athena_named_query.queries : k => v.id }
 }
 
 output "quicksight_enabled" {

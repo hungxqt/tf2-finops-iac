@@ -2,18 +2,19 @@
 
 ## Purpose
 
-This repository is the Terraform infrastructure-as-code home for **Task Force 2 - FinOps Watch**. Agents working here must implement AWS platform infrastructure according to the repository skeleton below, the new EKS-based scenario documented in `../tf2-finops-docs`, the task plan in `IMPLEMENTATION.md`, and the read-only architecture documents in `tf2-finops-docs`.
+This repository is the Terraform infrastructure-as-code home for **Task Force 2 - FinOps Watch**. Agents working here must implement AWS platform infrastructure according to the repository skeleton below, the current scenario documented in `../tf2-finops-docs`, the task plan in `IMPLEMENTATION.md`, the read-only architecture documents in `tf2-finops-docs`, and the API, telemetry, deployment, SLO, and security contracts in `docs/contracts`.
 
 This file is authoritative for implementation agents. When instructions conflict, follow this priority order:
 
 1. Explicit user instructions in the current conversation.
 2. This `AGENTS.md`.
 3. Scenario authority from `../tf2-finops-docs/AGENTS.md`, `../tf2-finops-docs/TF2_FINOPS_LEARNER.md`, and `../tf2-finops-docs/docs/tf2-finops/`.
-4. `IMPLEMENTATION.md`.
-5. `README.md`.
-6. Read-only reference documents under `./docs/tf2-finops/`.
+4. Contract authority from `./docs/contracts/`.
+5. `IMPLEMENTATION.md`.
+6. `README.md`.
+7. Read-only reference documents under `./docs/tf2-finops/`.
 
-If `IMPLEMENTATION.md` or `README.md` still describes the older Lambda/serverless-only scenario, treat that as stale guidance. Follow this file plus `../tf2-finops-docs` for the current scenario and report the mismatch.
+If `IMPLEMENTATION.md`, `README.md`, `./docs/contracts/`, or `./docs/tf2-finops/` contain runtime-platform or application-deployment wording that conflicts with this file or explicit user scope, preserve the platform-neutral requirements from those documents, keep this repo focused on Terraform-owned AWS platform infrastructure, Lambda container runtime infrastructure, and CDO workflow integration.
 
 ## Repository Scope
 
@@ -23,17 +24,17 @@ This repo owns:
 - Remote state bootstrap, locking, and CI plan/apply controls.
 - AWS cost-data platform resources: S3 raw/curated/audit zones, Glue Data Catalog, Athena workgroup, and related KMS keys.
 - Scheduled workflow resources: EventBridge Scheduler, Step Functions Standard, Lambda workers, and DynamoDB run-state tables.
-- CDO-owned EKS hosting platform for the AIOps-provided AI Engine: EKS control plane, private managed node groups, ECR repositories, IRSA/OIDC foundations, internal service exposure, secrets-injection infrastructure, autoscaling hooks, and Container Insights plumbing.
+- Lambda container AI hosting infrastructure: `modules/ai-runtime-lambda` providing ECR repository (digest-pinned images, scan-on-push), AI Engine Request Lambda and Worker Lambda (`package_type = "Image"`), Lambda aliases/versions, reserved concurrency and optional provisioned concurrency, SQS event source mapping, KMS-encrypted CloudWatch log groups, and X-Ray tracing.
 - Finance and Engineering alert routing, dashboard infrastructure hooks, containment audit records, and operational observability.
-- Least-privilege IAM roles for CDO workflow execution, read-only cost ingestion, and tightly scoped non-prod containment.
-- AI Engine integration infrastructure: endpoint configuration, authentication secret references, timeout/retry/circuit-breaker settings, unavailable-AI fallback wiring, and evidence/audit storage paths.
+- Least-privilege IAM roles for CDO workflow execution, read-only cost ingestion, Lambda VPC-endpoint access, and tightly scoped non-prod containment.
+- AI Engine integration infrastructure: Step Functions direct Lambda invocation, SQS detection queue and DLQ, DynamoDB result/idempotency/state/error-budget tables, S3 evidence/checkpoint paths, IAM SigV4 authentication, timeout/retry/circuit-breaker settings, unavailable-AI fallback wiring, and audit storage paths.
+- Contract implementation scaffolding for API integration, telemetry collection/normalization, SLO monitoring, queue/state infrastructure, deployment gates, and security guardrails described under `docs/contracts`.
 
 This repo does not own:
 
 - AI model code, anomaly detection internals, training algorithms, retraining logic, explanation logic, model versions, confidence scoring, or backtest implementation.
-- Runtime workload manifests, Helm values, Argo CD applications, or application desired state after the EKS platform exists. Those belong to `tf2-finops-gitops`.
+- AI Engine runtime application code (e.g. internal service business logic or Python models) or application desired state definitions outside of the Lambda function/image configuration provisioned in modules/ai-runtime-lambda.
 - Business documentation or design-doc rewrites.
-- Runtime desired state belonging to `tf2-finops-gitops`.
 
 ## Required Repository Skeleton
 
@@ -126,6 +127,12 @@ tf2-finops-iac/
 │       ├── test_router.py
 │       └── test_state.py
 ├── modules/
+│   ├── ai-runtime-lambda/
+│   │   ├── README.md
+│   │   ├── main.tf
+│   │   ├── outputs.tf
+│   │   ├── variables.tf
+│   │   └── versions.tf
 │   ├── alerting/
 │   │   ├── README.md
 │   │   ├── main.tf
@@ -145,12 +152,6 @@ tf2-finops-iac/
 │   │   ├── variables.tf
 │   │   └── versions.tf
 │   ├── iam/
-│   │   ├── README.md
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   ├── variables.tf
-│   │   └── versions.tf
-│   ├── eks/
 │   │   ├── README.md
 │   │   ├── main.tf
 │   │   ├── outputs.tf
@@ -181,6 +182,10 @@ tf2-finops-iac/
 │       ├── variables.tf
 │       └── versions.tf
 ├── docs/
+│   ├── contracts/
+│   │   ├── ai-api-contract.md
+│   │   ├── deployment-contract.md
+│   │   └── telemetry-contract.md
 │   ├── GUIDES.md
 │   ├── GUIDES_vi.md
 │   ├── SKELETON.md
@@ -208,7 +213,9 @@ tf2-finops-iac/
 
 - Read `IMPLEMENTATION.md` before creating or modifying implementation files.
 - Follow the module contracts and task order in `IMPLEMENTATION.md` only when they do not contradict this file or the current `../tf2-finops-docs` scenario.
-- Use Terraform as the platform IaC tool for AWS infrastructure, including EKS. Do not replace the platform design with AWS SAM, CDK, CloudFormation, Pulumi, or application workload manifests.
+- Read the matching file under `docs/contracts/` before changing any Terraform, Lambda, CI, deployment, telemetry, SLO, or AI integration behavior covered by that contract.
+- Treat `docs/contracts/ai-api-contract.md`, `docs/contracts/telemetry-contract.md`, and `docs/contracts/deployment-contract.md` as implementation contracts for behavior and controls, not as permission to move AI model code, runtime deployment descriptors, or application desired state into this repo.
+- Use Terraform as the platform IaC tool for AWS infrastructure. Do not replace the platform design with AWS SAM, CDK, CloudFormation, Pulumi, or application deployment definitions.
 - Keep each module focused on one responsibility. Do not create a single large module that owns all resources.
 - Keep environment-specific values in `environments/*`. Do not hardcode sandbox, staging, or prod choices inside reusable modules.
 - Use `terraform.tfvars.example` for examples only. Do not commit real `.tfvars`.
@@ -217,66 +224,13 @@ tf2-finops-iac/
 - Use reviewed plan artifacts for apply workflows. Do not re-run `terraform plan` inside apply jobs.
 - Drift detection must alert or open an issue. It must not auto-apply changes.
 - Keep Lambda worker code minimal, deployable, contract-validating, and safe by default.
-- Use Lambda for short CDO adapters and policy workers. Use EKS for the CDO-hosted AI Engine runtime and batch workloads.
-- Keep Kubernetes workload deployment state in `tf2-finops-gitops`; Terraform may create the cluster, add-ons, node groups, ECR repositories, IAM roles, IRSA/OIDC bindings, security groups, internal load-balancer prerequisites, and secrets infrastructure.
-- Configure AI Engine integration through versioned contract inputs: contract version, internal endpoint URL, auth secret name or ARN, timeout, retry policy, circuit-breaker behavior, and fail-closed fallback behavior.
-- If the AI Engine is unavailable, fails schema validation, times out, or returns an unsafe recommendation, fail closed for containment: do not apply automatic containment, alert operators, preserve run state, and write an audit record.
-- Place stable AI Engine API workloads such as `ai-engine-api`, `ai-engine-explainer`, monitoring, and core CDO services on on-demand node groups.
-- Place interruptible AI Engine workloads such as `ai-engine-worker`, batch scoring jobs, feature engineering jobs, and model retraining jobs on spot node groups with retry/backoff and checkpoint storage expectations.
-- Support EKS scaling through HPA/KEDA for pods and Cluster Autoscaler or Karpenter for node capacity. Use node affinity, taints, and tolerations to keep on-demand and spot workloads separate.
+- Use Lambda for short CDO adapters and policy workers, and host the AIOps-provided AI Engine runtime using the AWS Lambda container platform infrastructure provisioned in modules/ai-runtime-lambda.
+- Configure AI Engine integration through versioned contract inputs: contract version, AI Engine Request Lambda ARN, IAM SigV4 authentication, required tenant/idempotency/correlation headers, timeout, retry policy, circuit-breaker behavior, DynamoDB result-polling behavior, and fail-closed fallback behavior.
+- The default AI Engine execution path is: Step Functions → AI Engine Request Lambda (direct invocation) → SQS detection queue → AI Engine Worker Lambda (event source mapping) → DynamoDB results table / S3 evidence → Step Functions (direct DynamoDB getItem polling).
+- If the AI Engine is unavailable, fails schema validation, times out, returns a cross-tenant result, exceeds rate limits, or returns an unsafe recommendation, fail closed for containment: do not apply automatic containment, alert operators through the static/rule-based fallback path where applicable, preserve run state, and write an audit record.
+- Use CDO as the telemetry source of truth. AI Engine components must not directly pull CDO-owned Cost Explorer, CUR, CloudWatch, Athena, Glue, or containment-state data unless a user explicitly changes the ownership boundary.
+- Implement contract queues, DLQs, rollback queues, idempotency stores, and error-budget/circuit-breaker state in `modules/orchestration` unless the user explicitly approves a new module boundary.
 - Use `prevent_destroy` for state, audit, lakehouse, KMS, and core DynamoDB resources.
-
-## EKS AI Engine Hosting Contract
-
-The current scenario requires CDO to host the AIOps-owned AI Engine on EKS while preserving the model ownership boundary.
-
-`modules/eks` must own infrastructure for:
-
-- EKS control plane in private subnets.
-- Managed on-demand node group for stable API, explainer, monitoring, and core CDO workloads.
-- Managed spot node group for `ai-engine-worker`, batch scoring, feature engineering, and retraining jobs.
-- ECR repositories for AIOps-provided container images, with image scanning enabled.
-- EKS OIDC provider and IRSA role foundations for AI Engine API, worker, and secrets access service accounts.
-- Internal AI Engine service exposure through internal ALB/NLB prerequisites or a private ClusterIP-facing integration path.
-- Secrets Manager access plumbing for External Secrets Operator or Secrets Store CSI driver.
-- CloudWatch Container Insights, EKS control plane logs, node logs, and metrics hooks.
-- Autoscaling prerequisites for HPA/KEDA and Cluster Autoscaler or Karpenter.
-
-Expected inputs include:
-
-- `project_name`
-- `environment`
-- `aws_region`
-- `vpc_id`
-- `private_subnet_ids`
-- `cluster_version`
-- `on_demand_node_group_config`
-- `spot_node_group_config`
-- `ai_engine_namespace`
-- `ai_engine_service_name`
-- `ai_engine_contract_version`
-- `ai_engine_secret_name`
-- `ecr_repository_names`
-- `enable_karpenter`
-- `enable_container_insights`
-- `tags`
-
-Expected outputs include:
-
-- `cluster_name`
-- `cluster_arn`
-- `cluster_endpoint`
-- `cluster_security_group_id`
-- `oidc_provider_arn`
-- `on_demand_node_group_name`
-- `spot_node_group_name`
-- `ecr_repository_urls`
-- `ai_engine_internal_endpoint`
-- `ai_engine_api_irsa_role_arn`
-- `ai_engine_worker_irsa_role_arn`
-- `external_secrets_irsa_role_arn`
-
-Do not create or maintain AI Engine source code, model weights, model configuration internals, Kubernetes Deployment manifests, Helm chart values, or Argo CD `Application` resources in this repo unless the user explicitly changes repository ownership.
 
 ## Read-Only Documentation Sources
 
@@ -288,6 +242,17 @@ These files are reference material for implementation. Agents must read them whe
 - `./docs/tf2-finops/02_infra_design.md`
 - `./docs/tf2-finops/03_security_design.md`
 - `./docs/tf2-finops/04_deployment_design.md`
+- `./docs/tf2-finops/05_cost_analysis.md`
+- `./docs/tf2-finops/06_dashboard_alerting_design.md`
+- `./docs/tf2-finops/07_test_eval_report.md`
+- `./docs/tf2-finops/08_adrs.md`
+- `./docs/tf2-finops/09_demo_and_presentation_pack.md`
+
+### Contract references (`./docs/contracts/`)
+
+- `./docs/contracts/ai-api-contract.md`
+- `./docs/contracts/deployment-contract.md`
+- `./docs/contracts/telemetry-contract.md`
 
 ### External repo references (`../tf2-finops-docs/`)
 
@@ -305,8 +270,52 @@ These files are reference material for implementation. Agents must read them whe
 Never edit or overwrite:
 
 - `./docs/tf2-finops/**`
+- `./docs/contracts/**`
 
 If implementation progress reveals that a design document is stale, record the discrepancy in `docs/progress/` and mention it in the final response. Do not patch the docs repo.
+
+## Contract-Driven Implementation
+
+Agents must use `docs/contracts/` as the behavior contract layer for implementation details that are more specific than the high-level architecture documents.
+
+### Required contract reads
+
+- Read `docs/contracts/ai-api-contract.md` before changing `lambda_src/src/workers/ai_client/**`, `modules/compute-lambda`, `modules/ai-runtime-lambda`, `modules/orchestration`, AI Engine Lambda variables, Step Functions AI states, DynamoDB result-polling states, dashboard actions that poll AI results, or tests for AI integration.
+- Read `docs/contracts/telemetry-contract.md` before changing `lambda_src/src/workers/cost_puller/**`, `lambda_src/src/workers/normalizer/**`, `modules/lakehouse`, Glue/Athena resources, telemetry schemas, cost-data prefixes, S3 pointer behavior, tenant context, idempotency, quality scoring, or tests for ingestion/normalization.
+- Read `docs/contracts/deployment-contract.md` before changing `modules/networking`, `modules/iam`, `modules/ai-runtime-lambda`, `modules/orchestration`, `modules/observability`, queue/DLQ resources, CI deployment gates, canary/rollback controls, or security scans.
+
+### Conflict handling
+
+- `AGENTS.md` and explicit user instructions decide repository ownership and platform target. If a contract names a runtime platform, application gateway, or application delivery flow while this repo is scoped to Terraform platform and workflow integration, implement only the equivalent infrastructure/control requirement without adding application runtime deployment files or changing platform target.
+- The runtime-platform source of truth is `docs/tf2-finops/01_requirements_analysis.md`, `docs/tf2-finops/02_infra_design.md`, `docs/tf2-finops/04_deployment_design.md`, and `docs/tf2-finops/08_adrs.md`. Where these documents supersede stale ECS/ALB/API Gateway transport wording in `docs/contracts/ai-api-contract.md` or `docs/contracts/deployment-contract.md`, agents must follow the updated Lambda container architecture from the architecture documents.
+- ECS Cluster, Fargate/Fargate Spot capacity providers, internal ALB, target groups, HTTPS listeners, Route 53 private DNS, Private API Gateway, EKS, Kubernetes, and Argo CD are **not** part of the current AI hosting platform. Any remaining references to these in `docs/contracts/**` are stale transport wording. Agents must preserve the behavioral contract intent behind that wording — private execution, immutable image references, tenant isolation, SQS buffering, DynamoDB/S3 result storage, result polling, SLO monitoring, and fail-closed behavior — and implement it using the Lambda container architecture.
+- Preserve contract intent even when product names are stale. For example, "private service behind an internal load balancer" maps to private Lambda execution in VPC subnets with VPC endpoints and security groups, not ECS/ALB infrastructure, unless the user explicitly changes ownership.
+- Record stale or conflicting contract wording in the relevant paired progress files and final response. Do not edit `docs/contracts/**` unless the user explicitly asks for contract changes.
+
+### AI API contract requirements
+
+- `ai_client` must call the versioned AI Engine contract. In the Lambda container architecture, Step Functions invokes the AI Engine Request Lambda directly with `/v1/detect` semantics, and polls results directly from DynamoDB via `getItem`. The logical `/v1/detect` submission and `/v1/detect/result/{audit_id}` polling contracts are preserved as Lambda payload and DynamoDB key conventions.
+- AI Engine calls must include required contract context: `Content-Type`, `Accept`, `X-Tenant-Id`, `Authorization` using IAM SigV4, `X-Idempotency-Key`, and `X-Correlation-Id` where applicable.
+- Do not use static API keys or bearer tokens as the long-term authentication design. If placeholder secret material exists for local tests, keep it non-production, non-real, and document it as a stub.
+- Support both `RAW_JSON` and `S3_POINTER` ingestion modes at the CDO/AI boundary when data size requires it. Prefer S3 pointer for large CUR payloads.
+- Handle AI API error codes defensively: invalid schema, idempotency mismatch, auth failure, cross-tenant denial, not found, duplicate in progress, rollback unsupported, rate limiting, model timeout, and service down must not trigger automatic containment.
+- AI timeout, unavailability, invalid schema, unsafe recommendation, low telemetry quality, or forced dry-run must still preserve audit evidence and alert operators through the allowed static/rule-based path.
+
+### Telemetry contract requirements
+
+- CDO pulls and normalizes AWS telemetry from CUR or AWS Data Exports in S3, Cost Explorer, and CloudWatch. AI Engine must consume normalized CDO payloads or S3 pointers, not independently call AWS telemetry APIs.
+- Normalized payloads must carry tenant context, account context, correlation ID, idempotency key, source timestamps, request timestamp, payload hash, schema version, and quality/freshness/integrity fields when those features are implemented.
+- `cost_puller` owns raw telemetry acquisition. `normalizer` owns schema validation, field normalization, S3 raw-to-curated transformation, partition conventions, quality scoring, and Glue/Athena readiness hooks.
+- Preserve untagged spend signals instead of dropping incomplete ownership fields. Missing owner/team/cost-center tags are a Finance escalation signal.
+- If CUR is delayed, CloudWatch is missing, Cost Explorer is stale, data is estimated, or telemetry completeness is below the contract threshold, the workflow must degrade to dry-run/alert-only containment and write audit evidence.
+
+### Deployment, SLO, and telemetry operations
+
+- AI Engine integration infrastructure must use private networking: Lambda functions execute in VPC private subnets with VPC Interface endpoints (SQS, DynamoDB, S3 Gateway, KMS, Secrets Manager, CloudWatch Logs, X-Ray). Observable through CloudWatch Logs, CloudWatch Metrics, and X-Ray tracing.
+- Artifact guidance must prefer immutable references, signed artifacts where available, SBOM/provenance evidence where available, and blocking critical findings unless the user records an accepted capstone exception.
+- If implementing async queues, create a primary detection queue, DLQ, and rollback/status queue under `modules/orchestration`; keep queue retention, visibility timeout, poison-message threshold, and encryption aligned with the deployment contract.
+- Observability must cover the contract SLOs where infrastructure can measure them: AI API availability, 5xx/error rate, timeout count, result-polling failures, workflow failure, stale telemetry over 26h, ingestion freshness, containment/rollback failure, budget circuit breaker state, and error-budget lock state.
+- Deployment gates must include Terraform fmt/validate, TFLint, Trivy, Checkov, Lambda tests, AI contract compatibility checks where available, artifact review, reviewed plan artifacts for apply, and prod environment approval.
 
 ## FinOps Watch Guardrails
 
@@ -316,7 +325,7 @@ All implementation must preserve these hard requirements:
 - Synthetic data unless real billing access is explicitly provided.
 - Default cadence is 24h unless the user changes the approved design.
 - The scenario architecture is lakehouse-centric FinOps control plane with serverless orchestration and AIOps-owned AI Engine integration.
-- CDO owns cost ingestion, normalized cost windows, ownership/tag metadata, scheduling, idempotency, workflow state, dashboard views, alert routing, containment guardrails, audit logs, platform SLOs, and the EKS hosting platform.
+- CDO owns cost ingestion, normalized cost windows, ownership/tag metadata, scheduling, idempotency, workflow state, dashboard views, alert routing, containment guardrails, audit logs, platform SLOs, and AI Engine integration platform hooks.
 - AIOps owns anomaly detection logic, model selection, training/retraining design, model versioning, confidence scoring, classification, explanation text, AI Engine code/model internals, and backtest metrics.
 - Finance and Engineering alert routing must remain separate.
 - Dashboard infrastructure must support finance-readable views and must not require Finance users to know SQL.
@@ -325,6 +334,9 @@ All implementation must preserve these hard requirements:
 - Audit records must capture actor, timestamp, correlation ID, idempotency key, anomaly ID, target owner, before state, proposed or applied after state, execution mode, rollback path, approval status, retention location, and retention period.
 - Audit retention must be at least 90 days.
 - Automated containment must **NEVER terminate prod, delete data, or modify IAM**.
+- Every AI request and telemetry payload must preserve tenant isolation, account context, idempotency, correlation ID, and contract/schema version.
+- Telemetry quality failures, stale Cost Explorer data, delayed CUR data, missing CloudWatch metrics, estimated billing data, and low completeness scores must force dry-run or alert-only containment.
+- SLO and circuit-breaker state must be observable. Budget guardrails, AI error rate, timeout rate, and containment error-budget locks must never silently fail open.
 
 ## Required Implementation Order
 
@@ -335,10 +347,10 @@ Use this order unless the user asks for a smaller scoped change:
 3. `lambda_src/` worker stubs and tests.
 4. `modules/networking`.
 5. `modules/lakehouse`.
-6. Base `modules/iam` roles and policies needed by networking, lakehouse, Lambda, and EKS.
-7. `modules/eks` AI Engine hosting platform: cluster, on-demand and spot node groups, ECR, IRSA, internal exposure prerequisites, secrets plumbing, scaling hooks, and Container Insights.
-8. `modules/compute-lambda`.
-9. `modules/orchestration`, including AI Engine endpoint/contract wiring and fail-closed behavior.
+6. Base `modules/iam` roles and policies needed by networking, lakehouse, Lambda, and orchestration.
+7. `modules/compute-lambda`.
+8. `modules/ai-runtime-lambda` (ECR repository, AI Engine Request Lambda, AI Engine Worker Lambda, Lambda aliases/versions, reserved concurrency, SQS event source mapping, KMS-encrypted log groups, X-Ray).
+9. `modules/orchestration`, including SQS detection queue/DLQ/rollback-status queue, DynamoDB run-state/error-budget/idempotency/ai-results tables, Step Functions state machine wiring with direct Lambda invocation and direct DynamoDB result polling, telemetry quality branching, circuit-breaker state, and fail-closed behavior.
 10. `modules/alerting`, `modules/observability`, and `modules/dashboard`.
 11. `environments/sandbox`, `environments/staging`, and `environments/prod`.
 12. GitHub Actions workflows.
@@ -368,8 +380,6 @@ docs/progress/networking_progress.md
 docs/progress/networking_progress_vi.md
 docs/progress/lakehouse_progress.md
 docs/progress/lakehouse_progress_vi.md
-docs/progress/eks_hosting_progress.md
-docs/progress/eks_hosting_progress_vi.md
 docs/progress/orchestration_progress.md
 docs/progress/orchestration_progress_vi.md
 ```
@@ -421,7 +431,7 @@ Progress files must be factual. Do not claim a module is complete until validati
 Agents must keep `docs/GUIDES.md` and `docs/GUIDES_vi.md` current whenever they add or change a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure.
 
 - Update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a new working flow is added or an existing flow changes.
-- A "working flow" includes bootstrap, backend migration, Lambda packaging/testing, Terraform init/validate/plan/apply, environment deployment, drift detection, security scans, CI jobs, Makefile/script usage, EKS infrastructure handoff, and any new required manual operator step.
+- A "working flow" includes bootstrap, backend migration, Lambda packaging/testing, Terraform init/validate/plan/apply, environment deployment, drift detection, security scans, CI jobs, Makefile/script usage, AI Engine integration handoff, and any new required manual operator step.
 - Do not update guides for purely internal implementation changes that do not change commands, order of operations, prerequisites, or operator/developer behavior.
 - If no guide update is needed, the final response must explicitly say `No guide impact` with a short explanation.
 - Keep `docs/GUIDES.md` and `docs/GUIDES_vi.md` factually equivalent, with the same section order and command blocks. Translate prose in Vietnamese, but keep technical names, commands, file paths, and AWS service names in English.
@@ -449,37 +459,50 @@ Push-Location lambda_src; python -m pytest; Pop-Location
 
 If a command cannot run because its target files are not created yet, record that in the relevant progress file and final response.
 
-When EKS or AI Engine hosting infrastructure is touched, also run the narrowest available checks for the changed surface:
+When AI Engine contract integration infrastructure is touched, also run the narrowest available checks for the changed surface:
 
 ```powershell
-terraform fmt -check -recursive modules/eks
+terraform fmt -check -recursive modules/ai-runtime-lambda modules/compute-lambda modules/orchestration modules/iam modules/networking
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
-trivy config modules/eks
-checkov -d modules/eks --framework terraform
+trivy config .
+checkov -d modules/ai-runtime-lambda modules/orchestration --framework terraform
 ```
 
-If Kubernetes manifests or Helm charts are present because the user explicitly expanded this repo's ownership, validate them with `helm lint`, schema checks, and policy scans. Otherwise, keep workload manifest validation in `tf2-finops-gitops`.
+Lambda container-specific checks to verify:
+
+- ECR image references use digest-pinning (no mutable `:latest` tags in production).
+- ECR scan-on-push is enabled.
+- Lambda functions use aliases ("live") for stable invocation targets.
+- Reserved concurrency is configured; optional provisioned concurrency for latency-sensitive paths.
+- SQS event source mapping has `maximum_concurrency` scaling config.
+- CloudWatch log groups are KMS-encrypted.
+- X-Ray active tracing is enabled.
+- Lambda functions run in VPC private subnets with no public endpoint.
+- No secret values are stored in Terraform state, variable defaults, or Lambda environment variables.
 
 ## Security Rules
 
 - Do not commit AWS access keys, secret values, API keys, real webhook URLs, private certificates, state files, plan files, or plan JSON.
 - Do not put secret values in variable defaults, examples, workflow files, logs, or progress docs.
 - Do not output full secret ARNs plus secret values together.
+- Do not use static API keys as the production authentication pattern for CDO-to-AI Engine calls. Use IAM SigV4 and scoped IAM roles for inter-service authentication.
+- Do not log AI request payloads, authorization headers, SigV4 material, tenant-sensitive telemetry, secret references paired with values, or raw CUR rows that could contain sensitive account metadata.
 - Do not create IAM policies with wildcard administrative permissions.
 - Do not create wildcard trust policies.
 - Do not create public S3 buckets.
 - Encrypt S3, DynamoDB, SNS, CloudWatch log destinations where supported, and Terraform state.
 - Enforce TLS-only S3 bucket policies.
+- Keep Lambda functions in VPC private subnets. Do not attach public IPs or create public-facing Lambda function URLs for AI Engine Lambdas.
 - Use separate security group rule resources instead of inline ingress or egress blocks.
 - Keep prod apply behind GitHub environment approval.
-- Keep EKS control plane and AI Engine runtime access private; do not expose the AI Engine through a public internet endpoint.
-- Use IRSA for pod-level AWS access. Do not let AI Engine pods rely on broad node-instance permissions.
-- Encrypt EKS node EBS volumes and enable control plane audit/API/authenticator logs where supported.
-- Use separate security group rule resources for EKS cluster, node group, Lambda, VPC endpoint, and internal load balancer traffic.
-- Do not grant AI Engine API or worker pods permissions to terminate prod resources, delete data, modify IAM, or bypass containment policy.
-- Store AI Engine auth material and external webhooks in Secrets Manager. Mount or sync them to EKS workloads through External Secrets Operator or Secrets Store CSI driver only when runtime ownership is explicitly in scope.
-- Enable ECR scan on push for AIOps-provided images and block deployment guidance on critical image findings unless the user documents an accepted capstone exception.
+- Keep AI Engine execution private; do not expose the AI Engine Request or Worker Lambdas through public internet endpoints, public Lambda function URLs, or public API Gateways from this repo.
+- Use separate security group rule resources for Lambda, VPC endpoint, and SQS/DynamoDB/S3 VPC endpoint traffic.
+- Do not grant AI Engine integration roles or CDO workers permissions to terminate prod resources, delete data, modify IAM, or bypass containment policy.
+- Store AI Engine auth material and external webhooks in Secrets Manager. Do not commit secret values or sync runtime secrets from this repo.
+- Prefer immutable artifact references for handoff/deployment references. Use ECR image digest pinning for production AI Engine Lambda deployments. Do not recommend mutable `:latest` or floating tags for production image references.
+- If SBOM, signing, or provenance artifacts are introduced, keep them as deployment evidence and do not embed secret signing material in Terraform, workflows, or docs.
+- Do not grant AI Engine Lambda execution roles or SQS event source mappings permissions beyond the scoped DynamoDB tables, S3 evidence/curated paths, SQS queues, KMS keys, Secrets Manager secrets, and CloudWatch/X-Ray destinations required by the contract.
 
 ## Final Response Expectations
 
@@ -491,7 +514,10 @@ When finishing work in this repo, the agent must report:
 - Any commands that could not run and why.
 - Progress files updated in English and Vietnamese.
 - `docs/GUIDES.md` and `docs/GUIDES_vi.md` updated, or `No guide impact` with a short reason.
+- Which `docs/contracts/**` files were read and which contract requirements were implemented or intentionally left out of scope.
+- Any contract coverage gaps for AI API behavior, telemetry quality, SLO observability, queues/DLQs, deployment gates, or security controls.
+- Any stale runtime-platform, application-deployment, or application-rollout wording found in `docs/contracts/**` or `docs/tf2-finops/**` compared with the current Terraform platform/integration boundary.
 - Any discovered mismatch between implementation and read-only docs.
-- Any stale guidance found in `README.md`, `IMPLEMENTATION.md`, or in-repo `./docs/tf2-finops/**` compared with the current `../tf2-finops-docs` EKS scenario.
+- Any stale guidance found in `README.md`, `IMPLEMENTATION.md`, or in-repo `./docs/tf2-finops/**` compared with the current Terraform platform/integration boundary.
 
 Do not claim success for unvalidated infrastructure. Use precise status such as "created", "validated", "planned", or "blocked".

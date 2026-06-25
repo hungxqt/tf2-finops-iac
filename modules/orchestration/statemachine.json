@@ -1,0 +1,1280 @@
+{
+  "Comment": "TF2 FinOps Watch CDO daily workflow",
+  "StartAt": "PrepareRunContext",
+  "States": {
+    "PrepareRunContext": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "prepare",
+        "account_id.$": "$.account_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version": "${ai_engine_contract_version}",
+        "ai_retry_max": "${ai_poll_max_attempts}",
+        "ai_poll_interval": "${ai_poll_interval_seconds}"
+      },
+      "ResultPath": "$",
+      "Next": "LoadAccountPolicy",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "LoadAccountPolicy": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "${account_policy_table_name}",
+        "Key": {
+          "account_id": {
+            "S.$": "$.account_id"
+          }
+        }
+      },
+      "ResultSelector": {
+        "account_id.$": "$.Item.account_id.S",
+        "environment.$": "$.Item.environment.S"
+      },
+      "ResultPath": "$.account_policy",
+      "Next": "OverwriteEnvironment",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.SdkClientException",
+            "DynamoDb.AmazonDynamoDBException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "OverwriteEnvironment": {
+      "Type": "Pass",
+      "InputPath": "$.account_policy.environment",
+      "ResultPath": "$.environment",
+      "Next": "CheckRunState"
+    },
+    "CheckRunState": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "check",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
+      "ResultPath": "$.state",
+      "Next": "DuplicateRun",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "DuplicateRun": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.state.status",
+          "StringEquals": "COMPLETED",
+          "Next": "DuplicateIgnored"
+        },
+        {
+          "Variable": "$.state.status",
+          "StringEquals": "IN_PROGRESS",
+          "Next": "DuplicateIgnored"
+        }
+      ],
+      "Default": "CheckAdHocQuotaDecision"
+    },
+    "CheckAdHocQuotaDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.is_ad_hoc",
+          "BooleanEquals": true,
+          "Next": "CheckAdHocQuota"
+        }
+      ],
+      "Default": "CheckErrorBudgetLock"
+    },
+    "CheckAdHocQuota": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "check_quota",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "tenant_id.$": "$.tenant_id"
+      },
+      "ResultPath": "$.quota_check",
+      "Next": "EvaluateAdHocQuota",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "EvaluateAdHocQuota": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.quota_check.status",
+          "StringEquals": "QUOTA_EXCEEDED",
+          "Next": "SetQuotaExceededError"
+        }
+      ],
+      "Default": "CheckErrorBudgetLock"
+    },
+    "SetQuotaExceededError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AdHocQuotaExceeded",
+        "Cause": "Tenant ad hoc run quota limit of 5 runs per day exceeded."
+      },
+      "ResultPath": "$.error",
+      "Next": "MarkRunFailed"
+    },
+    "CheckErrorBudgetLock": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "check_error_budget",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "force_dry_run.$": "$.force_dry_run"
+      },
+      "ResultPath": "$.error_budget_check",
+      "Next": "EvaluateErrorBudgetLock",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "EvaluateErrorBudgetLock": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "cur_retry.$": "$.cur_retry",
+        "ai_retry.$": "$.ai_retry",
+        "retry_after_seconds.$": "$.retry_after_seconds",
+        "account_policy.$": "$.account_policy",
+        "environment.$": "$.environment",
+        "state.$": "$.state",
+        "force_dry_run.$": "$.error_budget_check.force_dry_run",
+        "error_budget_locked.$": "$.error_budget_check.locked"
+      },
+      "ResultPath": "$",
+      "Next": "IngestCostData"
+    },
+    "IngestCostData": {
+      "Type": "Task",
+      "Resource": "${cost_puller_lambda_arn}",
+      "ResultPath": "$.ingestion",
+      "Next": "IngestionReady",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "IngestionReady": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ingestion.status",
+          "StringEquals": "CUR_DELAY",
+          "Next": "IncrementCURRetry"
+        },
+        {
+          "Variable": "$.ingestion.status",
+          "StringEquals": "CE_THROTTLED",
+          "Next": "WaitForCostExplorer"
+        },
+        {
+          "Variable": "$.ingestion.status",
+          "StringEquals": "READY",
+          "Next": "NormalizeCostWindow"
+        }
+      ],
+      "Default": "SetDefaultIngestionError"
+    },
+    "IncrementCURRetry": {
+      "Type": "Pass",
+      "Parameters": {
+        "count.$": "States.MathAdd($.cur_retry.count, 1)",
+        "max.$": "$.cur_retry.max"
+      },
+      "ResultPath": "$.cur_retry",
+      "Next": "CURRetryExceeded"
+    },
+    "CURRetryExceeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cur_retry.count",
+          "NumericGreaterThanEquals": 4,
+          "Next": "SetCURDelayExceededError"
+        }
+      ],
+      "Default": "WaitForCURExport"
+    },
+    "SetCURDelayExceededError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "CURDelayExceeded",
+        "Cause": "Billing reports (CUR) export delayed beyond 4 hours."
+      },
+      "ResultPath": "$.error",
+      "Next": "SendCURDelayAlert"
+    },
+    "SendCURDelayAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${engineering_alerts_sns_topic_arn}",
+        "Subject": "FinOps Watch CUR Export Delay Alert",
+        "Message.$": "States.Format('CUR billing export delayed beyond 4 hours for Run ID: {}', $.run_id)"
+      },
+      "ResultPath": "$.cur_delay_alert_result",
+      "Next": "WriteCURDelayAudit"
+    },
+    "WriteCURDelayAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "tenant_id.$": "$.tenant_id",
+        "action": "fail-closed-cur-delay",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.cur_delay_audit_result",
+      "Next": "MarkRunFailed"
+    },
+    "SetDefaultIngestionError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "IngestionFailed",
+        "Cause": "Cost ingestion returned an unexpected state or failed."
+      },
+      "ResultPath": "$.error",
+      "Next": "MarkRunFailed"
+    },
+    "WaitForCURExport": {
+      "Type": "Wait",
+      "Seconds": 3600,
+      "Next": "IngestCostData"
+    },
+    "WaitForCostExplorer": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "IngestCostData"
+    },
+    "NormalizeCostWindow": {
+      "Type": "Task",
+      "Resource": "${normalizer_lambda_arn}",
+      "ResultPath": "$.normalized",
+      "Next": "CheckTelemetryQuality",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "CheckTelemetryQuality": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.normalized.details.completeness_score",
+              "NumericLessThan": 0.8
+            },
+            {
+              "Variable": "$.normalized.details.delayed_cur",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.stale_cost_explorer",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.missing_cloudwatch",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.normalized.details.estimated_billing",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "SetTelemetryForceDryRun"
+        }
+      ],
+      "Default": "SubmitAIRequest"
+    },
+    "SetTelemetryForceDryRun": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "cur_retry.$": "$.cur_retry",
+        "ai_retry.$": "$.ai_retry",
+        "retry_after_seconds.$": "$.retry_after_seconds",
+        "account_policy.$": "$.account_policy",
+        "environment.$": "$.environment",
+        "state.$": "$.state",
+        "error_budget_locked.$": "$.error_budget_locked",
+        "ingestion.$": "$.ingestion",
+        "normalized.$": "$.normalized",
+        "force_dry_run": true
+      },
+      "ResultPath": "$",
+      "Next": "SubmitAIRequest"
+    },
+    "SubmitAIRequest": {
+      "Type": "Task",
+      "Resource": "${ai_request_lambda_arn}",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "force_dry_run.$": "$.force_dry_run",
+        "state.$": "$.state",
+        "account_policy.$": "$.account_policy",
+        "ingestion.$": "$.ingestion",
+        "normalized.$": "$.normalized"
+      },
+      "ResultPath": "$.ai",
+      "Next": "AIRequestDecision",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "FailClosed"
+        }
+      ]
+    },
+    "AIRequestDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "ACCEPTED",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "PROCESSING",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "COMPLETED",
+          "Next": "ValidateAIResult"
+        }
+      ],
+      "Default": "FailClosed"
+    },
+    "WaitForAIResult": {
+      "Type": "Wait",
+      "SecondsPath": "$.ai.retry_after_seconds",
+      "Next": "IncrementAIPollRetry"
+    },
+    "IncrementAIPollRetry": {
+      "Type": "Pass",
+      "Parameters": {
+        "count.$": "States.MathAdd($.ai_retry.count, 1)",
+        "max.$": "$.ai_retry.max"
+      },
+      "ResultPath": "$.ai_retry",
+      "Next": "CheckAIPollRetryExceeded"
+    },
+    "CheckAIPollRetryExceeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai_retry.count",
+          "NumericGreaterThanEquals": 6,
+          "Next": "SetAIPollTimeoutError"
+        }
+      ],
+      "Default": "PollAIResult"
+    },
+    "SetAIPollTimeoutError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AIPollTimeout",
+        "Cause": "AI Engine detection polling exceeded maximum attempts."
+      },
+      "ResultPath": "$.error",
+      "Next": "FailClosed"
+    },
+    "PollAIResult": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "${results_table_name}",
+        "Key": {
+          "audit_id": {
+            "S.$": "$.ai.audit_id"
+          }
+        }
+      },
+      "ResultPath": "$.ai_db_result",
+      "Next": "CheckDBResultExists",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.SdkClientException",
+            "DynamoDb.AmazonDynamoDBException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "FailClosed"
+        }
+      ]
+    },
+    "CheckDBResultExists": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai_db_result.Item",
+          "IsPresent": true,
+          "Next": "FormatAIResult"
+        }
+      ],
+      "Default": "SetDBResultProcessing"
+    },
+    "FormatAIResult": {
+      "Type": "Pass",
+      "Parameters": {
+        "audit_id.$": "$.ai.audit_id",
+        "status.$": "$.ai_db_result.Item.status.S",
+        "retry_after_seconds.$": "$.ai.retry_after_seconds",
+        "anomaly_found.$": "$.ai_db_result.Item.anomaly_found.BOOL",
+        "required_fields_valid.$": "$.ai_db_result.Item.required_fields_valid.BOOL",
+        "recommended_containment_mode.$": "$.ai_db_result.Item.recommended_containment_mode.S",
+        "raw_result.$": "$.ai_db_result.Item.raw_result.S"
+      },
+      "ResultPath": "$.ai",
+      "Next": "AIResultDecision"
+    },
+    "SetDBResultProcessing": {
+      "Type": "Pass",
+      "Parameters": {
+        "audit_id.$": "$.ai.audit_id",
+        "status": "PROCESSING",
+        "retry_after_seconds.$": "$.ai.retry_after_seconds"
+      },
+      "ResultPath": "$.ai",
+      "Next": "AIResultDecision"
+    },
+    "AIResultDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "COMPLETED",
+          "Next": "ValidateAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "PROCESSING",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "ACCEPTED",
+          "Next": "WaitForAIResult"
+        },
+        {
+          "Variable": "$.ai.status",
+          "StringEquals": "RATE_LIMITED",
+          "Next": "WaitForAIResult"
+        }
+      ],
+      "Default": "FailClosed"
+    },
+    "ValidateAIResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ai.required_fields_valid",
+          "BooleanEquals": false,
+          "Next": "FailClosed"
+        },
+        {
+          "Variable": "$.ai.anomaly_found",
+          "BooleanEquals": true,
+          "Next": "RouteAlert"
+        }
+      ],
+      "Default": "MarkRunComplete"
+    },
+    "RouteAlert": {
+      "Type": "Task",
+      "Resource": "${router_lambda_arn}",
+      "ResultPath": "$.alert",
+      "Next": "FinanceAlertRequired",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "FinanceAlertRequired": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.alert.details.finance_route.deliver",
+          "BooleanEquals": true,
+          "Next": "SendFinanceAlert"
+        }
+      ],
+      "Default": "EngineeringAlertRequired"
+    },
+    "SendFinanceAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${finance_alerts_sns_topic_arn}",
+        "Subject.$": "$.alert.details.finance_route.subject",
+        "Message.$": "$.alert.details.finance_route.message"
+      },
+      "ResultPath": "$.finance_alert_result",
+      "Next": "EngineeringAlertRequired",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.alert_error",
+          "Next": "WriteAlertDeliveryFailureAudit"
+        }
+      ]
+    },
+    "EngineeringAlertRequired": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.alert.details.engineering_route.deliver",
+          "BooleanEquals": true,
+          "Next": "SendEngineeringAlert"
+        }
+      ],
+      "Default": "EvaluateContainmentPolicy"
+    },
+    "SendEngineeringAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${engineering_alerts_sns_topic_arn}",
+        "Subject.$": "$.alert.details.engineering_route.subject",
+        "Message.$": "$.alert.details.engineering_route.message"
+      },
+      "ResultPath": "$.engineering_alert_result",
+      "Next": "EvaluateContainmentPolicy",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.alert_error",
+          "Next": "WriteAlertDeliveryFailureAudit"
+        }
+      ]
+    },
+    "WriteAlertDeliveryFailureAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.alert_failure_audit",
+      "Next": "MarkRunFailed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "EvaluateContainmentPolicy": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.account_policy.environment",
+              "StringEquals": "prod"
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "terminate"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "delete"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "modify_iam"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "apply"
+                }
+              ]
+            }
+          ],
+          "Next": "WriteDeniedAudit"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.force_dry_run",
+              "BooleanEquals": true
+            },
+            {
+              "Not": {
+                "Or": [
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "dry-run"
+                  },
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "tag"
+                  },
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "suggest"
+                  }
+                ]
+              }
+            }
+          ],
+          "Next": "WriteDeniedAudit"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.account_policy.environment",
+              "StringEquals": "prod"
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "tag"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "suggest"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "dry-run"
+                }
+              ]
+            }
+          ],
+          "Next": "WritePreActionAudit"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.account_policy.environment",
+              "StringEquals": "sandbox"
+            },
+            {
+              "Variable": "$.approval_status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.approval_status",
+              "StringEquals": "approved"
+            }
+          ],
+          "Next": "WritePreActionAudit"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.account_policy.environment",
+              "StringEquals": "sandbox"
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "tag"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "suggest"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "dry-run"
+                }
+              ]
+            }
+          ],
+          "Next": "WritePreActionAudit"
+        }
+      ],
+      "Default": "WritePendingApprovalAudit"
+    },
+    "WritePreActionAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.pre_audit",
+      "Next": "ExecuteContainment",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "ExecuteContainment": {
+      "Type": "Task",
+      "Resource": "${containment_worker_lambda_arn}",
+      "ResultPath": "$.containment",
+      "Next": "WritePostActionAudit",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.containment_error",
+          "Next": "WriteContainmentFailureAudit"
+        }
+      ]
+    },
+    "WritePostActionAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.post_audit",
+      "Next": "SendAppliedStatusMessage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendAppliedStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${rollback_status_queue_url}",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "APPLIED",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_applied_result",
+      "Next": "MarkRunComplete"
+    },
+    "WriteDeniedAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.denied_audit",
+      "Next": "SendDeniedStatusMessage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendDeniedStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${rollback_status_queue_url}",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "DENIED",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_denied_result",
+      "Next": "MarkRunComplete"
+    },
+    "WritePendingApprovalAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.pending_audit",
+      "Next": "SendPendingStatusMessage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendPendingStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${rollback_status_queue_url}",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "PENDING",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_pending_result",
+      "Next": "MarkRunComplete"
+    },
+    "FailClosed": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "tenant_id.$": "$.tenant_id",
+        "action": "fail-closed",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.failure_audit",
+      "Next": "SendFailClosedAlert",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendFailClosedAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${engineering_alerts_sns_topic_arn}",
+        "Subject": "FinOps Watch Fail-Closed Alert",
+        "Message.$": "States.Format('CDO daily workflow failed closed. Run ID: {}, Error: {}, Cause: {}', $.run_id, $.error.Error, $.error.Cause)"
+      },
+      "ResultPath": "$.fail_closed_alert_result",
+      "Next": "MarkRunFailed"
+    },
+    "WriteContainmentFailureAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "ResultPath": "$.containment_failure_audit",
+      "Next": "MarkRunFailed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "MarkRunComplete": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "complete",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
+      "ResultPath": "$.completion",
+      "Next": "RunCompleted",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "MarkRunFailed": {
+      "Type": "Task",
+      "Resource": "${state_lambda_arn}",
+      "Parameters": {
+        "operation": "failed",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date"
+      },
+      "ResultPath": "$.completion",
+      "Next": "RunFailed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure_error",
+          "Next": "RunFailed"
+        }
+      ]
+    },
+    "RunCompleted": {
+      "Type": "Succeed"
+    },
+    "DuplicateIgnored": {
+      "Type": "Succeed"
+    },
+    "RunFailed": {
+      "Type": "Fail",
+      "Error": "FinOpsWorkflowFailed",
+      "Cause": "Workflow failed or failed closed."
+    }
+  }
+}

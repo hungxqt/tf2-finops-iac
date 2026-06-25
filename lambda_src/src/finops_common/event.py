@@ -81,6 +81,14 @@ class Response:
     audit_id: Optional[str] = None
     audit_uri: Optional[str] = None
     route_target: Optional[str] = None
+    tenant_id: Optional[str] = None
+    is_ad_hoc: Optional[bool] = None
+    operation: Optional[str] = None
+    payload_sha256: Optional[str] = None
+    request_timestamp: Optional[str] = None
+    telemetry_quality: Optional[float] = None
+    retry_after_seconds: Optional[int] = None
+    force_dry_run: Optional[bool] = None
     details: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @classmethod
@@ -105,6 +113,14 @@ class Response:
             audit_id=d.get("audit_id"),
             audit_uri=d.get("audit_uri"),
             route_target=d.get("route_target"),
+            tenant_id=d.get("tenant_id"),
+            is_ad_hoc=d.get("is_ad_hoc"),
+            operation=d.get("operation"),
+            payload_sha256=d.get("payload_sha256"),
+            request_timestamp=d.get("request_timestamp"),
+            telemetry_quality=d.get("telemetry_quality"),
+            retry_after_seconds=d.get("retry_after_seconds"),
+            force_dry_run=d.get("force_dry_run"),
             details=d.get("details", {})
         )
 
@@ -142,6 +158,22 @@ class Response:
             d["audit_uri"] = self.audit_uri
         if self.route_target is not None:
             d["route_target"] = self.route_target
+        if self.tenant_id is not None:
+            d["tenant_id"] = self.tenant_id
+        if self.is_ad_hoc is not None:
+            d["is_ad_hoc"] = self.is_ad_hoc
+        if self.operation is not None:
+            d["operation"] = self.operation
+        if self.payload_sha256 is not None:
+            d["payload_sha256"] = self.payload_sha256
+        if self.request_timestamp is not None:
+            d["request_timestamp"] = self.request_timestamp
+        if self.telemetry_quality is not None:
+            d["telemetry_quality"] = self.telemetry_quality
+        if self.retry_after_seconds is not None:
+            d["retry_after_seconds"] = self.retry_after_seconds
+        if self.force_dry_run is not None:
+            d["force_dry_run"] = self.force_dry_run
         return d
 
 @dataclasses.dataclass
@@ -157,6 +189,15 @@ class Event:
     ai_contract_version: str = ""
     approval_status: str = ""
     action: str = ""
+    tenant_id: str = ""
+    is_ad_hoc: bool = False
+    operation: str = ""
+    payload_sha256: str = ""
+    request_timestamp: str = ""
+    telemetry_quality: float = 0.0
+    retry_after_seconds: int = 0
+    audit_id: str = ""
+    force_dry_run: bool = False
 
     cur_retry: Optional[CURRetryInfo] = None
     account_policy: Optional[AccountPolicy] = None
@@ -185,6 +226,15 @@ class Event:
             ai_contract_version=d.get("ai_contract_version", ""),
             approval_status=d.get("approval_status", ""),
             action=d.get("action", ""),
+            tenant_id=d.get("tenant_id", ""),
+            is_ad_hoc=d.get("is_ad_hoc", False),
+            operation=d.get("operation", ""),
+            payload_sha256=d.get("payload_sha256", ""),
+            request_timestamp=d.get("request_timestamp", ""),
+            telemetry_quality=d.get("telemetry_quality", 0.0),
+            retry_after_seconds=d.get("retry_after_seconds", 0),
+            audit_id=d.get("audit_id", ""),
+            force_dry_run=d.get("force_dry_run", False),
             cur_retry=CURRetryInfo.from_dict(d.get("cur_retry")),
             account_policy=AccountPolicy.from_dict(d.get("account_policy")),
             state=Response.from_dict(d.get("state")),
@@ -211,6 +261,15 @@ class Event:
             "ai_contract_version": self.ai_contract_version,
             "approval_status": self.approval_status,
             "action": self.action,
+            "tenant_id": self.tenant_id,
+            "is_ad_hoc": self.is_ad_hoc,
+            "operation": self.operation,
+            "payload_sha256": self.payload_sha256,
+            "request_timestamp": self.request_timestamp,
+            "telemetry_quality": self.telemetry_quality,
+            "retry_after_seconds": self.retry_after_seconds,
+            "audit_id": self.audit_id,
+            "force_dry_run": self.force_dry_run,
         }
         if self.cur_retry is not None:
             d["cur_retry"] = self.cur_retry.to_dict()

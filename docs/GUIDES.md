@@ -94,11 +94,18 @@ Once applied, fetch the Outputs to feed the Application Layer (`tf2-finops-gitop
 terraform output
 ```
 
-The outputs supply critical connection endpoints:
-* `cluster_name`: Kubernetes EKS cluster name.
-* `ecr_repository_urls`: Repository endpoints for target workload images.
+* `request_lambda_function_name`: AI Engine Request Lambda function name.
+* `worker_lambda_function_name`: AI Engine Worker Lambda function name.
+* `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
-* `dynamodb_table_names`: Ingestion, state, and audit table mappings.
+* `dynamodb_table_names`: Ingestion, state, results, and audit table mappings.
+
+### Step 3.1: Dashboard Deployment & Asset Handoff
+Once the Terraform plan is applied, the dashboard infrastructure is ready. The handoff process follows these rules:
+1. **Terraform Roles**: Terraform only provisions the underlying AWS assets (S3 buckets, CloudFront distribution, Cognito Identity & User Pools, Athena named queries, and IAM data access role).
+2. **Asset Upload**: Static frontend assets (the UI app) must be uploaded separately to the static asset S3 bucket (configured in the output `dashboard_asset_bucket_name`).
+3. **Cognito Administration**: Real Cognito users, groups, and passwords must be administered directly in the AWS Console or via Cognito API/CLI outside of Terraform.
+4. **Data Generation**: Cost-data writers/summarizers (e.g., Lambda functions or batch jobs) must publish JSON summaries to the configured prefix (e.g., `summaries/`) inside the dashboard data S3 bucket (configured in the output `dashboard_data_bucket_name`).
 
 ---
 
@@ -115,8 +122,8 @@ terraform -chdir=environments/staging validate
 terraform -chdir=environments/prod validate
 
 # Verify static security analysis
-trivy config modules/eks
-checkov -d modules/eks --framework terraform
+trivy config .
+checkov -d modules/orchestration --framework terraform
 ```
 
 ---

@@ -29,15 +29,6 @@ class RealDynamoDB(DynamoDBClient):
         self.client = client or boto3.client("dynamodb")
 
     def get_item(self, table_name: str, key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # key format in boto3 DynamoDB is structured: {'key': {'S': 'value'}}
-        # To make it simple and unified like our Go client, let's accept and return standard python dicts,
-        # but wait, boto3 has a high level 'resource' Table or we can serialize/deserialize using boto3.dynamodb.types.
-        # Let's check how our Go client did it: it converted attributes to maps.
-        # In Python, we can do serialization/deserialization or use the boto3 DynamoDB resource Table which takes normal Python types.
-        # Wait, does boto3 resource accept normal python types? Yes! The boto3 resource Table automatically handles normal dicts!
-        # Let's implement RealDynamoDB using the high-level resource so we don't have to deal with attribute values like {'S': ...}!
-        # But wait, does it matter? Yes, boto3.resource("dynamodb").Table(table_name) is much easier.
-        # Let's use the standard boto3.resource("dynamodb").Table(table_name).
         db = boto3.resource("dynamodb")
         table = db.Table(table_name)
         response = table.get_item(Key=key)

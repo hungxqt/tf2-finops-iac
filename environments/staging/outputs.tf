@@ -62,3 +62,125 @@ output "dashboard_name" {
   description = "The name of the CloudWatch dashboard"
   value       = module.observability.dashboard_name
 }
+
+output "dashboard_url" {
+  description = "The URL of the CloudFront dashboard distribution"
+  value       = module.dashboard.dashboard_url
+}
+
+output "dashboard_asset_bucket_name" {
+  description = "The name of the static asset S3 bucket"
+  value       = module.dashboard.asset_bucket_name
+}
+
+output "dashboard_data_bucket_name" {
+  description = "The name of the dashboard data S3 bucket"
+  value       = module.dashboard.data_bucket_name
+}
+
+output "dashboard_data_prefix" {
+  description = "The S3 folder prefix where precomputed dashboard JSON summaries are stored"
+  value       = module.dashboard.data_prefix
+}
+
+output "dashboard_cloudfront_distribution_id" {
+  description = "The ID of the CloudFront distribution"
+  value       = module.dashboard.cloudfront_distribution_id
+}
+
+output "dashboard_cognito_user_pool_id" {
+  description = "The Cognito User Pool ID"
+  value       = module.dashboard.cognito_user_pool_id
+}
+
+output "dashboard_cognito_user_pool_client_id" {
+  description = "The Cognito User Pool Client ID"
+  value       = module.dashboard.cognito_user_pool_client_id
+}
+
+output "dashboard_cognito_identity_pool_id" {
+  description = "The Cognito Identity Pool ID"
+  value       = module.dashboard.cognito_identity_pool_id
+}
+
+output "dashboard_athena_named_query_ids" {
+  description = "Map of Athena named query names to their IDs"
+  value       = module.dashboard.athena_named_query_ids
+}
+
+output "ecr_repository_url" {
+  description = "The ECR repository URL"
+  value       = module.ai_runtime_lambda.ecr_repository_url
+}
+
+output "request_lambda_function_name" {
+  description = "The name of the AI Request Lambda function"
+  value       = module.ai_runtime_lambda.request_lambda_function_name
+}
+
+output "request_lambda_alias_arn" {
+  description = "The ARN of the AI Request Lambda live alias"
+  value       = module.ai_runtime_lambda.request_lambda_alias_arn
+}
+
+output "worker_lambda_function_name" {
+  description = "The name of the AI Worker Lambda function"
+  value       = module.ai_runtime_lambda.worker_lambda_function_name
+}
+
+output "worker_lambda_alias_arn" {
+  description = "The ARN of the AI Worker Lambda live alias"
+  value       = module.ai_runtime_lambda.worker_lambda_alias_arn
+}
+
+output "request_execution_role_arn" {
+  description = "The ARN of the AI Request Lambda execution role"
+  value       = module.ai_runtime_lambda.request_execution_role_arn
+}
+
+output "worker_execution_role_arn" {
+  description = "The ARN of the AI Worker Lambda execution role"
+  value       = module.ai_runtime_lambda.worker_execution_role_arn
+}
+
+output "worker_event_source_mapping_uuid" {
+  description = "The UUID of the SQS worker event source mapping"
+  value       = module.ai_runtime_lambda.worker_event_source_mapping_uuid
+}
+
+output "ai_runtime_log_group_names" {
+  description = "List of CloudWatch log group names created by the runtime"
+  value       = module.ai_runtime_lambda.ai_runtime_log_group_names
+}
+
+output "detection_queue_url" {
+  description = "The URL of the primary detection SQS queue"
+  value       = module.orchestration.detection_queue_url
+}
+
+output "detection_queue_arn" {
+  description = "The ARN of the primary detection SQS queue"
+  value       = module.orchestration.detection_queue_arn
+}
+
+output "detection_dlq_url" {
+  description = "The URL of the detection SQS DLQ"
+  value       = module.orchestration.detection_dlq_url
+}
+
+output "detection_dlq_arn" {
+  description = "The ARN of the detection SQS DLQ"
+  value       = module.orchestration.detection_dlq_arn
+}
+
+output "rollback_status_queue_url" {
+  description = "The URL of the rollback status SQS queue"
+  value       = module.orchestration.rollback_status_queue_url
+}
+
+output "rollback_status_queue_arn" {
+  description = "The ARN of the rollback status SQS queue"
+  value       = module.orchestration.rollback_status_queue_arn
+}
+
+

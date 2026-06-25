@@ -39,3 +39,17 @@ variable "tags" {
   description = "Common resource tags"
   default     = {}
 }
+
+
+variable "detection_queue_name" {
+  type        = string
+  description = "Name of the primary detection SQS queue to monitor"
+  default     = ""
+}
+
+variable "detection_dlq_name" {
+  type        = string
+  description = "Name of the detection SQS DLQ to monitor"
+  default     = ""
+}
+

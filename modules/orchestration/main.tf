@@ -140,31 +140,27 @@ resource "aws_dynamodb_table" "account_policy" {
 }
 
 # Step Functions Standard State Machine:
-locals {
-  raw_definition = file("${path.module}/../../docs/statemachine.json")
-
-  # Replace Lambda ARNs with exact matches from the map
-  def_with_state       = replace(local.raw_definition, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-state", var.lambda_function_arns["state"])
-  def_with_cost        = replace(local.def_with_state, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-cost-puller", var.lambda_function_arns["cost_puller"])
-  def_with_norm        = replace(local.def_with_cost, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-normalizer", var.lambda_function_arns["normalizer"])
-  def_with_ai          = replace(local.def_with_norm, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-ai-client", var.lambda_function_arns["ai_client"])
-  def_with_router      = replace(local.def_with_ai, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-router", var.lambda_function_arns["router"])
-  def_with_audit       = replace(local.def_with_router, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-audit-writer", var.lambda_function_arns["audit_writer"])
-  def_with_containment = replace(local.def_with_audit, "arn:aws:lambda:ap-southeast-1:ACCOUNT_ID:function:tf2-finops-containment-worker", var.lambda_function_arns["containment_worker"])
-
-  # Replace SNS Topic ARNs
-  def_with_fin_sns = replace(local.def_with_containment, "arn:aws:sns:ap-southeast-1:ACCOUNT_ID:tf2-finops-finance-alerts", var.finance_alerts_topic_arn)
-  def_with_eng_sns = replace(local.def_with_fin_sns, "arn:aws:sns:ap-southeast-1:ACCOUNT_ID:tf2-finops-engineering-alerts", var.engineering_alerts_topic_arn)
-
-  # Replace DynamoDB table name
-  definition = replace(local.def_with_eng_sns, "tf2-finops-account-policy", aws_dynamodb_table.account_policy.name)
-}
-
 resource "aws_sfn_state_machine" "workflow" {
   name     = "${var.project_name}-${var.environment}-workflow"
   role_arn = var.step_functions_role_arn
 
-  definition = local.definition
+  definition = jsonencode(jsondecode(templatefile("${path.module}/statemachine.json", {
+    state_lambda_arn                 = var.lambda_function_arns["state"]
+    cost_puller_lambda_arn           = var.lambda_function_arns["cost_puller"]
+    normalizer_lambda_arn            = var.lambda_function_arns["normalizer"]
+    ai_request_lambda_arn            = var.lambda_function_arns["ai_request"]
+    router_lambda_arn                = var.lambda_function_arns["router"]
+    audit_writer_lambda_arn          = var.lambda_function_arns["audit_writer"]
+    containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
+    finance_alerts_sns_topic_arn     = var.finance_alerts_topic_arn
+    engineering_alerts_sns_topic_arn = var.engineering_alerts_topic_arn
+    account_policy_table_name        = aws_dynamodb_table.account_policy.name
+    results_table_name               = aws_dynamodb_table.ai_results.name
+    rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
+    ai_engine_contract_version       = var.ai_engine_contract_version
+    ai_poll_max_attempts             = var.ai_poll_max_attempts
+    ai_poll_interval_seconds         = var.ai_poll_interval_seconds
+  })))
 
   tags = var.tags
 }
@@ -190,3 +186,87 @@ resource "aws_scheduler_schedule" "run_workflow" {
     })
   }
 }
+
+# - Error budget table (Hash key: tenant_id)
+resource "aws_dynamodb_table" "error_budget" {
+  name         = "${var.project_name}-${var.environment}-error-budget"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "tenant_id"
+
+  attribute {
+    name = "tenant_id"
+    type = "S"
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = var.tags
+}
+
+# - AI results table (Hash key: audit_id)
+resource "aws_dynamodb_table" "ai_results" {
+  name         = "${var.project_name}-${var.environment}-ai-results"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "audit_id"
+
+  attribute {
+    name = "audit_id"
+    type = "S"
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = var.tags
+}
+
+# DLQ for the detection queue
+resource "aws_sqs_queue" "detection_dlq" {
+  name                              = "${var.project_name}-${var.environment}-detection-dlq"
+  kms_master_key_id                 = var.sqs_kms_key_arn
+  kms_data_key_reuse_period_seconds = 300
+  message_retention_seconds         = 1209600 # 14 days
+
+  tags = var.tags
+}
+
+# Primary detection queue
+resource "aws_sqs_queue" "detection_queue" {
+  name                              = "${var.project_name}-${var.environment}-detection-queue"
+  kms_master_key_id                 = var.sqs_kms_key_arn
+  kms_data_key_reuse_period_seconds = 300
+  visibility_timeout_seconds        = 300
+  message_retention_seconds         = 1209600 # 14 days
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.detection_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = var.tags
+}
+
+# Rollback/status queue
+resource "aws_sqs_queue" "rollback_status_queue" {
+  name                              = "${var.project_name}-${var.environment}-rollback-status-queue"
+  kms_master_key_id                 = var.sqs_kms_key_arn
+  kms_data_key_reuse_period_seconds = 300
+  visibility_timeout_seconds        = 300
+  message_retention_seconds         = 1209600 # 14 days
+
+  tags = var.tags
+}
+
