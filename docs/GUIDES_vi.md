@@ -27,7 +27,10 @@ cd ..
 ### Bước 2.2: Khởi tạo Backend State và vai trò OIDC
 Quy trình bootstrap giúp thiết lập xác thực không cần khóa (OIDC) qua GitHub và tạo S3 bucket lưu trữ state từ xa một cách bảo mật.
 
+#### Lựa chọn A: Thiết lập ban đầu / Triển khai Bootstrap lần đầu (Thực hiện một lần duy nhất)
+Nếu đây là lần đầu tiên thiết lập dự án và S3 backend chưa được kích hoạt:
 1. **Triển khai bootstrap cục bộ**:
+   Đảm bảo rằng khối `backend "s3"` trong [bootstrap/backend.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/backend.tf) đã được chú thích (comment out), sau đó chạy:
    ```powershell
    cd bootstrap
    terraform init
@@ -43,15 +46,25 @@ Quy trình bootstrap giúp thiết lập xác thực không cần khóa (OIDC) q
          key          = "bootstrap/terraform.tfstate"
          region       = "ap-southeast-1"
          encrypt      = true
-         kms_key_id   = "arn:aws:kms:ap-southeast-1:123456789012:key/some-key-id"
+         kms_key_id   = "arn:aws:kms:ap-southeast-1:093490087544:key/f0382479-e89e-41af-8041-89d10f275bf4"
          use_lockfile = true
        }
      }
      ```
-   - Thực hiện lệnh di chuyển trạng thái (migrate state):
+   - Thực hiện lệnh di chuyển trạng thái (migrate state) lên S3 bucket từ xa:
      ```powershell
      terraform init -migrate-state
      ```
+
+#### Lựa chọn B: Dành cho các thành viên khác tiếp tục làm việc (Subsequent Developers)
+Nếu bootstrap đã được chạy trước đó và cấu hình S3 backend đã được kích hoạt trong kho lưu trữ:
+1. **Khởi tạo Backend**:
+   Khởi tạo trực tiếp Terraform. Terraform sẽ tự động nhận diện khối cấu hình S3 backend đang hoạt động trong [bootstrap/backend.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/backend.tf) và kết nối tới remote state hiện có:
+   ```powershell
+   cd bootstrap
+   terraform init
+   ```
+   *Lưu ý: Các thành viên khác không cần chạy `apply` hoặc `migrate-state` trong thư mục bootstrap trừ khi cần thực hiện thay đổi đối với chính hạ tầng bootstrap.*
 
 ### Bước 2.3: Đóng gói các hàm Lambda dưới dạng tệp Zip
 Đóng gói 6 hàm adapter Python vào thư mục `.build/lambda/`:

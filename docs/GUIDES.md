@@ -27,7 +27,10 @@ cd ..
 ### Step 2.2: Bootstrap the State Backend and OIDC Role
 Bootstrapping sets up keyless GitHub authentication (OIDC) and creates the remote state storage bucket.
 
+#### Option A: Initial Setup / First-time Bootstrapping (Done Once)
+If this is the first time setting up the project and the S3 backend is not yet active:
 1. **Deploy local bootstrap**:
+   Ensure the `backend "s3"` block in [bootstrap/backend.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/backend.tf) is commented out, then run:
    ```powershell
    cd bootstrap
    terraform init
@@ -43,15 +46,25 @@ Bootstrapping sets up keyless GitHub authentication (OIDC) and creates the remot
          key          = "bootstrap/terraform.tfstate"
          region       = "ap-southeast-1"
          encrypt      = true
-         kms_key_id   = "arn:aws:kms:ap-southeast-1:123456789012:key/some-key-id"
+         kms_key_id   = "arn:aws:kms:ap-southeast-1:093490087544:key/f0382479-e89e-41af-8041-89d10f275bf4"
          use_lockfile = true
        }
      }
      ```
-   - Migrate state:
+   - Migrate state to the remote S3 bucket:
      ```powershell
      terraform init -migrate-state
      ```
+
+#### Option B: Teammates Continuing Work (For Subsequent Developers)
+If the bootstrap has already been run once and the S3 backend configuration is active in the repository:
+1. **Initialize Backend**:
+   Directly initialize Terraform. It will detect the active S3 backend block in [bootstrap/backend.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/backend.tf) and connect to the existing remote state:
+   ```powershell
+   cd bootstrap
+   terraform init
+   ```
+   *Note: Teammates do not need to run `apply` or `migrate-state` in the bootstrap folder unless making changes to the bootstrap infrastructure itself.*
 
 ### Step 2.3: Package Lambda Zip Files
 Package the 6 Python adapter functions into the `.build/lambda/` folder:
