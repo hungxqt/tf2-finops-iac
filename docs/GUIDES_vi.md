@@ -76,9 +76,16 @@ cd ..
 ### Bước 2.4: Triển khai các Môi trường (Environment Compositions)
 Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó là Staging và Prod).
 
+#### Thiết lập Backend và Biến cho Môi trường:
+* **Kết nối Remote State**: Khối cấu hình remote state backend đã được thiết lập sẵn trong tệp `backend.tf` của mỗi môi trường (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). Bạn chỉ cần chạy lệnh `terraform init` để tự động kết nối với S3 remote state chung.
+* **Cấu hình Biến (Variables)**: Trước khi lập kế hoạch (plan) hoặc áp dụng (apply), bạn phải sao chép tệp `terraform.tfvars.example` trong thư mục môi trường thành tệp `terraform.tfvars` cục bộ (tệp này được bỏ qua bởi git) và cập nhật các giá trị (chẳng hạn như ECR Image URIs và ACM Certificate ARNs) cho phù hợp với triển khai của bạn.
+
 1. **Triển khai Sandbox**:
    ```powershell
    cd environments/sandbox
+   # Sao chép tệp biến mẫu và cập nhật giá trị
+   cp terraform.tfvars.example terraform.tfvars
+   # Khởi tạo và kết nối tới remote state
    terraform init
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
@@ -86,6 +93,7 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
 2. **Triển khai Staging**:
    ```powershell
    cd ../staging
+   cp terraform.tfvars.example terraform.tfvars
    terraform init
    terraform plan -out=staging.tfplan
    terraform apply staging.tfplan
@@ -93,6 +101,7 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
 3. **Triển khai Production** (Yêu cầu xem xét và phê duyệt kế hoạch trước):
    ```powershell
    cd ../prod
+   cp terraform.tfvars.example terraform.tfvars
    terraform init
    terraform plan -out=prod.tfplan
    # Áp dụng cho môi trường Production cần được phê duyệt và kích hoạt qua GitHub Environments

@@ -76,9 +76,16 @@ cd ..
 ### Step 2.4: Deploy the Target Environment (Composition)
 Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
 
+#### Environment Backend and Variable Setup:
+* **Remote State Connection**: The remote state backend block is already pre-configured in `backend.tf` for each environment (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). You only need to run `terraform init` to automatically connect to the shared remote S3 state.
+* **Variable Configuration**: Before planning or applying, you must copy the `terraform.tfvars.example` file in the environment directory to a local `terraform.tfvars` file (which is git-ignored) and update the values (such as ECR Image URIs and ACM Certificate ARNs) as appropriate for your deployment.
+
 1. **Sandbox Deployment**:
    ```powershell
    cd environments/sandbox
+   # Copy variables template and populate it
+   cp terraform.tfvars.example terraform.tfvars
+   # Initialize and connect to remote state
    terraform init
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
@@ -86,6 +93,7 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
 2. **Staging Deployment**:
    ```powershell
    cd ../staging
+   cp terraform.tfvars.example terraform.tfvars
    terraform init
    terraform plan -out=staging.tfplan
    terraform apply staging.tfplan
@@ -93,6 +101,7 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
 3. **Production Deployment** (Requires plan review and approval):
    ```powershell
    cd ../prod
+   cp terraform.tfvars.example terraform.tfvars
    terraform init
    terraform plan -out=prod.tfplan
    # Production apply requires verification and is triggered via GitHub Environments
