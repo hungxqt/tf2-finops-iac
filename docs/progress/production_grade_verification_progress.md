@@ -72,7 +72,18 @@ To verify deployability, plans were generated using AWS user `quochung` (Account
   `name_prefix = replace("${var.project_name}${var.environment}signer", "/[^a-zA-Z0-9]/", "")`
 - **Result**: Successfully resolved. Plans for all environments are now fully capable.
 
-### B. Environment Plan Matrix
+### B. Bootstrap Infrastructure Updates (Tagging, Destroyability & IAM Access)
+- **Requirements**:
+  - Ensure the bootstrap infrastructure is fully tagged.
+  - Make all bootstrap components fully destroyable if the variable `destroyable` is set to `true`.
+  - Allow the bootstrap KMS key to be used by the specific `xbrain-team` IAM users (resolving `GenerateDataKey` Access Denied errors).
+- **Updates**:
+  - **Tagging**: Defined `tags` variable in [bootstrap/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/variables.tf#L25-L33) and added the `tags` attribute (referencing `var.tags`) to all taggable resources in [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf).
+  - **Destroyability**: Since Terraform's `lifecycle.prevent_destroy` block cannot accept variables or expressions, the static `prevent_destroy = true` lifecycles were removed from `aws_kms_key.state`, `aws_s3_bucket.logging`, and `aws_s3_bucket.state` in [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf). We then wired `force_destroy = var.destroyable` to the S3 buckets and set a conditional `deletion_window_in_days = var.destroyable ? 7 : 30` on the KMS key. To avoid state backend lockout during active management, the KMS key remains statically enabled (`is_enabled = true` and `enable_key_rotation = true`). To resolve S3 PutBucketVersioning 409 conflicts during destruction, we added `depends_on = [aws_s3_bucket_versioning.state]` to `aws_s3_bucket_replication_configuration.state` to guarantee replication is removed before versioning is suspended.
+  - **IAM Key Policy Expansion**: Updated the key policy statement for root in [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf) to allow `kms:*` (delegating key access rules to IAM policies) and added a dedicated statement allowing the 10 team IAM users (`minhkhoa`, `vuhoang`, `vanan`, `nguyendat`, `tuquyen`, `ducvu`, `giakhanh`, `quochung`, `tuankhanh`, `phuctien`) key use permissions (`kms:Decrypt`, `kms:GenerateDataKey*`, `kms:Encrypt`, `kms:ReEncrypt*`, and `kms:DescribeKey`).
+- **Results**: Successfully applied. Static Checkov and Terraform Validate tests pass cleanly with 0 violations. When `destroyable` is set to `true`, the bootstrap resources can be fully torn down. When `destroyable` is `false`, the resources are protected from deletion when containing data (default safety block). Access denied issues for IAM users during `terraform apply/plan` are fully resolved. Order-of-destruction replication-to-versioning conflicts are resolved.
+
+### C. Environment Plan Matrix
 
 | Root Directory | Command Executed | Plan Summary | sensitive-values / Cycles / Deletes | Status |
 | :--- | :--- | :--- | :--- | :--- |

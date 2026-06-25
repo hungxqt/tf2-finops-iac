@@ -20,3 +20,19 @@ variable "state_replica_bucket_arn" {
   type        = string
   description = "The ARN of the replica S3 bucket for Terraform state replication"
 }
+
+variable "tags" {
+  type        = map(string)
+  description = "Common resources tags for bootstrap"
+  default = {
+    Environment = "bootstrap"
+    Project     = "tf2-finops"
+    ManagedBy   = "Terraform"
+  }
+}
+
+variable "destroyable" {
+  type        = bool
+  description = "Flag to indicate if the bootstrap resources can be destroyed"
+  default     = false
+}

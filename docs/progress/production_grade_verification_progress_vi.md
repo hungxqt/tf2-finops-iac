@@ -72,7 +72,18 @@ Một lỗi nghiêm trọng trong thuộc tính `name_prefix` của AWS Signer p
   `name_prefix = replace("${var.project_name}${var.environment}signer", "/[^a-zA-Z0-9]/", "")`
 - **Kết quả**: Giải quyết thành công. Các kế hoạch cho tất cả các môi trường hiện đã có thể lập thành công.
 
-### B. Ma trận Kế hoạch Môi trường (Environment Plan Matrix)
+### B. Cập nhật Hạ tầng Bootstrap (Gắn nhãn, Khả năng Hủy & Quyền truy cập IAM) (Bootstrap Infrastructure Updates - Tagging, Destroyability & IAM Access)
+- **Yêu cầu (Requirements)**:
+  - Đảm bảo hạ tầng bootstrap được gắn nhãn (tags) đầy đủ.
+  - Cho phép hủy hoàn toàn các thành phần bootstrap nếu biến `destroyable` được đặt thành `true`.
+  - Cho phép các người dùng IAM trong nhóm `xbrain-team` sử dụng khóa KMS bootstrap (giải quyết các lỗi `GenerateDataKey` Access Denied).
+- **Cập nhật (Updates)**:
+  - **Gắn nhãn (Tagging)**: Khai báo biến `tags` trong [bootstrap/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/variables.tf#L25-L33) và thêm thuộc tính `tags` (tham chiếu từ `var.tags`) vào tất cả các tài nguyên hỗ trợ gắn nhãn trong [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf).
+  - **Khả năng Hủy (Destroyability)**: Do khối `lifecycle.prevent_destroy` trong Terraform không chấp nhận các biến số hoặc biểu thức động, các khối tĩnh `prevent_destroy = true` đã được gỡ bỏ khỏi `aws_kms_key.state`, `aws_s3_bucket.logging`, và `aws_s3_bucket.state` trong [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf). Sau đó, chúng tôi cấu hình `force_destroy = var.destroyable` cho các bucket S3 và đặt điều kiện `deletion_window_in_days = var.destroyable ? 7 : 30` cho khóa KMS. Nhằm giải quyết các lỗi xung đột S3 PutBucketVersioning 409 trong lúc hủy tài nguyên, chúng tôi thêm khai báo `depends_on = [aws_s3_bucket_versioning.state]` vào `aws_s3_bucket_replication_configuration.state` để đảm bảo cấu hình replication được gỡ bỏ trước khi versioning của bucket bị tạm dừng.
+  - **Mở rộng Chính sách Khóa cho IAM (IAM Key Policy Expansion)**: Cấu hình chính sách cho tài khoản root trong [bootstrap/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/main.tf) thành `kms:*` (ủy quyền quản lý quyền hạn khóa sang chính sách IAM) và bổ sung statement riêng cho phép 10 người dùng IAM trong nhóm (`minhkhoa`, `vuhoang`, `vanan`, `nguyendat`, `tuquyen`, `ducvu`, `giakhanh`, `quochung`, `tuankhanh`, `phuctien`) sử dụng khóa với các quyền hạn (`kms:Decrypt`, `kms:GenerateDataKey*`, `kms:Encrypt`, `kms:ReEncrypt*`, và `kms:DescribeKey`).
+- **Kết quả (Results)**: Áp dụng thành công. Các bài kiểm tra tĩnh Checkov và Terraform Validate đều vượt qua trơn tru với 0 lỗi vi phạm. Khi `destroyable` được thiết lập là `true`, hạ tầng bootstrap có thể được hủy bỏ hoàn toàn. Khi `destroyable` là `false`, các tài nguyên được bảo vệ khỏi việc xóa ngoài ý muốn nếu chúng đang chứa dữ liệu (cơ chế an toàn mặc định). Lỗi phân quyền của các người dùng IAM trong suốt quá trình `terraform apply/plan` đã được khắc phục hoàn toàn. Các xung đột về thứ tự hủy giữa replication và versioning đã được giải quyết triệt để.
+
+### C. Ma trận Kế hoạch Môi trường (Environment Plan Matrix)
 
 | Thư mục gốc (Root Directory) | Lệnh thực thi (Command Executed) | Tóm tắt Kế hoạch (Plan Summary) | sensitive-values / Chu kỳ / Lệnh xóa | Trạng thái (Status) |
 | :--- | :--- | :--- | :--- | :--- |

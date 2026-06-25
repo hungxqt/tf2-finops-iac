@@ -6,28 +6,13 @@ data "aws_iam_policy_document" "kms_state_policy" {
     # checkov:skip=CKV_AWS_109: "KMS key policy must specify resource = * as it is attached directly to the key"
     # checkov:skip=CKV_AWS_111: "KMS key policy must specify resource = * as it is attached directly to the key"
     # checkov:skip=CKV_AWS_356: "KMS key policy must specify resource = * as it is attached directly to the key"
-    sid    = "Enable Root Account Administration"
+    sid    = "Enable Root Account Administration and Delegation"
     effect = "Allow"
     principals {
       type        = "AWS"
       identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
     }
-    actions = [
-      "kms:Create*",
-      "kms:Describe*",
-      "kms:Enable*",
-      "kms:List*",
-      "kms:Put*",
-      "kms:Update*",
-      "kms:Revoke*",
-      "kms:Disable*",
-      "kms:Get*",
-      "kms:Delete*",
-      "kms:TagResource",
-      "kms:UntagResource",
-      "kms:ScheduleKeyDeletion",
-      "kms:CancelKeyDeletion"
-    ]
+    actions   = ["kms:*"]
     resources = ["*"]
   }
 
@@ -49,18 +34,46 @@ data "aws_iam_policy_document" "kms_state_policy" {
     ]
     resources = ["*"]
   }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "KMS key policy must specify resource = * as it is attached directly to the key"
+    # checkov:skip=CKV_AWS_356: "KMS key policy must specify resource = * as it is attached directly to the key"
+    sid    = "AllowIAMUsersUsage"
+    effect = "Allow"
+    principals {
+      type = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/minhkhoa",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/vuhoang",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/vanan",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/nguyendat",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/tuquyen",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/ducvu",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/giakhanh",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/quochung",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/tuankhanh",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/phuctien"
+      ]
+    }
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
+      "kms:Encrypt",
+      "kms:ReEncrypt*",
+      "kms:DescribeKey"
+    ]
+    resources = ["*"]
+  }
 }
 
 # KMS Key for Terraform state encryption
 resource "aws_kms_key" "state" {
   description             = "KMS key for Terraform state encryption"
-  deletion_window_in_days = 30
+  deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
+  is_enabled              = true
   policy                  = data.aws_iam_policy_document.kms_state_policy.json
-
-  lifecycle {
-    prevent_destroy = true
-  }
+  tags                    = var.tags
 }
 
 resource "aws_kms_alias" "state" {
@@ -76,10 +89,8 @@ resource "aws_s3_bucket" "logging" {
   # checkov:skip=CKV2_AWS_61: "Logging bucket does not need lifecycle configuration"
   # checkov:skip=CKV2_AWS_62: "Logging bucket does not need event notifications"
   bucket        = "${var.project_name}-state-logging"
-  force_destroy = false
-  lifecycle {
-    prevent_destroy = true
-  }
+  force_destroy = var.destroyable
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "logging" {
@@ -129,11 +140,9 @@ data "aws_iam_policy_document" "s3_tls_only_logging" {
 
 # S3 Bucket for Terraform remote state storage
 resource "aws_s3_bucket" "state" {
-  bucket = "${var.project_name}-state-bucket"
-
-  lifecycle {
-    prevent_destroy = true
-  }
+  bucket        = "${var.project_name}-state-bucket"
+  force_destroy = var.destroyable
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_versioning" "state" {
@@ -207,6 +216,8 @@ resource "aws_s3_bucket_replication_configuration" "state" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.state]
 }
 
 resource "aws_s3_bucket_policy" "state" {
@@ -246,12 +257,14 @@ resource "aws_iam_openid_connect_provider" "github" {
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
+  tags            = var.tags
 }
 
 # GitHub Actions OIDC execution role
 resource "aws_iam_role" "github_actions" {
   name               = "${var.project_name}-github-actions-role"
   assume_role_policy = data.aws_iam_policy_document.github_actions_assume.json
+  tags               = var.tags
 }
 
 data "aws_iam_policy_document" "github_actions_assume" {
@@ -293,9 +306,7 @@ resource "aws_iam_role" "replication" {
       }
     }]
   })
-  tags = {
-    Project = var.project_name
-  }
+  tags = var.tags
 }
 
 resource "aws_iam_role_policy" "replication" {
