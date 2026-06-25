@@ -17,6 +17,10 @@ resource "aws_dynamodb_table" "run_state" {
     kms_key_arn = var.ddb_kms_key_arn
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }
@@ -38,6 +42,10 @@ resource "aws_dynamodb_table" "anomaly" {
   server_side_encryption {
     enabled     = true
     kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 
   lifecycle {
@@ -63,6 +71,10 @@ resource "aws_dynamodb_table" "routing_state" {
     kms_key_arn = var.ddb_kms_key_arn
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }
@@ -84,6 +96,10 @@ resource "aws_dynamodb_table" "audit" {
   server_side_encryption {
     enabled     = true
     kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 
   lifecycle {
@@ -109,6 +125,10 @@ resource "aws_dynamodb_table" "dashboard_views" {
     kms_key_arn = var.ddb_kms_key_arn
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }
@@ -132,59 +152,15 @@ resource "aws_dynamodb_table" "account_policy" {
     kms_key_arn = var.ddb_kms_key_arn
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }
 
   tags = var.tags
-}
-
-# Step Functions Standard State Machine:
-resource "aws_sfn_state_machine" "workflow" {
-  name     = "${var.project_name}-${var.environment}-workflow"
-  role_arn = var.step_functions_role_arn
-
-  definition = jsonencode(jsondecode(templatefile("${path.module}/statemachine.json", {
-    state_lambda_arn                 = var.lambda_function_arns["state"]
-    cost_puller_lambda_arn           = var.lambda_function_arns["cost_puller"]
-    normalizer_lambda_arn            = var.lambda_function_arns["normalizer"]
-    ai_request_lambda_arn            = var.lambda_function_arns["ai_request"]
-    router_lambda_arn                = var.lambda_function_arns["router"]
-    audit_writer_lambda_arn          = var.lambda_function_arns["audit_writer"]
-    containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
-    finance_alerts_sns_topic_arn     = var.finance_alerts_topic_arn
-    engineering_alerts_sns_topic_arn = var.engineering_alerts_topic_arn
-    account_policy_table_name        = aws_dynamodb_table.account_policy.name
-    results_table_name               = aws_dynamodb_table.ai_results.name
-    rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
-    ai_engine_contract_version       = var.ai_engine_contract_version
-    ai_poll_max_attempts             = var.ai_poll_max_attempts
-    ai_poll_interval_seconds         = var.ai_poll_interval_seconds
-  })))
-
-  tags = var.tags
-}
-
-# EventBridge Scheduler schedule with 24h default expression.
-resource "aws_scheduler_schedule" "run_workflow" {
-  name        = "${var.project_name}-${var.environment}-schedule"
-  description = "Triggers the Step Functions workflow on a schedule"
-  group_name  = "default"
-
-  schedule_expression = var.scheduler_expression
-
-  flexible_time_window {
-    mode = "OFF"
-  }
-
-  target {
-    arn      = aws_sfn_state_machine.workflow.arn
-    role_arn = var.scheduler_role_arn
-
-    input = jsonencode({
-      account_id = data.aws_caller_identity.current.account_id
-    })
-  }
 }
 
 # - Error budget table (Hash key: tenant_id)
@@ -201,6 +177,10 @@ resource "aws_dynamodb_table" "error_budget" {
   server_side_encryption {
     enabled     = true
     kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 
   lifecycle {
@@ -226,11 +206,115 @@ resource "aws_dynamodb_table" "ai_results" {
     kms_key_arn = var.ddb_kms_key_arn
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }
 
   tags = var.tags
+}
+
+# - Rollback Cache table (Hash key: anomaly_id)
+resource "aws_dynamodb_table" "rollback_cache" {
+  name         = "${var.project_name}-${var.environment}-rollback-cache"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "anomaly_id"
+
+  attribute {
+    name = "anomaly_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl_expiry"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = var.tags
+}
+
+# CloudWatch Log Group for Step Functions execution logs
+resource "aws_cloudwatch_log_group" "sfn" {
+  name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-workflow"
+  retention_in_days = 365
+  kms_key_id        = var.cloudwatch_log_kms_key_arn
+  tags              = var.tags
+}
+
+# Step Functions Standard State Machine:
+resource "aws_sfn_state_machine" "workflow" {
+  name     = "${var.project_name}-${var.environment}-workflow"
+  role_arn = aws_iam_role.step_functions.arn
+
+  definition = jsonencode(jsondecode(templatefile("${path.module}/statemachine.json", {
+    state_lambda_arn                 = var.lambda_function_arns["state"]
+    cost_puller_lambda_arn           = var.lambda_function_arns["cost_puller"]
+    normalizer_lambda_arn            = var.lambda_function_arns["normalizer"]
+    ai_request_lambda_arn            = var.lambda_function_arns["ai_request"]
+    router_lambda_arn                = var.lambda_function_arns["router"]
+    audit_writer_lambda_arn          = var.lambda_function_arns["audit_writer"]
+    containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
+    finance_alerts_sns_topic_arn     = var.finance_alerts_topic_arn
+    engineering_alerts_sns_topic_arn = var.engineering_alerts_topic_arn
+    account_policy_table_name        = aws_dynamodb_table.account_policy.name
+    results_table_name               = aws_dynamodb_table.ai_results.name
+    rollback_cache_table_name        = aws_dynamodb_table.rollback_cache.name
+    rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
+    ai_engine_contract_version       = var.ai_engine_contract_version
+  })))
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+
+  tracing_configuration {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
+# EventBridge Scheduler schedule with 24h default expression.
+resource "aws_scheduler_schedule" "run_workflow" {
+  name        = "${var.project_name}-${var.environment}-schedule"
+  description = "Triggers the Step Functions workflow on a schedule"
+  group_name  = "default"
+  kms_key_arn = var.scheduler_kms_key_arn
+
+  schedule_expression = var.scheduler_expression
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_sfn_state_machine.workflow.arn
+    role_arn = aws_iam_role.scheduler.arn
+
+    input = jsonencode({
+      account_id   = data.aws_caller_identity.current.account_id
+      is_ad_hoc    = false
+      trigger_type = "scheduled"
+    })
+  }
 }
 
 # DLQ for the detection queue
@@ -269,4 +353,3 @@ resource "aws_sqs_queue" "rollback_status_queue" {
 
   tags = var.tags
 }
-

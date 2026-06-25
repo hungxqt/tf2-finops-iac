@@ -25,16 +25,28 @@ def handle_request(event_data: dict, context: Any) -> dict:
     op = operation.lower()
     
     if op == "prepare":
-        run_id = event_data.get("run_id") or f"run-{uuid.uuid4()}"
-        correlation_id = event_data.get("correlation_id") or run_id
-        execution_date = event_data.get("execution_date") or datetime.utcnow().strftime("%Y-%m-%d")
-        cost_period = event_data.get("cost_period") or execution_date[:7]
-        tenant_id = event_data.get("tenant_id") or event_data.get("account_id") or "tenant-default"
-        is_ad_hoc = event_data.get("is_ad_hoc") or event_data.get("action") == "ad-hoc" or False
-        ai_contract_version = event_data.get("ai_contract_version") or "v1"
+        payload = event_data.get("input")
+        if not isinstance(payload, dict):
+            payload = event_data
+            
+        run_id = payload.get("run_id") or event_data.get("run_id") or f"run-{uuid.uuid4()}"
+        correlation_id = payload.get("correlation_id") or event_data.get("correlation_id") or run_id
+        execution_date = payload.get("execution_date") or event_data.get("execution_date") or datetime.utcnow().strftime("%Y-%m-%d")
+        cost_period = payload.get("cost_period") or event_data.get("cost_period") or execution_date[:7]
+        tenant_id = payload.get("tenant_id") or payload.get("account_id") or event_data.get("tenant_id") or event_data.get("account_id") or "tenant-default"
         
-        cur_retry = event_data.get("cur_retry") or {"count": 0, "max": 4}
-        ai_retry = event_data.get("ai_retry") or {"count": 0, "max": 6}
+        is_ad_hoc = False
+        if "is_ad_hoc" in payload:
+            is_ad_hoc = bool(payload["is_ad_hoc"])
+        elif "is_ad_hoc" in event_data:
+            is_ad_hoc = bool(event_data["is_ad_hoc"])
+        elif payload.get("action") == "ad-hoc" or event_data.get("action") == "ad-hoc":
+            is_ad_hoc = True
+            
+        ai_contract_version = event_data.get("ai_contract_version") or payload.get("ai_contract_version") or "v1"
+        
+        cur_retry = payload.get("cur_retry") or event_data.get("cur_retry") or {"count": 0, "max": 4}
+        ai_retry = payload.get("ai_retry") or event_data.get("ai_retry") or {"count": 0, "max": 6}
         
         details = {
             "run_id": run_id,

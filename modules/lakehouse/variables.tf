@@ -34,3 +34,18 @@ variable "tags" {
   description = "Common resource tags"
   default     = {}
 }
+
+variable "lakehouse_replica_bucket_arn" {
+  type        = string
+  description = "ARN of the replica S3 bucket for lakehouse data"
+}
+
+variable "audit_replica_bucket_arn" {
+  type        = string
+  description = "ARN of the replica S3 bucket for audit records"
+}
+
+variable "athena_replica_bucket_arn" {
+  type        = string
+  description = "ARN of the replica S3 bucket for Athena query results"
+}

@@ -15,3 +15,8 @@ variable "github_repository" {
   description = "GitHub repository in format owner/repo"
   default     = "hungxqt/tf2-finops-iac"
 }
+
+variable "state_replica_bucket_arn" {
+  type        = string
+  description = "The ARN of the replica S3 bucket for Terraform state replication"
+}

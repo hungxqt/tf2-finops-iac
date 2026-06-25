@@ -54,7 +54,7 @@ Bootstrapping sets up keyless GitHub authentication (OIDC) and creates the remot
      ```
 
 ### Step 2.3: Package Lambda Zip Files
-Package the 7 Python adapter functions into the `.build/lambda/` folder:
+Package the 6 Python adapter functions into the `.build/lambda/` folder:
 ```powershell
 cd ..
 .\scripts\package-lambdas.ps1
@@ -94,11 +94,11 @@ Once applied, fetch the Outputs to feed the Application Layer (`tf2-finops-gitop
 terraform output
 ```
 
-* `request_lambda_function_name`: AI Engine Request Lambda function name.
-* `worker_lambda_function_name`: AI Engine Worker Lambda function name.
+* `request_lambda_function_name`: AI Engine Request Lambda function name (container-based, handles synchronous /v1/detect, /v1/decide, and /v1/verify).
+* `worker_lambda_function_name`: AI Engine Worker Lambda function name (container-based, processes asynchronous anomaly ingestion).
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
-* `dynamodb_table_names`: Ingestion, state, results, and audit table mappings.
+* `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
 
 ### Step 3.1: Dashboard Deployment & Asset Handoff
 Once the Terraform plan is applied, the dashboard infrastructure is ready. The handoff process follows these rules:

@@ -117,6 +117,32 @@ def test_state_prepare_run_context():
     assert resp["cur_retry"]["max"] == 4
     assert resp["ai_retry"]["max"] == 6
 
+def test_state_prepare_nested_input():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "999888",
+            "is_ad_hoc": True
+        },
+        "ai_contract_version": "v1.0"
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["tenant_id"] == "999888"
+    assert resp["is_ad_hoc"] is True
+    assert resp["ai_contract_version"] == "v1.0"
+
+def test_state_prepare_defaulting():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "999888"
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["is_ad_hoc"] is False  # Defaults to False
+
 
 def test_state_check_quota():
     # 1. Quota ok

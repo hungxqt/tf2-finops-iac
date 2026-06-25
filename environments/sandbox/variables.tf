@@ -29,10 +29,45 @@ variable "tags" {
 variable "request_image_uri" {
   type        = string
   description = "ECR image URI with immutable digest for the AI Request Lambda function"
+  validation {
+    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.request_image_uri))
+    error_message = "The request_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
+  }
 }
 
 variable "worker_image_uri" {
   type        = string
   description = "ECR image URI with immutable digest for the AI Worker Lambda function"
+  validation {
+    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.worker_image_uri))
+    error_message = "The worker_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
+  }
 }
 
+variable "replica_region" {
+  type        = string
+  description = "AWS region for S3 cross-region replication"
+  default     = "ap-southeast-2"
+}
+
+variable "cloudfront_acm_certificate_arn" {
+  type        = string
+  description = "The ARN of the ACM certificate in us-east-1 for CloudFront custom domain"
+}
+
+variable "cloudfront_aliases" {
+  type        = list(string)
+  description = "List of domain aliases (hostnames) for the CloudFront distribution"
+}
+
+variable "dashboard_geo_restriction_type" {
+  type        = string
+  description = "CloudFront geo restriction type (none, whitelist, blacklist)"
+  default     = "blacklist"
+}
+
+variable "dashboard_geo_restriction_locations" {
+  type        = list(string)
+  description = "List of ISO 3166-1-alpha-2 country codes for geo restriction"
+  default     = ["CU", "IR", "KP", "SY"]
+}

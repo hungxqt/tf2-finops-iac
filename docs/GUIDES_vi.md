@@ -54,7 +54,7 @@ Quy trình bootstrap giúp thiết lập xác thực không cần khóa (OIDC) q
      ```
 
 ### Bước 2.3: Đóng gói các hàm Lambda dưới dạng tệp Zip
-Đóng gói 7 hàm adapter Python vào thư mục `.build/lambda/`:
+Đóng gói 6 hàm adapter Python vào thư mục `.build/lambda/`:
 ```powershell
 cd ..
 .\scripts\package-lambdas.ps1
@@ -94,11 +94,11 @@ Sau khi quá trình deploy hoàn tất, hãy lấy các dữ liệu đầu ra đ
 terraform output
 ```
 
-* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda.
-* `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda.
+* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda (chạy bằng container image, xử lý các yêu cầu đồng bộ /v1/detect, /v1/decide, và /v1/verify).
+* `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda (chạy bằng container image, xử lý việc nhập bất thường bất đồng bộ).
 * `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
-* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả và audit.
+* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, và rollback cache.
 
 ### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
 Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:

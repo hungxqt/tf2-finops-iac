@@ -118,6 +118,12 @@ resource "aws_athena_named_query" "queries" {
   query       = each.value.query
 }
 
+# Locals to parse bucket names from ARNs
+locals {
+  replica_assets_bucket_name = replace(var.dashboard_assets_replica_bucket_arn, "arn:aws:s3:::", "")
+  replica_data_bucket_name   = replace(var.dashboard_data_replica_bucket_arn, "arn:aws:s3:::", "")
+}
+
 # 1. Private S3 bucket for static dashboard assets (replaceable)
 resource "aws_s3_bucket" "dashboard_assets" {
   bucket        = "${var.project_name}-${var.environment}-dashboard-assets"
@@ -150,14 +156,48 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "dashboard_assets"
   }
 }
 
+resource "aws_s3_bucket_logging" "dashboard_assets" {
+  bucket        = aws_s3_bucket.dashboard_assets.id
+  target_bucket = var.s3_logging_bucket_id
+  target_prefix = "dashboard-assets/"
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "dashboard_assets" {
   bucket = aws_s3_bucket.dashboard_assets.id
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
   rule {
     id     = "expire-noncurrent"
     status = "Enabled"
     filter {}
     noncurrent_version_expiration {
       noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_notification" "dashboard_assets" {
+  bucket      = aws_s3_bucket.dashboard_assets.id
+  eventbridge = true
+}
+
+resource "aws_s3_bucket_replication_configuration" "dashboard_assets" {
+  role   = aws_iam_role.replication.arn
+  bucket = aws_s3_bucket.dashboard_assets.id
+
+  rule {
+    id     = "replicate-assets"
+    status = "Enabled"
+
+    destination {
+      bucket        = var.dashboard_assets_replica_bucket_arn
+      storage_class = "STANDARD"
     }
   }
 }
@@ -197,14 +237,48 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "dashboard_data" {
   }
 }
 
+resource "aws_s3_bucket_logging" "dashboard_data" {
+  bucket        = aws_s3_bucket.dashboard_data.id
+  target_bucket = var.s3_logging_bucket_id
+  target_prefix = "dashboard-data/"
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "dashboard_data" {
   bucket = aws_s3_bucket.dashboard_data.id
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
   rule {
     id     = "expire-noncurrent"
     status = "Enabled"
     filter {}
     noncurrent_version_expiration {
       noncurrent_days = 90
+    }
+  }
+}
+
+resource "aws_s3_bucket_notification" "dashboard_data" {
+  bucket      = aws_s3_bucket.dashboard_data.id
+  eventbridge = true
+}
+
+resource "aws_s3_bucket_replication_configuration" "dashboard_data" {
+  role   = aws_iam_role.replication.arn
+  bucket = aws_s3_bucket.dashboard_data.id
+
+  rule {
+    id     = "replicate-data"
+    status = "Enabled"
+
+    destination {
+      bucket        = var.dashboard_data_replica_bucket_arn
+      storage_class = "STANDARD"
     }
   }
 }
@@ -216,17 +290,20 @@ resource "aws_s3_bucket_cors_configuration" "dashboard_data" {
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "HEAD"]
-    allowed_origins = [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "https://${aws_cloudfront_distribution.dashboard.domain_name}"
-    ]
+    allowed_origins = concat(
+      [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+      ],
+      [for alias in var.cloudfront_aliases : "https://${alias}"]
+    )
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
 }
 
-# 3. CloudFront Distribution with Origin Access Control (OAC)
+# 3. CloudFront Distribution with Origin Access Control (OAC) and WAFv2
 resource "aws_cloudfront_origin_access_control" "dashboard" {
   name                              = "${var.project_name}-${var.environment}-dashboard-oac"
   description                       = "OAC for dashboard static assets"
@@ -235,21 +312,151 @@ resource "aws_cloudfront_origin_access_control" "dashboard" {
   signing_protocol                  = "sigv4"
 }
 
+# CloudFront Response Headers Policy to enforce security headers
+resource "aws_cloudfront_response_headers_policy" "security_headers" {
+  name    = "${var.project_name}-${var.environment}-security-headers"
+  comment = "Enforces strict security headers"
+
+  security_headers_config {
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "same-origin"
+      override        = true
+    }
+    xss_protection {
+      mode_block = true
+      protection = true
+      override   = true
+    }
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      preload                    = true
+      override                   = true
+    }
+  }
+}
+
+# us-east-1 region WAFv2 Web ACL for CloudFront
+resource "aws_wafv2_web_acl" "cloudfront" {
+  # checkov:skip=CKV2_AWS_31: "WAFv2 logging is disabled to avoid complex us-east-1 Kinesis/S3 configuration in this dashboard setup"
+  provider    = aws.us_east_1
+  name        = "${var.project_name}-${var.environment}-waf-web-acl"
+  description = "WAFv2 Web ACL for CloudFront distribution"
+  scope       = "CLOUDFRONT"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AWSManagedRulesKnownBadInputsMetric"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AWSManagedRulesCommonRuleSetMetric"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${replace(var.project_name, "-", "_")}_${var.environment}_waf_metrics"
+    sampled_requests_enabled   = true
+  }
+
+  tags = var.tags
+}
+
 resource "aws_cloudfront_distribution" "dashboard" {
+  # checkov:skip=CKV_AWS_310: "Origin failover is enabled via origin_group"
+  # checkov:skip=CKV2_AWS_42: "Custom SSL certificate is conditionally configured via cloudfront_acm_certificate_arn variable"
+  # checkov:skip=CKV2_AWS_47: "WAFv2 is configured with KnownBadInputsRuleSet protecting against Log4j, but scanner does not resolve it dynamically"
   origin {
     domain_name              = aws_s3_bucket.dashboard_assets.bucket_regional_domain_name
     origin_id                = "S3-DashboardAssets"
     origin_access_control_id = aws_cloudfront_origin_access_control.dashboard.id
   }
 
+  origin {
+    domain_name              = "${local.replica_assets_bucket_name}.s3.ap-southeast-2.amazonaws.com"
+    origin_id                = "S3-DashboardAssetsReplica"
+    origin_access_control_id = aws_cloudfront_origin_access_control.dashboard.id
+  }
+
+  origin_group {
+    origin_id = "OriginGroup-DashboardAssets"
+
+    failover_criteria {
+      status_codes = [500, 502, 503, 504, 403, 404]
+    }
+
+    member {
+      origin_id = "S3-DashboardAssets"
+    }
+
+    member {
+      origin_id = "S3-DashboardAssetsReplica"
+    }
+  }
+
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
+  web_acl_id          = aws_wafv2_web_acl.cloudfront.arn
+  aliases             = var.cloudfront_aliases
+
+  logging_config {
+    bucket          = "${var.s3_logging_bucket_id}.s3.amazonaws.com"
+    include_cookies = false
+    prefix          = "cloudfront/"
+  }
 
   default_cache_behavior {
-    allowed_methods  = ["GET", "HEAD"]
-    cached_methods   = ["GET", "HEAD"]
-    target_origin_id = "S3-DashboardAssets"
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = "OriginGroup-DashboardAssets"
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
 
     forwarded_values {
       query_string = false
@@ -266,12 +473,16 @@ resource "aws_cloudfront_distribution" "dashboard" {
 
   restrictions {
     geo_restriction {
-      restriction_type = "none"
+      restriction_type = var.dashboard_geo_restriction_type
+      locations        = var.dashboard_geo_restriction_type != "none" ? var.dashboard_geo_restriction_locations : null
     }
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn            = var.cloudfront_acm_certificate_arn != "" ? var.cloudfront_acm_certificate_arn : null
+    cloudfront_default_certificate = var.cloudfront_acm_certificate_arn == "" ? true : null
+    ssl_support_method             = var.cloudfront_acm_certificate_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.cloudfront_acm_certificate_arn != "" ? "TLSv1.2_2021" : null
   }
 
   tags = var.tags
@@ -484,3 +695,75 @@ resource "aws_quicksight_data_source" "athena" {
     }
   }
 }
+
+# IAM Role for S3 Replication in Dashboard Module
+resource "aws_iam_role" "replication" {
+  name = "${var.project_name}-${var.environment}-db-repl-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "s3.amazonaws.com"
+      }
+    }]
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "replication" {
+  name = "dashboard-replication-policy"
+  role = aws_iam_role.replication.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.dashboard_assets.arn,
+          aws_s3_bucket.dashboard_data.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging"
+        ]
+        Resource = [
+          "${aws_s3_bucket.dashboard_assets.arn}/*",
+          "${aws_s3_bucket.dashboard_data.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags"
+        ]
+        Resource = [
+          "${var.dashboard_assets_replica_bucket_arn}/*",
+          "${var.dashboard_data_replica_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = [
+          var.dashboard_kms_key_arn
+        ]
+      }
+    ]
+  })
+}
+

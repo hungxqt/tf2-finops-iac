@@ -13,11 +13,6 @@ variable "private_subnet_ids" {
   description = "List of private subnet IDs for VPC-attached Lambda execution"
 }
 
-variable "lambda_security_group_id" {
-  type        = string
-  description = "The security group ID allowing egress for VPC-attached Lambda execution"
-}
-
 variable "lambda_role_arns" {
   type        = map(string)
   description = "Map of execution role ARNs for each Lambda worker"
@@ -39,28 +34,10 @@ variable "dynamodb_table_names" {
   default     = {}
 }
 
-variable "ai_engine_endpoint_url" {
-  type        = string
-  description = "AI Engine API endpoint URL"
-  default     = ""
-}
-
-variable "ai_engine_secret_name" {
-  type        = string
-  description = "AI Engine client auth credentials secret name in Secrets Manager"
-  default     = ""
-}
-
 variable "containment_apply_enabled" {
   type        = bool
   description = "True if automatic containment action is enabled (Sandbox/Staging dry-run/apply controls)"
   default     = false
-}
-
-variable "log_retention_days" {
-  type        = number
-  description = "CloudWatch log retention in days"
-  default     = 14
 }
 
 variable "tags" {
@@ -75,3 +52,27 @@ variable "aws_region" {
   default     = "ap-southeast-1"
 }
 
+variable "cloudwatch_log_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for CloudWatch Log Group encryption"
+}
+
+variable "lambda_env_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for Lambda environment variables encryption at rest"
+}
+
+variable "sqs_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for SQS DLQ encryption"
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "The ID of the VPC"
+}
+
+variable "vpc_endpoint_security_group_id" {
+  type        = string
+  description = "The security group ID of the VPC interface endpoints"
+}

@@ -1,6 +1,5 @@
 # IAM Module Resources
-# This module creates least-privilege execution roles and guardrails.
-
+# This module creates least-privilege execution roles and guardrails for Lambda workers.
 
 # Permissions boundary to deny destructive operations
 resource "aws_iam_policy" "boundary" {
@@ -12,9 +11,108 @@ resource "aws_iam_policy" "boundary" {
 
 data "aws_iam_policy_document" "boundary" {
   statement {
-    sid       = "AllowAllExceptGuardrails"
-    effect    = "Allow"
-    actions   = ["*"]
+    sid    = "AllowS3Actions"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      var.lakehouse_bucket_arn,
+      "${var.lakehouse_bucket_arn}/*",
+      var.audit_bucket_arn,
+      "${var.audit_bucket_arn}/*"
+    ]
+  }
+
+  statement {
+    sid    = "AllowDynamoDBActions"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem"
+    ]
+    resources = var.dynamodb_table_arns
+  }
+
+  statement {
+    sid    = "AllowKMSActions"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey"
+    ]
+    resources = var.kms_key_arns
+  }
+
+  statement {
+    sid    = "AllowSNSActions"
+    effect = "Allow"
+    actions = [
+      "sns:Publish"
+    ]
+    resources = var.sns_topic_arns
+  }
+
+  statement {
+    sid    = "AllowSQSActions"
+    effect = "Allow"
+    actions = [
+      "sqs:SendMessage",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes"
+    ]
+    resources = var.queue_arns
+  }
+
+  statement {
+    sid    = "AllowLogsActions"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+    resources = ["arn:aws:logs:*:*:log-group:/aws/lambda/${var.project_name}-${var.environment}-*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "EC2 describe/tag actions require wildcard permissions"
+    # checkov:skip=CKV_AWS_356: "ec2:Describe* actions require wildcard resource *"
+    sid    = "AllowEC2DescribeActions"
+    effect = "Allow"
+    actions = [
+      "ec2:CreateTags",
+      "ec2:DescribeInstances",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVolumes"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "AllowEC2StopActions"
+    effect = "Allow"
+    actions = [
+      "ec2:StopInstances"
+    ]
+    resources = ["arn:aws:ec2:*:*:instance/*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and xray:* do not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and xray:* require wildcard resource *"
+    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
+    sid    = "AllowCostAndXRayActions"
+    effect = "Allow"
+    actions = [
+      "ce:GetCostAndUsage",
+      "xray:PutTraceSegments",
+      "xray:PutTelemetryRecords"
+    ]
     resources = ["*"]
   }
 
@@ -60,7 +158,7 @@ data "aws_iam_policy_document" "lambda_trust" {
 }
 
 locals {
-  worker_names = ["state", "cost_puller", "normalizer", "ai_client", "router", "audit_writer", "containment_worker"]
+  worker_names = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker"]
 }
 
 # Lambda Worker Roles
@@ -124,6 +222,8 @@ data "aws_iam_policy_document" "cost_puller" {
     }
   }
   statement {
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
     actions   = ["ce:GetCostAndUsage"]
     resources = ["*"]
   }
@@ -150,43 +250,7 @@ data "aws_iam_policy_document" "normalizer" {
   }
 }
 
-# 4. AI Client
-resource "aws_iam_role_policy" "ai_client" {
-  name   = "ai_client-policy"
-  role   = aws_iam_role.workers["ai_client"].id
-  policy = data.aws_iam_policy_document.ai_client.json
-}
-
-data "aws_iam_policy_document" "ai_client" {
-  dynamic "statement" {
-    for_each = var.ai_engine_secret_arn != "" ? [1] : []
-    content {
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = [var.ai_engine_secret_arn]
-    }
-  }
-  dynamic "statement" {
-    for_each = length(var.kms_key_arns) > 0 ? [1] : []
-    content {
-      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
-      resources = var.kms_key_arns
-    }
-  }
-  dynamic "statement" {
-    for_each = length(var.queue_arns) > 0 ? [1] : []
-    content {
-      actions = [
-        "sqs:SendMessage",
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage",
-        "sqs:GetQueueAttributes"
-      ]
-      resources = var.queue_arns
-    }
-  }
-}
-
-# 5. Router
+# 4. Router
 resource "aws_iam_role_policy" "router" {
   name   = "router-policy"
   role   = aws_iam_role.workers["router"].id
@@ -207,11 +271,11 @@ data "aws_iam_policy_document" "router" {
   }
   statement {
     actions   = ["sns:Publish"]
-    resources = ["*"]
+    resources = var.sns_topic_arns
   }
 }
 
-# 6. Audit Writer
+# 5. Audit Writer
 resource "aws_iam_role_policy" "audit_writer" {
   name   = "audit_writer-policy"
   role   = aws_iam_role.workers["audit_writer"].id
@@ -236,7 +300,7 @@ data "aws_iam_policy_document" "audit_writer" {
   }
 }
 
-# 7. Containment Worker
+# 6. Containment Worker
 resource "aws_iam_role_policy" "containment_worker" {
   name   = "containment_worker-policy"
   role   = aws_iam_role.workers["containment_worker"].id
@@ -245,68 +309,49 @@ resource "aws_iam_role_policy" "containment_worker" {
 
 data "aws_iam_policy_document" "containment_worker" {
   statement {
+    # checkov:skip=CKV_AWS_111: "EC2 Describe APIs do not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "EC2 Describe APIs require wildcard resource"
+    sid = "EC2WildcardDescribes"
     actions = [
-      "ec2:CreateTags",
       "ec2:DescribeInstances",
       "ec2:DescribeSecurityGroups",
       "ec2:DescribeVolumes"
     ]
     resources = ["*"]
   }
+
+  statement {
+    sid       = "EC2CreateTagsScoped"
+    actions   = ["ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*:*:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Environment"
+      values   = [var.environment]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.environment != "prod" && var.containment_apply_enabled ? [1] : []
     content {
+      sid       = "EC2StopInstancesScoped"
       actions   = ["ec2:StopInstances"]
-      resources = ["*"]
+      resources = ["arn:aws:ec2:*:*:instance/*"]
+      condition {
+        test     = "StringEquals"
+        variable = "aws:ResourceTag/Environment"
+        values   = [var.environment]
+      }
     }
-  }
-}
-
-# Step Functions Execution Role
-resource "aws_iam_role" "step_functions" {
-  name               = "${var.project_name}-${var.environment}-sfn-role"
-  assume_role_policy = data.aws_iam_policy_document.sfn_trust.json
-  tags               = var.tags
-}
-
-data "aws_iam_policy_document" "sfn_trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["states.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy" "step_functions" {
-  name   = "sfn-policy"
-  role   = aws_iam_role.step_functions.id
-  policy = data.aws_iam_policy_document.step_functions.json
-}
-
-data "aws_iam_policy_document" "step_functions" {
-  statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = ["*"]
-  }
-  statement {
-    actions   = ["dynamodb:GetItem"]
-    resources = var.dynamodb_table_arns
-  }
-  statement {
-    actions   = ["sns:Publish"]
-    resources = ["*"]
-  }
-  statement {
-    actions   = ["sqs:SendMessage"]
-    resources = var.queue_arns
   }
 }
 
 # Cross-account cost data read and containment documents for outputs
 data "aws_iam_policy_document" "member_read" {
   statement {
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
+    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage and member S3 cost reading require wildcard permissions"
     actions = [
       "ce:GetCostAndUsage",
       "s3:GetObject"
@@ -317,6 +362,8 @@ data "aws_iam_policy_document" "member_read" {
 
 data "aws_iam_policy_document" "member_containment" {
   statement {
+    # checkov:skip=CKV_AWS_111: "EC2 describe/stop actions in target member accounts require flexible target resources"
+    # checkov:skip=CKV_AWS_356: "ec2:DescribeInstances requires wildcard resource"
     actions = [
       "ec2:CreateTags",
       "ec2:DescribeInstances",
@@ -326,65 +373,22 @@ data "aws_iam_policy_document" "member_containment" {
   }
 }
 
-# EventBridge Scheduler Execution Role
-resource "aws_iam_role" "scheduler" {
-  name               = "${var.project_name}-${var.environment}-scheduler-role"
-  assume_role_policy = data.aws_iam_policy_document.scheduler_trust.json
-  tags               = var.tags
+resource "aws_iam_role_policy" "workers_xray" {
+  for_each = toset(local.worker_names)
+  name     = "xray-policy"
+  role     = aws_iam_role.workers[each.key].id
+  policy   = data.aws_iam_policy_document.xray.json
 }
 
-data "aws_iam_policy_document" "scheduler_trust" {
+data "aws_iam_policy_document" "xray" {
   statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["scheduler.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy" "scheduler" {
-  name   = "scheduler-policy"
-  role   = aws_iam_role.scheduler.id
-  policy = data.aws_iam_policy_document.scheduler.json
-}
-
-data "aws_iam_policy_document" "scheduler" {
-  statement {
-    actions   = ["states:StartExecution"]
+    # checkov:skip=CKV_AWS_111: "X-Ray tracing requires wildcard resource"
+    # checkov:skip=CKV_AWS_356: "X-Ray tracing requires wildcard resource"
+    sid = "XRayWriteOnly"
+    actions = [
+      "xray:PutTraceSegments",
+      "xray:PutTelemetryRecords"
+    ]
     resources = ["*"]
   }
 }
-
-# SigV4-compatible CDO caller role for calling AI Engine
-resource "aws_iam_role" "cdo_caller" {
-  name                 = "${var.project_name}-${var.environment}-cdo-caller"
-  assume_role_policy   = data.aws_iam_policy_document.cdo_caller_trust.json
-  permissions_boundary = aws_iam_policy.boundary.arn
-  tags                 = var.tags
-}
-
-data "aws_iam_policy_document" "cdo_caller_trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy" "cdo_caller" {
-  name   = "cdo-caller-policy"
-  role   = aws_iam_role.cdo_caller.id
-  policy = data.aws_iam_policy_document.cdo_caller.json
-}
-
-data "aws_iam_policy_document" "cdo_caller" {
-  statement {
-    actions   = ["execute-api:Invoke"]
-    resources = ["*"]
-  }
-}
-
-

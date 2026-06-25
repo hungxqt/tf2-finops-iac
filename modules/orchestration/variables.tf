@@ -14,16 +14,6 @@ variable "scheduler_expression" {
   default     = "rate(24 hours)"
 }
 
-variable "step_functions_role_arn" {
-  type        = string
-  description = "ARN of the IAM role for Step Functions execution"
-}
-
-variable "scheduler_role_arn" {
-  type        = string
-  description = "ARN of the IAM role for EventBridge Scheduler triggering Step Functions"
-}
-
 variable "lambda_function_arns" {
   type        = map(string)
   description = "Map of Lambda function/alias ARNs for Step Functions state transitions"
@@ -78,5 +68,12 @@ variable "ai_poll_interval_seconds" {
   default     = 10
 }
 
+variable "cloudwatch_log_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for CloudWatch Log Group encryption"
+}
 
-
+variable "scheduler_kms_key_arn" {
+  type        = string
+  description = "KMS Customer Managed Key (CMK) ARN for EventBridge Scheduler encryption"
+}

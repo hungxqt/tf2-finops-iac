@@ -17,14 +17,14 @@ resource "aws_ecr_repository" "ai_engine" {
 # CloudWatch Log Groups
 resource "aws_cloudwatch_log_group" "request" {
   name              = "/aws/lambda/${var.project_name}-${var.environment}-ai-request"
-  retention_in_days = 14
+  retention_in_days = 365
   kms_key_id        = length(var.kms_key_arns) > 0 ? var.kms_key_arns[0] : null
   tags              = var.tags
 }
 
 resource "aws_cloudwatch_log_group" "worker" {
   name              = "/aws/lambda/${var.project_name}-${var.environment}-ai-worker"
-  retention_in_days = 14
+  retention_in_days = 365
   kms_key_id        = length(var.kms_key_arns) > 0 ? var.kms_key_arns[0] : null
   tags              = var.tags
 }
@@ -80,6 +80,14 @@ resource "aws_iam_policy" "request" {
           "logs:PutLogEvents"
         ]
         Resource = ["${aws_cloudwatch_log_group.request.arn}:*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords"
+        ]
+        Resource = ["*"]
       }
       ],
       length(var.secret_arns) > 0 ? [
@@ -214,12 +222,15 @@ resource "aws_iam_role_policy_attachment" "worker" {
 
 # Request Lambda Container Function
 resource "aws_lambda_function" "request" {
+  # checkov:skip=CKV_AWS_272: "Code signing is not supported for container image Lambda packages (package_type = Image)"
+  # checkov:skip=CKV_AWS_116: "Lambda DLQ is not used because this function is invoked synchronously by Step Functions"
   function_name = "${var.project_name}-${var.environment}-ai-request"
   role          = aws_iam_role.request.arn
   package_type  = "Image"
   image_uri     = var.request_image_uri
   timeout       = var.request_timeout_seconds
   publish       = true
+  kms_key_arn   = length(var.kms_key_arns) > 0 ? var.kms_key_arns[0] : null
 
   reserved_concurrent_executions = var.request_reserved_concurrency
 
@@ -255,12 +266,15 @@ resource "aws_lambda_alias" "request" {
 
 # Worker Lambda Container Function
 resource "aws_lambda_function" "worker" {
+  # checkov:skip=CKV_AWS_272: "Code signing is not supported for container image Lambda packages (package_type = Image)"
+  # checkov:skip=CKV_AWS_116: "Lambda DLQ is not used because this function is triggered by SQS which has its own SQS DLQ"
   function_name = "${var.project_name}-${var.environment}-ai-worker"
   role          = aws_iam_role.worker.arn
   package_type  = "Image"
   image_uri     = var.worker_image_uri
   timeout       = var.worker_timeout_seconds
   publish       = true
+  kms_key_arn   = length(var.kms_key_arns) > 0 ? var.kms_key_arns[0] : null
 
   reserved_concurrent_executions = var.worker_reserved_concurrency
 

@@ -40,3 +40,40 @@ variable "tags" {
   description = "Common resource tags"
   default     = {}
 }
+
+variable "cloudfront_acm_certificate_arn" {
+  type        = string
+  description = "The ARN of the ACM certificate in us-east-1 for CloudFront custom domain"
+}
+
+variable "cloudfront_aliases" {
+  type        = list(string)
+  description = "List of domain aliases (hostnames) for the CloudFront distribution"
+}
+
+variable "dashboard_geo_restriction_type" {
+  type        = string
+  description = "CloudFront geo restriction type (none, whitelist, blacklist)"
+  default     = "blacklist"
+}
+
+variable "dashboard_geo_restriction_locations" {
+  type        = list(string)
+  description = "List of ISO 3166-1-alpha-2 country codes for geo restriction"
+  default     = ["CU", "IR", "KP", "SY"]
+}
+
+variable "s3_logging_bucket_id" {
+  type        = string
+  description = "The ID of the S3 bucket for access logs"
+}
+
+variable "dashboard_assets_replica_bucket_arn" {
+  type        = string
+  description = "ARN of the replica S3 bucket for dashboard assets"
+}
+
+variable "dashboard_data_replica_bucket_arn" {
+  type        = string
+  description = "ARN of the replica S3 bucket for dashboard data"
+}

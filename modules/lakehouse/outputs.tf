@@ -42,3 +42,9 @@ output "ddb_kms_key_arn" {
   description = "The ARN of the KMS key for DynamoDB encryption"
   value       = aws_kms_key.ddb.arn
 }
+
+output "logging_bucket_name" {
+  description = "The name of the S3 bucket for access logging"
+  value       = aws_s3_bucket.logging.id
+}
+

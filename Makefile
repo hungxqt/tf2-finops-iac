@@ -12,7 +12,7 @@ lint:
 	tflint --recursive
 
 test:
-	cd lambda_src && go test ./...
+	cd lambda_src && python -m pytest
 
 security:
 	trivy config .

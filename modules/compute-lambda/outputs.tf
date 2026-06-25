@@ -18,7 +18,13 @@ output "audit_writer_function_name" {
   value       = aws_lambda_function.workers["audit_writer"].function_name
 }
 
-output "ai_client_function_name" {
-  description = "The function name of the AI client lambda"
-  value       = aws_lambda_function.workers["ai_client"].function_name
+output "lambda_security_group_id" {
+  description = "The security group ID of the Lambda workers"
+  value       = aws_security_group.lambda.id
 }
+
+output "lambda_dlq_arn" {
+  description = "The ARN of the Lambda worker DLQ"
+  value       = aws_sqs_queue.lambda_dlq.arn
+}
+

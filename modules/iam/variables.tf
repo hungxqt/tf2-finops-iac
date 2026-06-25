@@ -8,7 +8,6 @@ variable "environment" {
   description = "The environment name (e.g., sandbox, staging, prod)"
 }
 
-
 variable "lakehouse_bucket_arn" {
   type        = string
   description = "ARN of the lakehouse S3 bucket"
@@ -31,12 +30,6 @@ variable "kms_key_arns" {
   default     = []
 }
 
-variable "ai_engine_secret_arn" {
-  type        = string
-  description = "ARN of the Secrets Manager secret containing AI client endpoint/token credentials"
-  default     = ""
-}
-
 variable "containment_apply_enabled" {
   type        = bool
   description = "Whether automatic containment action apply is enabled"
@@ -55,3 +48,8 @@ variable "queue_arns" {
   default     = []
 }
 
+variable "sns_topic_arns" {
+  type        = list(string)
+  description = "List of SNS topic ARNs for router alert delivery"
+  default     = []
+}

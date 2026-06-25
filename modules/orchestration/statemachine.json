@@ -7,11 +7,10 @@
       "Resource": "${state_lambda_arn}",
       "Parameters": {
         "operation": "prepare",
-        "account_id.$": "$.account_id",
-        "is_ad_hoc.$": "$.is_ad_hoc",
+        "input.$": "$",
         "ai_contract_version": "${ai_engine_contract_version}",
-        "ai_retry_max": "${ai_poll_max_attempts}",
-        "ai_poll_interval": "${ai_poll_interval_seconds}"
+        "ai_retry_max": "6",
+        "ai_poll_interval": "10"
       },
       "ResultPath": "$",
       "Next": "LoadAccountPolicy",
@@ -436,7 +435,7 @@
           "Next": "SetTelemetryForceDryRun"
         }
       ],
-      "Default": "SubmitAIRequest"
+      "Default": "BuildDetectRequest"
     },
     "SetTelemetryForceDryRun": {
       "Type": "Pass",
@@ -461,28 +460,49 @@
         "force_dry_run": true
       },
       "ResultPath": "$",
-      "Next": "SubmitAIRequest"
+      "Next": "BuildDetectRequest"
     },
-    "SubmitAIRequest": {
+    "BuildDetectRequest": {
+      "Type": "Pass",
+      "Parameters": {
+        "path": "/v1/detect",
+        "method": "POST",
+        "tenant_id.$": "$.tenant_id",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.correlation_id",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "body": {
+          "data_source_type": "RAW_JSON",
+          "is_ad_hoc.$": "$.is_ad_hoc",
+          "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
+          "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items",
+          "business_context": {
+            "linked_account_id.$": "$.account_id",
+            "traffic_volume": 100000,
+            "traffic_source": "Mixed",
+            "campaign_flag": false,
+            "load_test_flag": false,
+            "migration_flag": false
+          }
+        }
+      },
+      "ResultPath": "$.ai_detect_request",
+      "Next": "InvokeDetect"
+    },
+    "InvokeDetect": {
       "Type": "Task",
       "Resource": "${ai_request_lambda_arn}",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "correlation_id.$": "$.correlation_id",
-        "account_id.$": "$.account_id",
-        "cost_period.$": "$.cost_period",
-        "execution_date.$": "$.execution_date",
-        "tenant_id.$": "$.tenant_id",
-        "is_ad_hoc.$": "$.is_ad_hoc",
-        "ai_contract_version.$": "$.ai_contract_version",
-        "force_dry_run.$": "$.force_dry_run",
-        "state.$": "$.state",
-        "account_policy.$": "$.account_policy",
-        "ingestion.$": "$.ingestion",
-        "normalized.$": "$.normalized"
+        "path.$": "$.ai_detect_request.path",
+        "method.$": "$.ai_detect_request.method",
+        "tenant_id.$": "$.ai_detect_request.tenant_id",
+        "correlation_id.$": "$.ai_detect_request.correlation_id",
+        "idempotency_key.$": "$.ai_detect_request.idempotency_key",
+        "ai_contract_version.$": "$.ai_detect_request.ai_contract_version",
+        "body.$": "$.ai_detect_request.body"
       },
-      "ResultPath": "$.ai",
-      "Next": "AIRequestDecision",
+      "ResultPath": "$.ai_detect_response",
+      "Next": "EvaluateDetectResponse",
       "TimeoutSeconds": 60,
       "Retry": [
         {
@@ -506,79 +526,65 @@
         }
       ]
     },
-    "AIRequestDecision": {
+    "EvaluateDetectResponse": {
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.ai.status",
-          "StringEquals": "ACCEPTED",
-          "Next": "WaitForAIResult"
+          "Variable": "$.ai_detect_response.success",
+          "BooleanEquals": false,
+          "Next": "FailClosed"
         },
         {
-          "Variable": "$.ai.status",
-          "StringEquals": "PROCESSING",
-          "Next": "WaitForAIResult"
+          "Variable": "$.ai_detect_response.data_confidence",
+          "StringEquals": "LOW",
+          "Next": "FailClosed"
         },
         {
-          "Variable": "$.ai.status",
-          "StringEquals": "COMPLETED",
-          "Next": "ValidateAIResult"
+          "And": [
+            {
+              "Variable": "$.ai_detect_response.success",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.ai_detect_response.anomalies_detected",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.ai_detect_response.anomalies_list",
+              "IsPresent": true
+            }
+          ],
+          "Next": "InvokeDecide"
         }
       ],
-      "Default": "FailClosed"
+      "Default": "MarkRunComplete"
     },
-    "WaitForAIResult": {
-      "Type": "Wait",
-      "SecondsPath": "$.ai.retry_after_seconds",
-      "Next": "IncrementAIPollRetry"
-    },
-    "IncrementAIPollRetry": {
-      "Type": "Pass",
-      "Parameters": {
-        "count.$": "States.MathAdd($.ai_retry.count, 1)",
-        "max.$": "$.ai_retry.max"
-      },
-      "ResultPath": "$.ai_retry",
-      "Next": "CheckAIPollRetryExceeded"
-    },
-    "CheckAIPollRetryExceeded": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.ai_retry.count",
-          "NumericGreaterThanEquals": 6,
-          "Next": "SetAIPollTimeoutError"
-        }
-      ],
-      "Default": "PollAIResult"
-    },
-    "SetAIPollTimeoutError": {
-      "Type": "Pass",
-      "Result": {
-        "Error": "AIPollTimeout",
-        "Cause": "AI Engine detection polling exceeded maximum attempts."
-      },
-      "ResultPath": "$.error",
-      "Next": "FailClosed"
-    },
-    "PollAIResult": {
+    "InvokeDecide": {
       "Type": "Task",
-      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Resource": "${ai_request_lambda_arn}",
       "Parameters": {
-        "TableName": "${results_table_name}",
-        "Key": {
-          "audit_id": {
-            "S.$": "$.ai.audit_id"
-          }
+        "path": "/v1/decide",
+        "method": "POST",
+        "tenant_id.$": "$.tenant_id",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.correlation_id",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "body": {
+          "correlation_id.$": "$.correlation_id",
+          "idempotency_key.$": "$.correlation_id",
+          "dry_run_mode.$": "$.force_dry_run",
+          "anomaly_context.$": "$.ai_detect_response.anomalies_list[0]"
         }
       },
-      "ResultPath": "$.ai_db_result",
-      "Next": "CheckDBResultExists",
+      "ResultPath": "$.ai_decide_response",
+      "Next": "CacheRollbackPayload",
+      "TimeoutSeconds": 60,
       "Retry": [
         {
           "ErrorEquals": [
-            "DynamoDb.SdkClientException",
-            "DynamoDb.AmazonDynamoDBException"
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
           ],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -595,82 +601,35 @@
         }
       ]
     },
-    "CheckDBResultExists": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.ai_db_result.Item",
-          "IsPresent": true,
-          "Next": "FormatAIResult"
+    "CacheRollbackPayload": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${rollback_cache_table_name}",
+        "Item": {
+          "anomaly_id": {
+            "S.$": "$.ai_detect_response.anomalies_list[0].anomaly_id"
+          },
+          "rollback_payload": {
+            "S.$": "States.JsonToString($.ai_decide_response.rollback_payload)"
+          }
         }
-      ],
-      "Default": "SetDBResultProcessing"
+      },
+      "ResultPath": "$.cache_rollback_result",
+      "Next": "FormatDecideResult"
     },
-    "FormatAIResult": {
+    "FormatDecideResult": {
       "Type": "Pass",
       "Parameters": {
-        "audit_id.$": "$.ai.audit_id",
-        "status.$": "$.ai_db_result.Item.status.S",
-        "retry_after_seconds.$": "$.ai.retry_after_seconds",
-        "anomaly_found.$": "$.ai_db_result.Item.anomaly_found.BOOL",
-        "required_fields_valid.$": "$.ai_db_result.Item.required_fields_valid.BOOL",
-        "recommended_containment_mode.$": "$.ai_db_result.Item.recommended_containment_mode.S",
-        "raw_result.$": "$.ai_db_result.Item.raw_result.S"
+        "anomaly_found": true,
+        "required_fields_valid": true,
+        "recommended_containment_mode.$": "$.ai_decide_response.action_plan[0].action",
+        "anomaly_id.$": "$.ai_detect_response.anomalies_list[0].anomaly_id",
+        "severity.$": "$.ai_detect_response.anomalies_list[0].severity",
+        "confidence_score.$": "$.ai_detect_response.anomalies_list[0].confidence_score"
       },
       "ResultPath": "$.ai",
-      "Next": "AIResultDecision"
-    },
-    "SetDBResultProcessing": {
-      "Type": "Pass",
-      "Parameters": {
-        "audit_id.$": "$.ai.audit_id",
-        "status": "PROCESSING",
-        "retry_after_seconds.$": "$.ai.retry_after_seconds"
-      },
-      "ResultPath": "$.ai",
-      "Next": "AIResultDecision"
-    },
-    "AIResultDecision": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.ai.status",
-          "StringEquals": "COMPLETED",
-          "Next": "ValidateAIResult"
-        },
-        {
-          "Variable": "$.ai.status",
-          "StringEquals": "PROCESSING",
-          "Next": "WaitForAIResult"
-        },
-        {
-          "Variable": "$.ai.status",
-          "StringEquals": "ACCEPTED",
-          "Next": "WaitForAIResult"
-        },
-        {
-          "Variable": "$.ai.status",
-          "StringEquals": "RATE_LIMITED",
-          "Next": "WaitForAIResult"
-        }
-      ],
-      "Default": "FailClosed"
-    },
-    "ValidateAIResult": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.ai.required_fields_valid",
-          "BooleanEquals": false,
-          "Next": "FailClosed"
-        },
-        {
-          "Variable": "$.ai.anomaly_found",
-          "BooleanEquals": true,
-          "Next": "RouteAlert"
-        }
-      ],
-      "Default": "MarkRunComplete"
+      "Next": "RouteAlert"
     },
     "RouteAlert": {
       "Type": "Task",
@@ -834,6 +793,18 @@
                 {
                   "Variable": "$.ai.recommended_containment_mode",
                   "StringEquals": "apply"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "auto-shutdown"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "quota-cap"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "time-gated-countdown"
                 }
               ]
             }
@@ -860,6 +831,10 @@
                   {
                     "Variable": "$.ai.recommended_containment_mode",
                     "StringEquals": "suggest"
+                  },
+                  {
+                    "Variable": "$.ai.recommended_containment_mode",
+                    "StringEquals": "tag-for-review"
                   }
                 ]
               }
@@ -886,6 +861,10 @@
                 {
                   "Variable": "$.ai.recommended_containment_mode",
                   "StringEquals": "dry-run"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "tag-for-review"
                 }
               ]
             }
@@ -928,6 +907,10 @@
                 {
                   "Variable": "$.ai.recommended_containment_mode",
                   "StringEquals": "dry-run"
+                },
+                {
+                  "Variable": "$.ai.recommended_containment_mode",
+                  "StringEquals": "tag-for-review"
                 }
               ]
             }
@@ -968,7 +951,7 @@
       "Type": "Task",
       "Resource": "${containment_worker_lambda_arn}",
       "ResultPath": "$.containment",
-      "Next": "WritePostActionAudit",
+      "Next": "ReportVerifyResult",
       "Retry": [
         {
           "ErrorEquals": [
@@ -988,6 +971,56 @@
           ],
           "ResultPath": "$.containment_error",
           "Next": "WriteContainmentFailureAudit"
+        }
+      ]
+    },
+    "ReportVerifyResult": {
+      "Type": "Task",
+      "Resource": "${ai_request_lambda_arn}",
+      "Parameters": {
+        "path": "/v1/verify",
+        "method": "POST",
+        "tenant_id.$": "$.tenant_id",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.correlation_id",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "body": {
+          "correlation_id.$": "$.correlation_id",
+          "idempotency_key.$": "$.correlation_id",
+          "dry_run_mode.$": "$.force_dry_run",
+          "action_executed": {
+            "action.$": "$.ai.recommended_containment_mode",
+            "target.$": "$.ai_detect_response.anomalies_list[0].resource_id",
+            "status": "COMPLETED"
+          },
+          "post_telemetry_window": {
+            "data_source_type": "RAW_JSON",
+            "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
+            "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items"
+          }
+        }
+      },
+      "ResultPath": "$.verify_result",
+      "Next": "WritePostActionAudit",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "FailClosed"
         }
       ]
     },

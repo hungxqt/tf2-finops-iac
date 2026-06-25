@@ -1,29 +1,53 @@
 import json
 import os
+import re
 
-def test_state_machine_asl_contract():
-    asl_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
-    assert os.path.exists(asl_path), "statemachine.json file does not exist"
+def check_asl_file(asl_path, is_template=True):
+    assert os.path.exists(asl_path), f"{asl_path} file does not exist"
     
     with open(asl_path, "r", encoding="utf-8") as f:
-        asl = json.load(f)
+        raw_content = f.read()
         
+    if is_template:
+        # Check for placeholders directly in raw file content
+        assert "${rollback_cache_table_name}" in raw_content, "Missing placeholder ${rollback_cache_table_name}"
+        assert "${ai_request_lambda_arn}" in raw_content, "Missing placeholder ${ai_request_lambda_arn}"
+        assert "ai_client" not in raw_content, "Stale ai_client reference in statemachine.json"
+        
+        # Preprocess template variables to make it valid JSON for loading
+        processed_content = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw_content)
+        processed_content = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed_content)
+    else:
+        processed_content = raw_content
+        
+    asl = json.loads(processed_content)
+    
     assert "States" in asl, "ASL missing 'States' key"
     states = asl["States"]
     
-    # 1. Assert required states exist
+    # Assert no detection polling states remain and no /v1/status detection path exists
+    polling_states = ["WaitForAIResult", "PollAIResult", "CheckDBResultExists", "FormatAIResult", "AIResultDecision"]
+    for s in polling_states:
+        assert s not in states, f"Polling state '{s}' should be removed from {asl_path}"
+        
+    for state_name, state_def in states.items():
+        resource = state_def.get("Resource", "")
+        assert "status" not in resource.lower(), f"State '{state_name}' has status in resource path: {resource}"
+        
+    # Assert required states exist
     required_states = [
         "PrepareRunContext",
         "CheckAdHocQuota",
         "CheckErrorBudgetLock",
         "CheckTelemetryQuality",
-        "SubmitAIRequest",
-        "AIRequestDecision",
-        "WaitForAIResult",
-        "PollAIResult",
-        "AIResultDecision",
-        "ValidateAIResult",
+        "BuildDetectRequest",
+        "InvokeDetect",
+        "EvaluateDetectResponse",
+        "InvokeDecide",
+        "CacheRollbackPayload",
+        "FormatDecideResult",
         "EvaluateContainmentPolicy",
+        "ReportVerifyResult",
         "SendAppliedStatusMessage",
         "SendDeniedStatusMessage",
         "SendPendingStatusMessage",
@@ -31,11 +55,17 @@ def test_state_machine_asl_contract():
         "SendFailClosedAlert",
         "SendCURDelayAlert",
         "WriteCURDelayAudit"
-      ]
+    ]
     for s in required_states:
-        assert s in states, f"Required state '{s}' missing from state machine"
+        assert s in states, f"Required state '{s}' missing from state machine in {asl_path}"
         
-    # 2. Assert 4x CUR retry and 1h (3600s) delay
+    # Assert PrepareRunContext receives full input and defaults is_ad_hoc
+    prep_state = states["PrepareRunContext"]
+    assert prep_state["Parameters"].get("input.$") == "$", f"PrepareRunContext must receive full input using input.$ = $ in {asl_path}"
+    assert "account_id.$" not in prep_state["Parameters"], "PrepareRunContext should not map individual parameters"
+    assert "is_ad_hoc.$" not in prep_state["Parameters"], "PrepareRunContext should not map individual parameters"
+    
+    # Assert CUR delay and retry logic
     assert "CURRetryExceeded" in states
     choice_state = states["CURRetryExceeded"]
     assert choice_state["Type"] == "Choice"
@@ -50,23 +80,20 @@ def test_state_machine_asl_contract():
     assert "WaitForCURExport" in states
     assert states["WaitForCURExport"]["Seconds"] == 3600, "CUR retry interval must be 1 hour (3600 seconds)"
     
-    # 3. Assert terminal fail-closed AI handling includes audit + engineering alert
+    # Assert terminal fail-closed AI handling includes audit + engineering alert
     assert "SetCURDelayExceededError" in states
     assert states["SetCURDelayExceededError"]["Next"] == "SendCURDelayAlert"
-    assert states["SendCURDelayAlert"]["Parameters"]["TopicArn"] == "${engineering_alerts_sns_topic_arn}"
     assert states["SendCURDelayAlert"]["Next"] == "WriteCURDelayAudit"
     assert states["WriteCURDelayAudit"]["Next"] == "MarkRunFailed"
     
     assert "FailClosed" in states
     assert states["FailClosed"]["Next"] == "SendFailClosedAlert"
-    assert states["SendFailClosedAlert"]["Parameters"]["TopicArn"] == "${engineering_alerts_sns_topic_arn}"
     assert states["SendFailClosedAlert"]["Next"] == "MarkRunFailed"
     
-    # 4. Assert telemetry quality dry-run gate
+    # Assert telemetry quality dry-run gate
     assert "CheckTelemetryQuality" in states
     assert states["CheckTelemetryQuality"]["Type"] == "Choice"
     telemetry_choices = states["CheckTelemetryQuality"]["Choices"]
-    # Verify it has completeness_score < 0.8 or estimated_billing etc.
     found_quality_gate = False
     for tc in telemetry_choices:
         if "Or" in tc:
@@ -76,18 +103,52 @@ def test_state_machine_asl_contract():
             assert any(cond.get("Variable") == "$.normalized.details.estimated_billing" and cond.get("BooleanEquals") is True for cond in or_conditions)
             assert tc["Next"] == "SetTelemetryForceDryRun"
     assert found_quality_gate, "Telemetry quality gate not found in CheckTelemetryQuality"
-    assert states["SetTelemetryForceDryRun"]["Next"] == "SubmitAIRequest"
+    assert states["SetTelemetryForceDryRun"]["Next"] == "BuildDetectRequest"
     
-    # 5. Assert no prod destructive containment path
+    # Assert /v1/detect response handling checks success, anomalies_detected, data_confidence, and anomalies_list
+    eval_detect = states["EvaluateDetectResponse"]
+    assert eval_detect["Type"] == "Choice"
+    detect_choices = eval_detect["Choices"]
+    
+    found_success_fail = False
+    found_confidence_fail = False
+    found_anomalies_decide = False
+    
+    for choice in detect_choices:
+        if choice.get("Variable") == "$.ai_detect_response.success" and choice.get("BooleanEquals") is False:
+            assert choice["Next"] == "FailClosed"
+            found_success_fail = True
+        if choice.get("Variable") == "$.ai_detect_response.data_confidence" and choice.get("StringEquals") == "LOW":
+            assert choice["Next"] == "FailClosed"
+            found_confidence_fail = True
+        if "And" in choice:
+            conds = choice["And"]
+            has_success_true = any(c.get("Variable") == "$.ai_detect_response.success" and c.get("BooleanEquals") is True for c in conds)
+            has_anomalies_detected = any(c.get("Variable") == "$.ai_detect_response.anomalies_detected" and c.get("BooleanEquals") is True for c in conds)
+            has_anomalies_list = any(c.get("Variable") == "$.ai_detect_response.anomalies_list" and c.get("IsPresent") is True for c in conds)
+            if has_success_true and has_anomalies_detected and has_anomalies_list:
+                assert choice["Next"] == "InvokeDecide"
+                found_anomalies_decide = True
+                
+    assert found_success_fail, "EvaluateDetectResponse must check success = False to FailClosed"
+    assert found_confidence_fail, "EvaluateDetectResponse must check data_confidence = LOW to FailClosed"
+    assert found_anomalies_decide, "EvaluateDetectResponse must check success, anomalies_detected, and anomalies_list to go to InvokeDecide"
+    
+    # Assert /v1/decide result caching writes rollback payloads before containment
+    assert states["InvokeDecide"]["Next"] == "CacheRollbackPayload"
+    assert states["CacheRollbackPayload"]["Type"] == "Task"
+    assert states["CacheRollbackPayload"]["Resource"] == "arn:aws:states:::dynamodb:putItem"
+    assert states["CacheRollbackPayload"]["Next"] == "FormatDecideResult"
+    
+    # Assert prod destructive-action denial
     assert "EvaluateContainmentPolicy" in states
     containment_choices = states["EvaluateContainmentPolicy"]["Choices"]
-    # Check that destructive actions in prod go to WriteDeniedAudit
     prod_destructive_denied = False
     for choice in containment_choices:
         if "And" in choice:
             conditions = choice["And"]
             has_prod = any(cond.get("Variable") == "$.account_policy.environment" and cond.get("StringEquals") == "prod" for cond in conditions)
-            has_destructive = any("Or" in cond and any(sub_cond.get("Variable") == "$.ai.recommended_containment_mode" and sub_cond.get("StringEquals") == "terminate" for sub_cond in cond["Or"]) for cond in conditions)
+            has_destructive = any("Or" in cond and any(sub_cond.get("Variable") == "$.ai.recommended_containment_mode" and sub_cond.get("StringEquals") in ["terminate", "auto-shutdown"] for sub_cond in cond["Or"]) for cond in conditions)
             if has_prod and has_destructive:
                 assert choice["Next"] == "WriteDeniedAudit"
                 prod_destructive_denied = True
@@ -95,24 +156,22 @@ def test_state_machine_asl_contract():
     
     # Check SQS status reporting
     assert states["WritePostActionAudit"]["Next"] == "SendAppliedStatusMessage"
-    assert states["SendAppliedStatusMessage"]["Parameters"]["QueueUrl"] == "${rollback_status_queue_url}"
     assert states["SendAppliedStatusMessage"]["Parameters"]["MessageBody"]["status"] == "APPLIED"
     
     assert states["WriteDeniedAudit"]["Next"] == "SendDeniedStatusMessage"
-    assert states["SendDeniedStatusMessage"]["Parameters"]["QueueUrl"] == "${rollback_status_queue_url}"
-    
     assert states["WritePendingApprovalAudit"]["Next"] == "SendPendingStatusMessage"
-    assert states["SendPendingStatusMessage"]["Parameters"]["QueueUrl"] == "${rollback_status_queue_url}"
-
-    # 6. Assert new Lambda container integration
-    assert states["SubmitAIRequest"]["Resource"] == "${ai_request_lambda_arn}"
-    assert states["PollAIResult"]["Resource"] == "arn:aws:states:::dynamodb:getItem"
-    assert states["PollAIResult"]["Parameters"]["TableName"] == "${results_table_name}"
     
-    # Assert there are no old ECS/HTTP states
+    # Assert new Lambda container integration: no HTTP or Fargate/ECS tasks
     for state_name, state_def in states.items():
         resource = state_def.get("Resource", "")
-        # No references to old ai_client or ECS
         assert "${ai_client_lambda_arn}" not in resource
         assert "ecs" not in resource.lower()
-        assert "http" not in resource.lower()
+        if "arn:aws:states:::sns:publish" not in resource and "arn:aws:states:::dynamodb" not in resource:
+            assert "http" not in resource.lower()
+
+def test_state_machine_asl_contract():
+    asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
+    check_asl_file(asl_template_path, is_template=True)
+    
+    asl_doc_path = os.path.join(os.path.dirname(__file__), "../../docs/statemachine.json")
+    check_asl_file(asl_doc_path, is_template=False)

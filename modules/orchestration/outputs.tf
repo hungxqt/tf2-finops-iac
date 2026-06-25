@@ -19,6 +19,7 @@ output "dynamodb_table_names" {
     account_policy  = aws_dynamodb_table.account_policy.name
     error_budget    = aws_dynamodb_table.error_budget.name
     ai_results      = aws_dynamodb_table.ai_results.name
+    rollback_cache  = aws_dynamodb_table.rollback_cache.name
   }
 }
 
@@ -33,6 +34,7 @@ output "dynamodb_table_arns" {
     account_policy  = aws_dynamodb_table.account_policy.arn
     error_budget    = aws_dynamodb_table.error_budget.arn
     ai_results      = aws_dynamodb_table.ai_results.arn
+    rollback_cache  = aws_dynamodb_table.rollback_cache.arn
   }
 }
 
@@ -70,4 +72,15 @@ output "audit_bucket_name" {
   description = "The passed audit bucket name"
   value       = var.audit_bucket_name
 }
+
+output "step_functions_role_arn" {
+  description = "The ARN of the Step Functions execution role"
+  value       = aws_iam_role.step_functions.arn
+}
+
+output "scheduler_role_arn" {
+  description = "The ARN of the EventBridge Scheduler execution role"
+  value       = aws_iam_role.scheduler.arn
+}
+
 
