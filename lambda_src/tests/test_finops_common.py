@@ -76,6 +76,8 @@ def test_parse_date():
     assert dt.year == 2026
     assert dt.month == 6
     assert dt.day == 24
+    assert dt.tzinfo is not None
+    assert dt.utcoffset().total_seconds() == 0
 
     with pytest.raises(ValueError):
         finops_common.parse_date("invalid-date")

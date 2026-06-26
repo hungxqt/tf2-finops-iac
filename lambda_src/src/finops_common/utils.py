@@ -75,7 +75,7 @@ def parse_date(date_str: str) -> datetime:
     if not date_str:
         return utc_now()
     try:
-        return datetime.strptime(date_str, "%Y-%m-%d")
+        return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError as e:
         raise ValueError(f"invalid date format: {date_str}, expected YYYY-MM-DD") from e
 

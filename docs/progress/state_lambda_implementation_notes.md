@@ -1,37 +1,37 @@
-# Ghi chú triển khai State Lambda Idempotency
+# State Lambda Idempotency Implementation Notes
 
-## Mục tiêu
+## Goal
 
-Thay đổi này căn chỉnh State Lambda trong `tf2-finops-iac` với hợp đồng AI API, Telemetry, và Deployment đã ký. Trọng tâm là đưa idempotency hot path về đúng DynamoDB table `finops-idempotency-{environment}`, dùng TTL 24 giờ, và loại bỏ phụ thuộc vào standalone `services/state-lambda` cũ ở workspace gốc.
+This change aligns the State Lambda in `tf2-finops-iac` with the signed AI API, Telemetry, and Deployment contracts. The focus is moving the idempotency hot path to the required DynamoDB table `finops-idempotency-{environment}`, using a 24-hour TTL, and removing reliance on the old standalone `services/state-lambda` implementation in the root workspace.
 
-## Vì sao cần thay đổi
+## Why this changed
 
-Trước thay đổi này, state worker đã có hướng đi đúng vì chạy nội bộ trong Step Functions và dùng DynamoDB. Tuy nhiên vẫn còn lệch contract ở vài điểm quan trọng:
+Before this change, the state worker was directionally correct because it ran inside Step Functions and used DynamoDB. However, it still diverged from the contracts in several important ways:
 
-- Tên bảng run-state chưa theo pattern `finops-idempotency-{env}`.
-- Idempotency key chưa theo format contract `{tenant_id}:{billing_period_date}:{batch_type}`.
-- Bảng run-state chưa bật TTL `ttl_expiry` cho lock 24 giờ.
-- Chưa xử lý rõ trường hợp cùng idempotency key nhưng payload hash khác nhau.
-- State worker chưa nhận `ERROR_BUDGET_TABLE_NAME` để kiểm tra error-budget lock và ép dry-run.
-- Standalone `services/state-lambda` cũ dùng luồng riêng và S3 store, không phù hợp với kiến trúc IAC hiện tại.
+- The run-state table name did not follow the `finops-idempotency-{env}` pattern.
+- The idempotency key did not follow the contract format `{tenant_id}:{billing_period_date}:{batch_type}`.
+- The run-state table did not enable `ttl_expiry` for the 24-hour lock.
+- The worker did not clearly handle the same idempotency key with a different payload hash.
+- The state worker did not receive `ERROR_BUDGET_TABLE_NAME` to check error-budget lock state and force dry-run.
+- The old standalone `services/state-lambda` used a separate flow and S3 store that no longer matched the current IaC architecture.
 
-## Thay đổi chính
+## Main changes
 
 ### State worker
 
-File chính: `lambda_src/src/workers/state/handler.py`
+Main file: `lambda_src/src/workers/state/handler.py`
 
-State worker hiện hỗ trợ các operation sau:
+The state worker now supports these operations:
 
-- `prepare`: tạo run context, tenant ID, batch type, và idempotency key chuẩn contract.
-- `check`: ghi lock `IN_PROGRESS` nếu chưa tồn tại; trả trạng thái cũ nếu đã có lock.
-- `complete`: cập nhật trạng thái `COMPLETED`.
-- `failed`: cập nhật trạng thái `FAILED`.
-- `fail_contract_check`: cập nhật trạng thái `FAILED_CONTRACT_CHECK`.
-- `check_quota`: giới hạn tối đa 5 lượt ad-hoc mỗi tenant/ngày.
-- `check_error_budget`: đọc bảng error budget và ép `force_dry_run = true` khi tenant bị lock.
+- `prepare`: creates run context, tenant ID, batch type, and a contract-compliant idempotency key.
+- `check`: writes an `IN_PROGRESS` lock when missing; returns the existing status when the lock already exists.
+- `complete`: updates status to `COMPLETED`.
+- `failed`: updates status to `FAILED`.
+- `fail_contract_check`: updates status to `FAILED_CONTRACT_CHECK`.
+- `check_quota`: limits ad-hoc runs to 5 per tenant per day.
+- `check_error_budget`: reads the error budget table and sets `force_dry_run = true` when the tenant is locked.
 
-Các field được ghi vào DynamoDB gồm:
+The DynamoDB item stores these fields:
 
 - `idempotency_key`
 - `payload_sha256`
@@ -44,30 +44,30 @@ Các field được ghi vào DynamoDB gồm:
 - `created_at`
 - `updated_at`
 - `ttl_expiry`
-- `failure_code` nếu có lỗi
+- `failure_code` when present
 
-Nếu cùng `idempotency_key` nhưng `payload_sha256` khác nhau, state worker trả trạng thái `ERR_IDEMPOTENCY_MISMATCH` để ngăn xử lý trùng sai payload.
+When the same `idempotency_key` is reused with a different `payload_sha256`, the state worker returns `ERR_IDEMPOTENCY_MISMATCH` to prevent processing the wrong duplicate payload.
 
 ### Shared helper
 
-Các helper trong `lambda_src/src/finops_common/utils.py` được cập nhật để dùng chung:
+The helpers in `lambda_src/src/finops_common/utils.py` were updated for shared use:
 
 - `utc_now()`
 - `iso_utc_now()`
 - `deterministic_tenant_id(account_id)`
 - `idempotency_key(tenant_id, billing_period_date, batch_type)`
 
-`FakeDynamoDB` trong `lambda_src/src/finops_common/aws_clients.py` cũng được mở rộng để test được conditional write và duplicate state mà không cần gọi AWS thật.
+`FakeDynamoDB` in `lambda_src/src/finops_common/aws_clients.py` was also extended so tests can cover conditional writes and duplicate state without calling real AWS.
 
 ### Terraform
 
-`modules/orchestration/main.tf` đổi bảng run-state vật lý thành:
+`modules/orchestration/main.tf` changes the physical run-state table to:
 
 ```hcl
 name = "finops-idempotency-${var.environment}"
 ```
 
-Bảng này bật TTL:
+The table enables TTL:
 
 ```hcl
 ttl {
@@ -76,50 +76,50 @@ ttl {
 }
 ```
 
-`modules/compute-lambda/main.tf` thêm biến môi trường cho state worker:
+`modules/compute-lambda/main.tf` adds the state worker environment variable:
 
 ```hcl
 ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")
 ```
 
-Các environment root `sandbox`, `staging`, và `prod` được cập nhật để IAM pre-wiring trỏ đúng bảng `finops-idempotency-{environment}`.
+The `sandbox`, `staging`, and `prod` environment roots were updated so IAM pre-wiring points to the correct `finops-idempotency-{environment}` table.
 
-## Legacy service đã loại bỏ
+## Legacy service removed
 
-Thư mục standalone sau đã bị xóa khỏi workspace gốc vì không còn là implementation path chính:
+The standalone directory below was removed from the root workspace because it is no longer the primary implementation path:
 
 ```text
 services/state-lambda/
 ```
 
-Lý do loại bỏ:
+Removal reasons:
 
-- Dùng service interface riêng như `ACQUIRE_RUN`, `GET_RUN`, `REDRIVE_RUN` thay vì operation của Step Functions hiện tại.
-- Có S3 store riêng cho state, trong khi contract yêu cầu DynamoDB là idempotency hot path.
-- Có Terraform/package flow riêng ngoài skeleton `tf2-finops-iac`.
-- Dễ gây nhầm lẫn cho team khi triển khai hoặc review.
+- It used a separate service interface such as `ACQUIRE_RUN`, `GET_RUN`, and `REDRIVE_RUN` instead of the current Step Functions operations.
+- It had a separate S3 state store, while the contract requires DynamoDB as the idempotency hot path.
+- It had its own Terraform/package flow outside the `tf2-finops-iac` skeleton.
+- It could confuse the team during deployment or review.
 
-Logic hữu ích đã được giữ lại ở mức semantics: trạng thái `IN_PROGRESS`, `COMPLETED`, `FAILED`, `FAILED_CONTRACT_CHECK`, kiểm tra schema cơ bản, quota ad-hoc, và mismatch payload hash.
+Useful semantics were preserved: `IN_PROGRESS`, `COMPLETED`, `FAILED`, `FAILED_CONTRACT_CHECK`, basic schema validation, ad-hoc quota checks, and payload hash mismatch handling.
 
-## Test đã cập nhật
+## Tests updated
 
-Các test chính được cập nhật hoặc bổ sung:
+Key tests updated or added:
 
 - `lambda_src/tests/test_state.py`
 - `lambda_src/tests/test_finops_common.py`
 - `lambda_src/tests/test_step_function_lambda_coverage.py`
 
-Các case quan trọng:
+Important cases:
 
-- Fresh `check` ghi `IN_PROGRESS` và có `ttl_expiry`.
-- Duplicate cùng key trả trạng thái hiện tại.
-- Duplicate cùng key nhưng khác `payload_sha256` trả `ERR_IDEMPOTENCY_MISMATCH`.
-- `complete`, `failed`, và `fail_contract_check` cập nhật đúng trạng thái.
-- `check_quota` chặn lượt ad-hoc thứ 6 trong cùng tenant/ngày.
-- `check_error_budget` đọc `ERROR_BUDGET_TABLE_NAME` và ép dry-run khi lock.
-- Static coverage đảm bảo compute Lambda có `RUN_STATE_TABLE_NAME` và `ERROR_BUDGET_TABLE_NAME`.
+- Fresh `check` writes `IN_PROGRESS` and includes `ttl_expiry`.
+- Duplicate with the same key returns the current status.
+- Duplicate with the same key and a different `payload_sha256` returns `ERR_IDEMPOTENCY_MISMATCH`.
+- `complete`, `failed`, and `fail_contract_check` update the expected status.
+- `check_quota` blocks the sixth ad-hoc run for the same tenant/day.
+- `check_error_budget` reads `ERROR_BUDGET_TABLE_NAME` and forces dry-run when locked.
+- Static coverage verifies compute Lambda has `RUN_STATE_TABLE_NAME` and `ERROR_BUDGET_TABLE_NAME`.
 
-## Validation đã chạy
+## Validation run
 
 ```powershell
 python -m pytest lambda_src\tests\test_state.py lambda_src\tests\test_finops_common.py lambda_src\tests\test_step_function_lambda_coverage.py -q
@@ -133,14 +133,13 @@ terraform -chdir=environments/prod init -backend=false
 terraform -chdir=environments/prod validate
 ```
 
-Kết quả:
+Results:
 
-- Focused Python tests: 19 passed.
-- Full Lambda tests: 43 passed.
-- Terraform fmt check cho các path đã chạm: passed.
-- Sandbox, staging, prod Terraform init/validate với `-backend=false`: passed.
+- Focused Python tests: 21 passed with no warnings.
+- Full Lambda tests: 45 passed with no warnings.
+- Terraform fmt check for touched paths: passed.
+- Sandbox, staging, and prod Terraform init/validate with `-backend=false`: passed.
 
-## Lưu ý còn lại
+## Remaining notes
 
-- Một số worker khác vẫn có warning `datetime.utcnow()` khi chạy full test. Phần này không thuộc scope State Lambda lần này.
-- README hiện còn wording cũ về ECS/Fargate hosting platform. AGENTS/IMPLEMENTATION hiện ưu tiên Lambda container + private internal ALB. README nên được chỉnh ở một PR docs riêng nếu team muốn làm sạch wording.
+- README still has older wording about ECS/Fargate hosting. AGENTS/IMPLEMENTATION now prioritize Lambda container + private internal ALB. README should be cleaned up in a separate docs PR if the team wants to remove stale wording.

@@ -79,6 +79,37 @@ def test_state_db_check_fresh_duplicate_complete_failed_and_contract_failure(mon
     assert resp6["status"] == "FAILED_CONTRACT_CHECK"
 
 
+def test_state_conditional_write_race_returns_existing_status(monkeypatch):
+    monkeypatch.setenv("RUN_STATE_TABLE_NAME", "finops-idempotency-sandbox")
+    db = finops_common.FakeDynamoDB()
+    event_data = base_event(operation="check")
+    idempotency_key = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:2026-06-24:daily-batch"
+
+    def race_put(table_name, item):
+        db.items.setdefault(table_name, {})[idempotency_key] = {
+            **item,
+            "status": "IN_PROGRESS",
+            "payload_sha256": VALID_HASH,
+        }
+        raise ValueError("ConditionalCheckFailedException")
+
+    db.put_item_func = race_put
+    handler.ddb_client = db
+
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "IN_PROGRESS"
+
+
+def test_fake_dynamodb_isolates_items_by_table():
+    db = finops_common.FakeDynamoDB()
+    tenant_id = base_event()["tenant_id"]
+
+    db.put_item("error-budget", {"tenant_id": tenant_id, "status": "LOCKED"})
+
+    assert db.get_item("error-budget", {"tenant_id": tenant_id})["status"] == "LOCKED"
+    assert db.get_item("finops-idempotency-sandbox", {"idempotency_key": tenant_id}) is None
+
+
 def test_state_prepare_run_context():
     event_data = {
         "account_id": "123456789012",

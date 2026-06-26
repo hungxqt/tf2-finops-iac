@@ -16,12 +16,17 @@ Aligned the CDO state worker and orchestration idempotency infrastructure with t
 
 ## Files Changed
 - `lambda_src/src/workers/state/handler.py`
+- `lambda_src/src/workers/audit_writer/handler.py`
+- `lambda_src/src/workers/cost_puller/handler.py`
+- `lambda_src/src/workers/normalizer/handler.py`
+- `lambda_src/src/workers/router/handler.py`
 - `lambda_src/src/finops_common/utils.py`
 - `lambda_src/src/finops_common/__init__.py`
 - `lambda_src/src/finops_common/aws_clients.py`
 - `lambda_src/tests/test_state.py`
 - `lambda_src/tests/test_finops_common.py`
 - `lambda_src/tests/test_step_function_lambda_coverage.py`
+- `pytest.ini`
 - `modules/orchestration/main.tf`
 - `modules/compute-lambda/main.tf`
 - `environments/sandbox/main.tf`
@@ -29,6 +34,8 @@ Aligned the CDO state worker and orchestration idempotency infrastructure with t
 - `environments/prod/main.tf`
 - `docs/progress/orchestration_progress.md`
 - `docs/progress/orchestration_progress_vi.md`
+- `docs/progress/state_lambda_implementation_notes.md`
+- `docs/progress/state_lambda_implementation_notes_vi.md`
 
 ## Validation Commands
 ```powershell
@@ -45,15 +52,11 @@ terraform -chdir=environments/prod validate
 ```
 
 ## Results
-- Focused Python tests: Success, 19 passed.
+- Focused Python tests: Success, 21 passed with no warnings.
 - Terraform formatting for touched modules/environments: Success.
-- Full Lambda Python tests: Success, 43 passed with existing `datetime.utcnow()` deprecation warnings in other workers.
+- Full Lambda Python tests: Success, 45 passed with no warnings.
 - Sandbox Terraform init with `-backend=false`: Success.
 - Sandbox Terraform validate: Success, configuration is valid.
-- Staging Terraform init with `-backend=false`: Success.
-- Staging Terraform validate: Success, configuration is valid.
-- Prod Terraform init with `-backend=false`: Success.
-- Prod Terraform validate: Success, configuration is valid.
 - Staging Terraform init with `-backend=false`: Success.
 - Staging Terraform validate: Success, configuration is valid.
 - Prod Terraform init with `-backend=false`: Success.

@@ -1,7 +1,6 @@
 import os
 import logging
 import json
-from datetime import datetime
 from typing import Any
 import finops_common
 
@@ -83,7 +82,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "owner": "",  # Untagged
                 "cost": 150.00,
                 "currency": "USD",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": finops_common.iso_utc_now()
             }
         ]
         raw_data = json.dumps(default_records).encode("utf-8")
@@ -126,7 +125,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "cost": cost,
             "currency": currency,
             "timestamp": timestamp,
-            "curated_at": datetime.utcnow().isoformat() + "Z",
+            "curated_at": finops_common.iso_utc_now(),
             
             # Formally required/documented cost fields
             "unblended_cost": cost,

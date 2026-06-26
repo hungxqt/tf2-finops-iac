@@ -83,7 +83,7 @@ class FakeDynamoDB(DynamoDBClient):
         self.get_item_func = get_item_func
         self.put_item_func = put_item_func
         self.update_item_func = update_item_func
-        self.items: Dict[str, Dict[str, Any]] = {}
+        self.items: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     def get_item(self, table_name: str, key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self.get_item_func:
@@ -91,16 +91,17 @@ class FakeDynamoDB(DynamoDBClient):
         item_key = next(iter(key.values())) if key else None
         if item_key is None:
             return None
-        return self.items.get(str(item_key))
+        return self.items.get(table_name, {}).get(str(item_key))
 
     def put_item(self, table_name: str, item: Dict[str, Any], condition_expression: Optional[str] = None) -> None:
         key = item.get("idempotency_key") or item.get("tenant_id") or item.get("audit_id") or item.get("anomaly_id") or item.get("route_id") or item.get("view_id") or item.get("account_id")
-        if condition_expression == "attribute_not_exists(idempotency_key)" and key in self.items:
+        table_items = self.items.setdefault(table_name, {})
+        if condition_expression == "attribute_not_exists(idempotency_key)" and key in table_items:
             raise ValueError("ConditionalCheckFailedException")
         if self.put_item_func:
             self.put_item_func(table_name, item)
         if key is not None:
-            self.items[str(key)] = item
+            table_items[str(key)] = item
 
     def update_item(self, table_name: str, key: Dict[str, Any], update_expression: str, expression_attribute_values: Dict[str, Any]) -> None:
         if self.update_item_func:

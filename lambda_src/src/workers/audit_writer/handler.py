@@ -1,7 +1,6 @@
 import os
 import logging
 import json
-from datetime import datetime
 from typing import Any
 import finops_common
 
@@ -75,7 +74,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
     try:
         exec_time = finops_common.parse_date(event.execution_date)
     except Exception:
-        exec_time = datetime.utcnow()
+        exec_time = finops_common.utc_now()
 
     year_str = f"{exec_time.year:04d}"
     month_str = f"{exec_time.month:02d}"
@@ -138,7 +137,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "audit_uri": audit_uri,
         "audit_type": audit_type,
         "actor": "tf2-finops-orchestrator",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": finops_common.iso_utc_now(),
         "correlation_id": event.correlation_id,
         "idempotency_key": idemp_key,
         "anomaly_id": anomaly_id,
@@ -183,7 +182,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "audit_id": audit_id,
                 "correlation_id": event.correlation_id,
                 "audit_type": audit_type,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": finops_common.iso_utc_now(),
                 "retention_location": audit_uri,
                 "retention_period": "90 days"
             })

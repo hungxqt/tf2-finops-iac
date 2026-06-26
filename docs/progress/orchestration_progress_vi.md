@@ -16,12 +16,17 @@ Hoàn thành cho phạm vi căn chỉnh state/idempotency.
 
 ## Các file đã thay đổi
 - `lambda_src/src/workers/state/handler.py`
+- `lambda_src/src/workers/audit_writer/handler.py`
+- `lambda_src/src/workers/cost_puller/handler.py`
+- `lambda_src/src/workers/normalizer/handler.py`
+- `lambda_src/src/workers/router/handler.py`
 - `lambda_src/src/finops_common/utils.py`
 - `lambda_src/src/finops_common/__init__.py`
 - `lambda_src/src/finops_common/aws_clients.py`
 - `lambda_src/tests/test_state.py`
 - `lambda_src/tests/test_finops_common.py`
 - `lambda_src/tests/test_step_function_lambda_coverage.py`
+- `pytest.ini`
 - `modules/orchestration/main.tf`
 - `modules/compute-lambda/main.tf`
 - `environments/sandbox/main.tf`
@@ -29,6 +34,8 @@ Hoàn thành cho phạm vi căn chỉnh state/idempotency.
 - `environments/prod/main.tf`
 - `docs/progress/orchestration_progress.md`
 - `docs/progress/orchestration_progress_vi.md`
+- `docs/progress/state_lambda_implementation_notes.md`
+- `docs/progress/state_lambda_implementation_notes_vi.md`
 
 ## Lệnh kiểm tra
 ```powershell
@@ -45,9 +52,9 @@ terraform -chdir=environments/prod validate
 ```
 
 ## Kết quả
-- Bộ kiểm thử Python tập trung: Thành công, 19 passed.
+- Bộ kiểm thử Python tập trung: Thành công, 21 passed và không có warning.
 - Định dạng Terraform cho các module/environment đã chạm: Thành công.
-- Toàn bộ kiểm thử Python Lambda: Thành công, 43 passed với các warning `datetime.utcnow()` đã có sẵn ở các worker khác.
+- Toàn bộ kiểm thử Python Lambda: Thành công, 45 passed và không có warning.
 - Sandbox Terraform init với `-backend=false`: Thành công.
 - Sandbox Terraform validate: Thành công, cấu hình hợp lệ.
 - Staging Terraform init với `-backend=false`: Thành công.

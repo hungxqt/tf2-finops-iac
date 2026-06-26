@@ -86,8 +86,8 @@ def test_step_function_lambda_coverage():
     for p in expected_placeholders:
         assert p in main_tf_content, f"orchestration/main.tf does not map placeholder: {p}"
 
-    assert 'RUN_STATE_TABLE_NAME    = lookup(var.dynamodb_table_names, "run_state", "")' in compute_content, "state worker missing RUN_STATE_TABLE_NAME env wiring"
-    assert 'ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")' in compute_content, "state worker missing ERROR_BUDGET_TABLE_NAME env wiring"
+    assert re.search(r'RUN_STATE_TABLE_NAME\s*=\s*lookup\(var\.dynamodb_table_names,\s*"run_state",\s*""\)', compute_content), "state worker missing RUN_STATE_TABLE_NAME env wiring"
+    assert re.search(r'ERROR_BUDGET_TABLE_NAME\s*=\s*lookup\(var\.dynamodb_table_names,\s*"error_budget",\s*""\)', compute_content), "state worker missing ERROR_BUDGET_TABLE_NAME env wiring"
     assert 'finops-idempotency-${var.environment}' in main_tf_content, "orchestration run-state table must use finops-idempotency-{env} name"
     assert 'attribute_name = "ttl_expiry"' in main_tf_content, "orchestration idempotency table must enable ttl_expiry"
 

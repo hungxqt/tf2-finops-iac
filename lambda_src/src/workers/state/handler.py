@@ -103,6 +103,12 @@ def _write_run_state(client, table_name: str, item: dict) -> None:
         client.put_item(table_name, item)
 
 
+def _is_conditional_check_failed(error: Exception) -> bool:
+    response = getattr(error, "response", {})
+    code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
+    return code == "ConditionalCheckFailedException" or "ConditionalCheckFailedException" in str(error)
+
+
 def handle_request(event_data: dict, context: Any) -> dict:
     logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
 
@@ -237,8 +243,18 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "updated_at": _now_iso(),
                     "ttl_expiry": _ttl_expiry(),
                 }
-                _write_run_state(client, table_name, item)
-                status = "NEW"
+                try:
+                    _write_run_state(client, table_name, item)
+                    status = "NEW"
+                except Exception as e:
+                    if not _is_conditional_check_failed(e):
+                        raise
+                    existing = client.get_item(table_name, {"idempotency_key": idempotency_key}) or {}
+                    existing_hash = existing.get("payload_sha256")
+                    if existing_hash and payload_sha256 and existing_hash != payload_sha256:
+                        status = "ERR_IDEMPOTENCY_MISMATCH"
+                    else:
+                        status = existing.get("status", "IN_PROGRESS")
         elif op in {"complete", "failed", "fail_contract_check"}:
             status = {
                 "complete": "COMPLETED",

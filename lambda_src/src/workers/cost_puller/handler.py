@@ -1,7 +1,6 @@
 import os
 import logging
 import json
-from datetime import datetime
 from typing import Any
 import finops_common
 
@@ -70,7 +69,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "owner": "Engineering",
             "cost": 150.00,
             "currency": "USD",
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": finops_common.iso_utc_now()
         }
     ]
     raw_data = json.dumps(synthetic_records).encode("utf-8")

@@ -1,6 +1,5 @@
 import os
 import logging
-from datetime import datetime
 from typing import Any
 import finops_common
 
@@ -88,7 +87,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "finance_deliver": finance_route["deliver"],
                 "eng_deliver": engineering_route["deliver"],
                 "route_target": route_target,
-                "created_at": datetime.utcnow().isoformat() + "Z"
+                "created_at": finops_common.iso_utc_now()
             })
         except Exception as e:
             logger.warning("DynamoDB save routing state failed (non-blocking): %s", e)
