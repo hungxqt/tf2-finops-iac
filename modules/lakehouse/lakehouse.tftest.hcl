@@ -1,13 +1,13 @@
 # Terraform Test for Lakehouse Module Glue Table Configurations
 
 variables {
-  project_name                  = "tf2-finops"
-  environment                   = "sandbox"
-  aws_region                    = "ap-southeast-1"
-  lakehouse_replica_bucket_arn  = "arn:aws:s3:::tf2-finops-sandbox-lakehouse-replica"
-  audit_replica_bucket_arn      = "arn:aws:s3:::tf2-finops-sandbox-audit-replica"
-  athena_replica_bucket_arn     = "arn:aws:s3:::tf2-finops-sandbox-athena-replica"
-  destroyable                   = true
+  project_name                 = "tf2-finops"
+  environment                  = "sandbox"
+  aws_region                   = "ap-southeast-1"
+  lakehouse_replica_bucket_arn = "arn:aws:s3:::tf2-finops-sandbox-lakehouse-replica"
+  audit_replica_bucket_arn     = "arn:aws:s3:::tf2-finops-sandbox-audit-replica"
+  athena_replica_bucket_arn    = "arn:aws:s3:::tf2-finops-sandbox-athena-replica"
+  destroyable                  = true
 }
 
 run "validate_glue_catalog_tables" {
