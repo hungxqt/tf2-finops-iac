@@ -1,43 +1,51 @@
 # Verification and Scanner Hardening Progress
 
 ## Status
-Completed
+In progress
 
 ## Scope
-Fix Step Functions/Lambda deployability, resolve all Checkov and Trivy security scanner findings to 0 failed high/critical violations in the Terraform codebase.
+Fix the Terraform CI failures observed after the merged normalizer alignment work. This update focuses on the six Checkov failures from GitHub Actions run `28227058326` and confirms the current Lambda unit-test failure from run `28227178445` is already resolved on `origin/main`.
 
-## Key Changes
-- **Environment Roots Alignment**:
-  - Updated [environments/staging/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/main.tf) and [environments/prod/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/main.tf) to align module parameters, add S3 replica buckets, and map `aws.replica` and `aws.us_east_1` providers, mirroring the changes done in sandbox `main.tf`.
-- **TFVars Examples**:
-  - Created [bootstrap/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/terraform.tfvars.example), [environments/sandbox/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/terraform.tfvars.example), [environments/staging/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/terraform.tfvars.example), and [environments/prod/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/terraform.tfvars.example) detailing digest-pinned container image URIs, replica region, and placeholder ACM/domain variables.
-- **Provider Warning Cleanup**:
-  - Added empty `filter {}` blocks to all `aws_s3_bucket_lifecycle_configuration` rules across `bootstrap/main.tf`, `modules/dashboard/main.tf`, and `modules/lakehouse/main.tf` to resolve the invalid attribute combination validation warnings.
-- **IAM Hardening**:
-  - Rewrote the broad permissions boundary policy statement in `modules/iam/main.tf` to use service-specific statements with resource-level constraints (e.g. S3 bucket ARNs, DynamoDB table ARNs, KMS key ARNs, SNS topic ARNs, SQS queue ARNs, and scoped EC2 stops).
-- **Scanner Exceptions (Skips/Ignores)**:
-  - Documented specific inline Checkov skips for KMS key policies requiring `*` resource, container Lambdas without code signing, and Lambdas not requiring Lambda-level DLQs (since they are synchronous or SQS-triggered).
-  - Documented specific inline Trivy ignores for replica S3 bucket encryption (using SSE-S3 AES256 to simplify cross-region KMS key management) and Lambda egress rules (allowing port 443 HTTPS egress to NAT/VPC endpoints).
+## Files Changed
+- `modules/ai-runtime-lambda/main.tf`: added `create_before_destroy` lifecycle handling for the generated ACM certificate.
+- `modules/lakehouse/main.tf`: disabled ACL ownership on the S3 logging target bucket with `BucketOwnerEnforced`, removed the logging bucket ACL resource, documented the SSE-S3 exception for S3 server access log delivery, and added the targeted Trivy `AWS-0132` ignore for that logging-destination encryption resource.
+- `environments/sandbox/main.tf`: added an explicit replica KMS key policy and attached it to `aws_kms_key.replica`.
+- `environments/staging/main.tf`: added the same explicit replica KMS key policy.
+- `environments/prod/main.tf`: added the same explicit replica KMS key policy.
+- `modules/orchestration/main.tf`: applied Terraform formatting required by PR CI after pulling the latest `main`.
 
 ## Validation Commands
-- Run formatting check: `terraform fmt -check -recursive`
-- Run local tests: `cd lambda_src && python -m pytest`
-- Run validation suite: `.\scripts\validate.ps1`
-- Run Trivy configuration scan: `trivy config --severity HIGH,CRITICAL .`
-- Run Checkov scan: `checkov -d . --framework terraform --quiet --compact`
+- `python -m pytest lambda_src\tests\test_cost_puller.py::test_handle_request_remote_session_override`
+- `Push-Location lambda_src; python -m pytest; Pop-Location`
+- `terraform fmt modules\ai-runtime-lambda\main.tf modules\lakehouse\main.tf environments\sandbox\main.tf environments\staging\main.tf environments\prod\main.tf`
+- `terraform -chdir=environments/sandbox init -backend=false`
+- `terraform -chdir=environments/staging init -backend=false`
+- `terraform -chdir=environments/prod init -backend=false`
+- `terraform -chdir=environments/sandbox validate`
+- `terraform -chdir=environments/staging validate`
+- `terraform -chdir=environments/prod validate`
+- `terraform fmt modules\orchestration\main.tf`
+- `terraform fmt -check -recursive`
+- `git diff --check`
+- `trivy config --severity HIGH,CRITICAL .`
+- Attempted: `python -m pip install checkov==3.2.524`
 
 ## Results
-- **Terraform Validate**: Passed successfully for `bootstrap`, `environments/sandbox`, `environments/staging`, and `environments/prod`.
-- **TFLint**: Warnings analyzed and resolved/skipped.
-- **Trivy**: 0 HIGH/CRITICAL configuration findings (all replica buckets and Lambda egress exceptions ignored using documented annotations).
-- **Checkov**: 0 FAILED checks (all expected exceptions skipped using documented annotations).
-- **Python Unit Tests**: 32 passed successfully (including `test_step_function_lambda_coverage.py` asserting full ASL placeholder, worker folder, handle_request imports, modules/compute-lambda list, environment main.tf wiring, and package script list alignment).
-- **Makefile Update**: Updated the Makefile `test` target to run `python -m pytest` instead of stale `go test ./...` command.
-- **Packaging Alignment**: Removed deleted `ai_client` reference from `scripts/package-lambdas.ps1` to correctly align the 6 source worker adapters (`state`, `cost_puller`, `normalizer`, `router`, `audit_writer`, `containment_worker`).
+- Narrow Lambda test passed: `1 passed`.
+- Full Lambda test suite passed locally: `109 passed`.
+- Terraform init passed for sandbox, staging, and prod with backend disabled.
+- Terraform validate passed for sandbox, staging, and prod.
+- Pulled latest `origin/main` into local `main`, rebased the fix branch, and formatted `modules/orchestration/main.tf` after CI reported it.
+- Added the targeted Trivy ignore for the S3 server access logging destination SSE-S3 exception after PR CI reported `AWS-0132`.
+- Local Trivy passed with 0 HIGH/CRITICAL misconfigurations.
+- Terraform format check passed for the full repository.
+- `git diff --check`
+- `trivy config --severity HIGH,CRITICAL .` passed with only line-ending warnings.
+- Local Checkov verification is blocked because PyPI reset the package download connection while installing `checkov==3.2.524`.
+- GitHub Actions must run the final Checkov parity check after the PR is opened.
 
 ## Blockers
-None
+- Local Checkov binary is unavailable, and `python -m pip install checkov==3.2.524` failed with `ConnectionResetError(10054)` from the package download connection.
 
 ## Next Step
-Proceed with CI/CD workflow pipeline validations.
-
+Open a clean PR from `origin/main` with the Checkov-targeted Terraform fixes and let GitHub Actions confirm the Checkov scan on Ubuntu.

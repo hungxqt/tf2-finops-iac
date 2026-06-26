@@ -37,6 +37,10 @@ resource "aws_acm_certificate" "self_signed" {
   count            = local.is_dummy_cert ? 1 : 0
   private_key      = tls_private_key.self_signed[0].private_key_pem
   certificate_body = tls_self_signed_cert.self_signed[0].cert_pem
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ECR Repository for the AI Engine Images
