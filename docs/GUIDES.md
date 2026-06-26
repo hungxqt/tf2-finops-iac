@@ -109,6 +109,31 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
    terraform apply prod.tfplan
    ```
 
+### Step 2.5: Post-Apply Lambda Diagnostics
+VPC-attached Lambda functions (both zip-based workers and container-based AI runtimes) require AWS-side provisioning of Hyperplane ENIs and image optimization. This process runs asynchronously after the Terraform apply completes and can take several minutes.
+
+Run the following diagnostics loop (AWS CLI) to check the status of all 9 Lambda functions:
+
+For PowerShell (Windows):
+```powershell
+$workers = "state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller", "ai-request", "ai-worker"
+foreach ($w in $workers) {
+    aws lambda get-function --function-name "tf2-finops-sandbox-$w" --query "Configuration.[FunctionName, State, StateReason, LastUpdateStatus]" --output json
+}
+```
+
+For Bash (macOS/Linux):
+```bash
+for fn in state cost_puller normalizer router audit_writer containment_worker vpc_alb_caller ai-request ai-worker; do
+  aws lambda get-function --function-name tf2-finops-sandbox-$fn --query "Configuration.[FunctionName, State, StateReason, LastUpdateStatus]" --output table
+done
+```
+
+**Verification Criteria:**
+* **State**: Should eventually be `Active`. (If it is `Pending`, wait 1-2 minutes for AWS control-plane processes to finish).
+* **StateReason**: Should be empty or null. If it mentions ENI creation errors or missing permissions, check the IAM roles and security groups.
+* **LastUpdateStatus**: Should eventually be `Successful`.
+
 ### 2.4. Teardown / Destroy Sandbox Environment
 
 To destroy the sandbox environment for cleanups or testing teardowns:
@@ -126,6 +151,9 @@ To destroy the sandbox environment for cleanups or testing teardowns:
 > [!WARNING]
 > **AWS Object Lock Teardown Limitation**: 
 > If the sandbox audit bucket already contains compliance-mode retained object versions, AWS enforces a hard restriction that prevents deleting these versions until their retention period expires. In this case, Terraform will fail to delete the audit bucket itself. Compliance-mode object lock is disabled for *newly created* sandbox audit buckets to make teardowns possible, but if retention was previously enabled and objects exist, they must expire before full teardown can succeed.
+>
+> **AWS Lambda VPC ENI Teardown Delay**:
+> When destroying a VPC-attached Lambda environment, AWS Lambda keeps the Hyperplane ENIs cached for up to 20 minutes after the Lambda functions themselves have been deleted. During this cooldown period, Terraform will display `Still destroying...` and appear to hang on deleting the private subnets and the Lambda security group because they remain linked to these active network interfaces. This is expected AWS control-plane behavior. Do not interrupt the process; once AWS asynchronously releases the ENIs (typically within 10 to 15 minutes), the subnets and security group will be successfully deleted and the Terraform destroy will complete.
 
 Staging and production environments are strictly protected by a count-conditional `destroy_guard` sentinel resource and cannot be destroyed using a standard destroy plan.
 

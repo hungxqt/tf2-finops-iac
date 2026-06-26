@@ -154,11 +154,15 @@ resource "aws_lambda_function" "workers" {
     mode = "Active"
   }
 
-  reserved_concurrent_executions = 10
+  reserved_concurrent_executions = var.reserved_concurrent_executions
 
   environment {
     variables = local.worker_configs[each.key].env
   }
+
+  depends_on = [
+    aws_cloudwatch_log_group.logs
+  ]
 
   tags = var.tags
 }
@@ -166,7 +170,7 @@ resource "aws_lambda_function" "workers" {
 # CloudWatch Log Groups with retention and encryption
 resource "aws_cloudwatch_log_group" "logs" {
   for_each          = toset(local.workers)
-  name              = "/aws/lambda/${aws_lambda_function.workers[each.key].function_name}"
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-${each.key}"
   retention_in_days = 365
   kms_key_id        = var.cloudwatch_log_kms_key_arn
   tags              = var.tags

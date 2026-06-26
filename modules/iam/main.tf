@@ -427,3 +427,26 @@ data "aws_iam_policy_document" "xray" {
     resources = ["*"]
   }
 }
+
+resource "aws_iam_role_policy" "workers_sqs" {
+  for_each = toset(local.worker_names)
+  name     = "sqs-dlq-policy"
+  role     = aws_iam_role.workers[each.key].id
+  policy   = data.aws_iam_policy_document.workers_sqs.json
+}
+
+data "aws_iam_policy_document" "workers_sqs" {
+  dynamic "statement" {
+    for_each = length(var.queue_arns) > 0 ? [1] : []
+    content {
+      # checkov:skip=CKV_AWS_111: "SQS DLQ SendMessage action is scoped to the specifically passed queue ARNs"
+      # checkov:skip=CKV_AWS_356: "SQS DLQ SendMessage action requires queue ARNs which may be dynamically generated"
+      sid    = "AllowSQSSendMessage"
+      effect = "Allow"
+      actions = [
+        "sqs:SendMessage"
+      ]
+      resources = var.queue_arns
+    }
+  }
+}

@@ -88,3 +88,9 @@ variable "sigv4_service_name" {
   default     = "ai-engine"
 }
 
+variable "reserved_concurrent_executions" {
+  type        = number
+  description = "The amount of reserved concurrent executions for each Lambda worker. Set to null to disable."
+  default     = null
+}
+

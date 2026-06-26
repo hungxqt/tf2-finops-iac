@@ -165,6 +165,16 @@ resource "aws_iam_policy" "request" {
           "xray:PutTelemetryRecords"
         ]
         Resource = ["*"]
+      },
+      {
+        # checkov:skip=CKV_AWS_111: "EC2 Container Registry read actions are needed on all repositories to support dynamic image configuration"
+        # checkov:skip=CKV_AWS_356: "EC2 Container Registry read actions require wildcard resource to support dynamic image configuration"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+        Resource = ["*"]
       }
       ],
       length(var.secret_arns) > 0 ? [
@@ -266,6 +276,16 @@ resource "aws_iam_policy" "worker" {
         Action = [
           "xray:PutTraceSegments",
           "xray:PutTelemetryRecords"
+        ]
+        Resource = ["*"]
+      },
+      {
+        # checkov:skip=CKV_AWS_111: "EC2 Container Registry read actions are needed on all repositories to support dynamic image configuration"
+        # checkov:skip=CKV_AWS_356: "EC2 Container Registry read actions require wildcard resource to support dynamic image configuration"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
         ]
         Resource = ["*"]
       }

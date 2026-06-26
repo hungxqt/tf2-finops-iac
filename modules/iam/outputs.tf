@@ -9,7 +9,8 @@ output "lambda_role_arns" {
     aws_iam_role_policy.router,
     aws_iam_role_policy.audit_writer,
     aws_iam_role_policy.containment_worker,
-    aws_iam_role_policy.workers_xray
+    aws_iam_role_policy.workers_xray,
+    aws_iam_role_policy.workers_sqs
   ]
 }
 

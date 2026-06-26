@@ -109,6 +109,31 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
    terraform apply prod.tfplan
    ```
 
+### Bước 2.5: Chẩn đoán trạng thái Lambda sau khi triển khai
+Các hàm Lambda được gắn VPC (cả worker dạng zip và AI runtime dạng container) yêu cầu AWS khởi tạo các Hyperplane ENI và tối ưu hóa container image ở chế độ bất đồng bộ. Quá trình này diễn ra sau khi Terraform apply hoàn thành và có thể mất vài phút.
+
+Chạy vòng lặp lệnh AWS CLI sau để kiểm tra trạng thái của tất cả 9 hàm Lambda:
+
+Dành cho PowerShell (Windows):
+```powershell
+$workers = "state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller", "ai-request", "ai-worker"
+foreach ($w in $workers) {
+    aws lambda get-function --function-name "tf2-finops-sandbox-$w" --query "Configuration.[FunctionName, State, StateReason, LastUpdateStatus]" --output json
+}
+```
+
+Dành cho Bash (macOS/Linux):
+```bash
+for fn in state cost_puller normalizer router audit_writer containment_worker vpc_alb_caller ai-request ai-worker; do
+  aws lambda get-function --function-name tf2-finops-sandbox-$fn --query "Configuration.[FunctionName, State, StateReason, LastUpdateStatus]" --output table
+done
+```
+
+**Tiêu chí xác minh:**
+* **State**: Cuối cùng sẽ chuyển sang `Active`. (Nếu hiển thị `Pending`, hãy đợi 1-2 phút để AWS hoàn tất quá trình thiết lập ENI/Image).
+* **StateReason**: Phải trống hoặc null. Nếu có thông tin lỗi liên quan đến thiết lập ENI hoặc thiếu quyền, hãy kiểm tra lại cấu hình IAM Roles và Security Groups.
+* **LastUpdateStatus**: Cuối cùng sẽ là `Successful`.
+
 ### 2.4. Hủy / Giải phóng môi trường Sandbox (Teardown / Destroy Sandbox)
 
 Để hủy bỏ môi trường sandbox nhằm dọn dẹp hoặc kiểm tra quy trình giải phóng tài nguyên:
@@ -126,6 +151,9 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
 > [!WARNING]
 > **Giới hạn kỹ thuật của AWS Object Lock**:
 > Nếu bucket audit sandbox đã chứa các phiên bản đối tượng được giữ lại theo chế độ Tuân thủ (Compliance-mode), AWS sẽ áp dụng một hạn chế cứng ngăn việc xóa các đối tượng này cho đến khi thời hạn lưu trữ hết hạn. Trong trường hợp đó, Terraform sẽ thất bại khi xóa bucket audit. Mặc dù Object Lock chế độ Tuân thủ đã được tắt cho các bucket audit sandbox *mới tạo* để cho phép dọn dẹp, nhưng nếu Object Lock đã được cấu hình trước đó và có dữ liệu, các đối tượng này phải hết hạn trước khi có thể dọn dẹp hoàn toàn.
+>
+> **Độ trễ khi giải phóng ENI VPC Lambda**:
+> Khi hủy môi trường Lambda được gắn VPC, AWS Lambda sẽ giữ các cổng mạng Hyperplane ENI trong bộ nhớ cache tối đa 20 phút sau khi các hàm Lambda đã bị xóa. Trong thời gian chờ này, Terraform sẽ hiển thị thông báo `Still destroying...` và có thể bị treo ở bước xóa các private subnets cũng như Lambda security group vì chúng vẫn đang liên kết với các ENI này. Đây là hành vi kiểm soát bình thường của AWS. Vui lòng không ngắt lệnh; khi AWS tự động giải phóng các ENI (thường trong vòng 10 đến 15 phút), các subnet và security group sẽ được xóa thành công và quá trình hủy tài nguyên sẽ hoàn tất.
 
 Các môi trường Staging và Production được bảo vệ nghiêm ngặt bằng tài nguyên tuần tra `destroy_guard` (terraform_data) và không thể bị xóa thông qua kế hoạch hủy thông thường.
 
