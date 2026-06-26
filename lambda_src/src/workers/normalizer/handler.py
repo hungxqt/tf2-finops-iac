@@ -89,19 +89,65 @@ def handle_request(event_data: dict, context: Any) -> dict:
         raw_data = json.dumps(default_records).encode("utf-8")
 
     # 3. Parse and normalize cost data
+    import gzip
     try:
-        raw_records = json.loads(raw_data.decode("utf-8"))
+        # Check if gzipped
+        decompressed_data = raw_data
+        if decompressed_data.startswith(b'\x1f\x8b'):
+            decompressed_data = gzip.decompress(decompressed_data)
+        raw_records = json.loads(decompressed_data.decode("utf-8"))
     except Exception as e:
         logger.error("Failed to parse raw cost records JSON: %s", e)
         raise e
         
+    envelope_quality = {}
+    if isinstance(raw_records, dict):
+        envelope_quality = raw_records.get("quality", {})
+        # Choose records to normalize: prefer cur, then ce daily
+        if raw_records.get("aws_cur_line_items"):
+            records_to_normalize = raw_records["aws_cur_line_items"]
+        elif raw_records.get("aws_cost_explorer_daily"):
+            records_to_normalize = raw_records["aws_cost_explorer_daily"]
+        else:
+            records_to_normalize = []
+    else:
+        records_to_normalize = raw_records
+
+    # Retrieve quality flags
+    completeness_score = float(
+        event_data.get("completeness_score") 
+        or event_data.get("telemetry_quality") 
+        or envelope_quality.get("completeness_score") 
+        or 1.0
+    )
+    delayed_cur = bool(
+        event_data.get("delayed_cur") 
+        or envelope_quality.get("delayed_cur") 
+        or False
+    )
+    stale_cost_explorer = bool(
+        event_data.get("stale_cost_explorer") 
+        or envelope_quality.get("stale_cost_explorer") 
+        or False
+    )
+    missing_cloudwatch = bool(
+        event_data.get("missing_cloudwatch") 
+        or envelope_quality.get("missing_cloudwatch") 
+        or False
+    )
+    estimated_billing = bool(
+        event_data.get("estimated_billing") 
+        or envelope_quality.get("estimated_billing") 
+        or False
+    )
+
     curated_records = []
-    for rec in raw_records:
-        account_id = rec.get("account_id", "")
-        cost = float(rec.get("cost") or rec.get("line_item_unblended_cost") or 0.0)
+    for rec in records_to_normalize:
+        account_id = rec.get("account_id") or rec.get("line_item_usage_account_id") or rec.get("linked_account_id") or ""
+        cost = float(rec.get("cost") or rec.get("line_item_unblended_cost") or rec.get("unblended_cost") or 0.0)
         
         # Validate required cost fields
-        service = rec.get("service") or rec.get("line_item_product_code") or ""
+        service = rec.get("service") or rec.get("line_item_product_code") or rec.get("service_code") or ""
         if not account_id or not service or cost < 0:
             logger.info("Filtering out invalid cost record: %s", rec)
             continue
@@ -115,7 +161,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         region = rec.get("region") or rec.get("product_region_code") or ""
         resource_id = rec.get("resource_id") or rec.get("line_item_resource_id") or ""
         currency = rec.get("currency") or rec.get("line_item_currency_code") or "USD"
-        timestamp = rec.get("timestamp") or rec.get("line_item_usage_start_date") or ""
+        timestamp = rec.get("timestamp") or rec.get("line_item_usage_start_date") or rec.get("date") or ""
             
         curated_records.append({
             # Original fields for backward compatibility

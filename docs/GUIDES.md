@@ -224,6 +224,31 @@ Ensure the table projection ranges (e.g. `2024,2035`), formats, and S3 partition
 
 ---
 
-## 6. Guide Maintenance
+## 7. Telemetry Ingestion Configuration and Validation
+
+The `cost_puller` worker acquires raw billing and utilization telemetry. It operates in a hybrid ingestion mode, reading CUR files from the source S3 bucket or falling back to Cost Explorer when CUR updates are delayed.
+
+### Step 7.1: Configuration Parameters
+The ingestion behavior is controlled by these Terraform variables passed to the `compute_lambda` module:
+* `cur_source_bucket`: S3 bucket where AWS CUR is delivered.
+* `cur_source_prefix`: Prefix path in the source bucket for CUR files.
+* `cur_delay_threshold_hours`: Delay threshold in hours before switching to CE fallback (default: `36`).
+* `ce_lookback_window_days`: Days of CE history retrieved during fallback (default: `30`).
+* `traffic_metric_identifiers`: Identifiers for querying physical traffic metrics (e.g., ALB names).
+* `synthetic_fallback_enabled`: Controls whether local tests/simulations fall back to generated data (default: `true`).
+
+### Step 7.2: Verification and Simulation
+Operators can verify the retry/wait and error-handling state machine branches using simulation actions in the execution event:
+* **Simulate CUR Delay**: Send `"action": "simulate-cur-delay"` to force CUR delayed status and trigger the Cost Explorer fallback path.
+* **Simulate CE Throttling**: Send `"action": "simulate-ce-throttled"` to throttle CE requests. If cached telemetry exists in the destination bucket, it will recover telemetry and set the `stale_cost_explorer` quality flag; otherwise, it returns `CE_THROTTLED`.
+
+Verify the gzipped JSON raw envelopes outputted by checking S3 key prefixes:
+* Main Cost Telemetry: `s3://<lakehouse-bucket>/cur/account_id=<id>/year=YYYY/month=MM/day=DD/<run-id>_raw.json.gz`
+* Utilization Features: `s3://<lakehouse-bucket>/features/account_id=<id>/year=YYYY/month=MM/day=DD/<run-id>_features.json.gz`
+
+---
+
+## 8. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
+
 

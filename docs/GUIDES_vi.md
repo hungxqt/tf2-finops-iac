@@ -223,6 +223,29 @@ cd ../..
 
 ---
 
-## 6. Bảo trì tài liệu hướng dẫn
-Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.
+## 7. Cấu hình và Xác thực Thu thập Dữ liệu Telemetry
 
+Worker `cost_puller` đảm nhận việc thu thập dữ liệu chi phí (billing) và hiệu năng (utilization) thô. Nó hoạt động ở chế độ thu thập hỗn hợp (hybrid ingestion), đọc các tệp CUR từ S3 source bucket hoặc tự động chuyển sang Cost Explorer khi CUR bị trễ.
+
+### Bước 7.1: Các tham số cấu hình
+Hành vi thu thập dữ liệu được kiểm soát bởi các biến Terraform được truyền vào module `compute_lambda`:
+* `cur_source_bucket`: Bucket S3 nơi AWS CUR được lưu trữ.
+* `cur_source_prefix`: Đường dẫn prefix trong source bucket cho các tệp CUR.
+* `cur_delay_threshold_hours`: Ngưỡng thời gian trễ (tính bằng giờ) trước khi chuyển sang chế độ dự phòng CE (mặc định: `36`).
+* `ce_lookback_window_days`: Số ngày lịch sử CE cần lấy khi chạy dự phòng (mặc định: `30`).
+* `traffic_metric_identifiers`: Định danh dùng để truy vấn dữ liệu traffic vật lý (ví dụ: tên ALB).
+* `synthetic_fallback_enabled`: Bật/tắt chế độ tự động tạo dữ liệu giả lập cho local tests/simulations (mặc định: `true`).
+
+### Bước 7.2: Xác minh và Giả lập
+Người vận hành có thể xác minh luồng retry/wait và xử lý lỗi của State Machine thông qua các hành động giả lập (simulation actions) trong event thực thi:
+* **Giả lập CUR bị trễ**: Gửi `"action": "simulate-cur-delay"` để ép trạng thái trễ CUR và kích hoạt luồng dự phòng Cost Explorer.
+* **Giả lập CE bị throttling**: Gửi `"action": "simulate-ce-throttled"` để kích hoạt lỗi rate limit cho CE. Nếu có dữ liệu cache trong destination bucket, hệ thống sẽ khôi phục dữ liệu từ cache và đặt cờ chất lượng `stale_cost_explorer = true`; nếu không sẽ trả về lỗi `CE_THROTTLED`.
+
+Xác minh các tệp JSON gzipped được tạo ra bằng cách kiểm tra các đường dẫn prefix S3:
+* Cost Telemetry chính: `s3://<lakehouse-bucket>/cur/account_id=<id>/year=YYYY/month=MM/day=DD/<run-id>_raw.json.gz`
+* Utilization Features: `s3://<lakehouse-bucket>/features/account_id=<id>/year=YYYY/month=MM/day=DD/<run-id>_features.json.gz`
+
+---
+
+## 8. Bảo trì tài liệu hướng dẫn
+Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.

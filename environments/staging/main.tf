@@ -485,6 +485,13 @@ module "compute_lambda" {
   alb_base_url                   = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? "https://${var.private_dns_name}" : "https://${module.ai_runtime_lambda.alb_dns_name}"
   sigv4_service_name             = var.sigv4_service_name
   tags                           = var.tags
+
+  cur_source_bucket              = var.cur_source_bucket
+  cur_source_prefix              = var.cur_source_prefix
+  cur_delay_threshold_hours      = var.cur_delay_threshold_hours
+  ce_lookback_window_days        = var.ce_lookback_window_days
+  traffic_metric_identifiers      = var.traffic_metric_identifiers
+  synthetic_fallback_enabled     = var.synthetic_fallback_enabled
 }
 
 # 7. Orchestration Module

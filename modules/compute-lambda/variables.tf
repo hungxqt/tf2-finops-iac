@@ -94,3 +94,40 @@ variable "reserved_concurrent_executions" {
   default     = null
 }
 
+variable "cur_source_bucket" {
+  type        = string
+  description = "The source S3 bucket where raw CUR is delivered"
+  default     = ""
+}
+
+variable "cur_source_prefix" {
+  type        = string
+  description = "The prefix under cur_source_bucket for CUR files"
+  default     = ""
+}
+
+variable "cur_delay_threshold_hours" {
+  type        = number
+  description = "The threshold in hours to consider CUR as delayed"
+  default     = 36
+}
+
+variable "ce_lookback_window_days" {
+  type        = number
+  description = "The lookback window in days for Cost Explorer queries"
+  default     = 30
+}
+
+variable "traffic_metric_identifiers" {
+  type        = list(string)
+  description = "List of identifiers for traffic volume query (e.g. ALB names)"
+  default     = []
+}
+
+variable "synthetic_fallback_enabled" {
+  type        = bool
+  description = "Flag to enable synthetic fallback logic if real AWS collection fails or environment variables are not set"
+  default     = true
+}
+
+

@@ -17,7 +17,13 @@ locals {
       timeout     = 120
       memory_size = 512
       env = {
-        LAKEHOUSE_BUCKET_NAME = var.lakehouse_bucket_name
+        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
+        CUR_SOURCE_BUCKET          = var.cur_source_bucket
+        CUR_SOURCE_PREFIX          = var.cur_source_prefix
+        CUR_DELAY_THRESHOLD_HOURS  = tostring(var.cur_delay_threshold_hours)
+        CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
+        TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
+        SYNTHETIC_FALLBACK_ENABLED = tostring(var.synthetic_fallback_enabled)
       }
     }
     normalizer = {

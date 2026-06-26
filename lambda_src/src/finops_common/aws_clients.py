@@ -19,8 +19,26 @@ class S3Client:
     def get_object(self, bucket: str, key: str) -> bytes:
         raise NotImplementedError()
 
+    def list_objects_v2(self, bucket: str, prefix: str) -> Dict[str, Any]:
+        raise NotImplementedError()
+
 class SecretsManagerClient:
     def get_secret_value(self, secret_id: str) -> str:
+        raise NotImplementedError()
+
+class CostExplorerClient:
+    def get_cost_and_usage(self, **kwargs) -> Dict[str, Any]:
+        raise NotImplementedError()
+
+class CloudWatchClient:
+    def get_metric_data(self, **kwargs) -> Dict[str, Any]:
+        raise NotImplementedError()
+
+class STSClient:
+    def assume_role(self, **kwargs) -> Dict[str, Any]:
+        raise NotImplementedError()
+
+    def get_caller_identity(self) -> Dict[str, Any]:
         raise NotImplementedError()
 
 # Real AWS SDK Wrappers
@@ -59,6 +77,9 @@ class RealS3(S3Client):
         response = self.client.get_object(Bucket=bucket, Key=key)
         return response["Body"].read()
 
+    def list_objects_v2(self, bucket: str, prefix: str) -> Dict[str, Any]:
+        return self.client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+
 class RealSecretsManager(SecretsManagerClient):
     def __init__(self, client=None):
         self.client = client or boto3.client("secretsmanager")
@@ -68,6 +89,30 @@ class RealSecretsManager(SecretsManagerClient):
         if "SecretString" in response:
             return response["SecretString"]
         return response["SecretBinary"].decode("utf-8")
+
+class RealCostExplorer(CostExplorerClient):
+    def __init__(self, client=None):
+        self.client = client or boto3.client("ce")
+
+    def get_cost_and_usage(self, **kwargs) -> Dict[str, Any]:
+        return self.client.get_cost_and_usage(**kwargs)
+
+class RealCloudWatch(CloudWatchClient):
+    def __init__(self, client=None):
+        self.client = client or boto3.client("cloudwatch")
+
+    def get_metric_data(self, **kwargs) -> Dict[str, Any]:
+        return self.client.get_metric_data(**kwargs)
+
+class RealSTS(STSClient):
+    def __init__(self, client=None):
+        self.client = client or boto3.client("sts")
+
+    def assume_role(self, **kwargs) -> Dict[str, Any]:
+        return self.client.assume_role(**kwargs)
+
+    def get_caller_identity(self) -> Dict[str, Any]:
+        return self.client.get_caller_identity()
 
 # Fake client mock implementations
 class FakeDynamoDB(DynamoDBClient):
@@ -117,10 +162,12 @@ class FakeS3(S3Client):
     def __init__(
         self,
         put_object_func: Optional[Callable[[str, str, bytes], None]] = None,
-        get_object_func: Optional[Callable[[str, str], bytes]] = None
+        get_object_func: Optional[Callable[[str, str], bytes]] = None,
+        list_objects_func: Optional[Callable[[str, str], Dict[str, Any]]] = None
     ):
         self.put_object_func = put_object_func
         self.get_object_func = get_object_func
+        self.list_objects_func = list_objects_func
 
     def put_object(self, bucket: str, key: str, body: bytes) -> None:
         if self.put_object_func:
@@ -131,6 +178,11 @@ class FakeS3(S3Client):
             return self.get_object_func(bucket, key)
         return b""
 
+    def list_objects_v2(self, bucket: str, prefix: str) -> Dict[str, Any]:
+        if self.list_objects_func:
+            return self.list_objects_func(bucket, prefix)
+        return {}
+
 class FakeSecretsManager(SecretsManagerClient):
     def __init__(self, get_secret_value_func: Optional[Callable[[str], str]] = None):
         self.get_secret_value_func = get_secret_value_func
@@ -139,3 +191,47 @@ class FakeSecretsManager(SecretsManagerClient):
         if self.get_secret_value_func:
             return self.get_secret_value_func(secret_id)
         return ""
+
+class FakeCostExplorer(CostExplorerClient):
+    def __init__(self, get_cost_and_usage_func: Optional[Callable[..., Dict[str, Any]]] = None):
+        self.get_cost_and_usage_func = get_cost_and_usage_func
+
+    def get_cost_and_usage(self, **kwargs) -> Dict[str, Any]:
+        if self.get_cost_and_usage_func:
+            return self.get_cost_and_usage_func(**kwargs)
+        return {}
+
+class FakeCloudWatch(CloudWatchClient):
+    def __init__(self, get_metric_data_func: Optional[Callable[..., Dict[str, Any]]] = None):
+        self.get_metric_data_func = get_metric_data_func
+
+    def get_metric_data(self, **kwargs) -> Dict[str, Any]:
+        if self.get_metric_data_func:
+            return self.get_metric_data_func(**kwargs)
+        return {}
+
+class FakeSTS(STSClient):
+    def __init__(
+        self,
+        assume_role_func: Optional[Callable[..., Dict[str, Any]]] = None,
+        get_caller_identity_func: Optional[Callable[..., Dict[str, Any]]] = None
+    ):
+        self.assume_role_func = assume_role_func
+        self.get_caller_identity_func = get_caller_identity_func
+
+    def assume_role(self, **kwargs) -> Dict[str, Any]:
+        if self.assume_role_func:
+            return self.assume_role_func(**kwargs)
+        return {
+            "Credentials": {
+                "AccessKeyId": "fake-access-key",
+                "SecretAccessKey": "fake-secret-key",
+                "SessionToken": "fake-session-token",
+                "Expiration": "2026-06-26T12:00:00Z"
+            }
+        }
+
+    def get_caller_identity(self) -> Dict[str, Any]:
+        if self.get_caller_identity_func:
+            return self.get_caller_identity_func()
+        return {"AccountId": "112233445566", "Arn": "arn:aws:iam::112233445566:role/test-role"}
