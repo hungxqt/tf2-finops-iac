@@ -1,6 +1,7 @@
 import os
 import logging
-from datetime import datetime
+# khanh fix: dùng datetime.now(UTC) thay utcnow() (deprecated Python 3.12+)
+from datetime import datetime, timezone
 from typing import Any
 import finops_common
 
@@ -14,7 +15,9 @@ def get_ddb_client():
     if ddb_client is not None:
         return ddb_client
     if os.environ.get("ROUTING_STATE_TABLE_NAME"):
-        return finops_common.RealDynamoDB()
+        # khanh fix: cache client vào global thay vì tạo mới mỗi lần gọi (singleton broken)
+        ddb_client = finops_common.RealDynamoDB()
+        return ddb_client
     return None
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -88,7 +91,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "finance_deliver": finance_route["deliver"],
                 "eng_deliver": engineering_route["deliver"],
                 "route_target": route_target,
-                "created_at": datetime.utcnow().isoformat() + "Z"
+                "created_at": datetime.now(timezone.utc).isoformat()
             })
         except Exception as e:
             logger.warning("DynamoDB save routing state failed (non-blocking): %s", e)

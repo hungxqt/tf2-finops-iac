@@ -107,7 +107,8 @@ class Response:
             recommended_containment_mode=d.get("recommended_containment_mode"),
             anomaly_id=d.get("anomaly_id"),
             severity=d.get("severity"),
-            confidence=d.get("confidence"),
+            # khanh fix: FormatDecideResult trong statemachine gửi key "confidence_score", không phải "confidence"
+            confidence=d.get("confidence") or d.get("confidence_score"),
             execution_mode=d.get("execution_mode"),
             containment_status=d.get("containment_status"),
             audit_id=d.get("audit_id"),
