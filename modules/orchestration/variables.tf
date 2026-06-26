@@ -78,6 +78,12 @@ variable "scheduler_kms_key_arn" {
   description = "KMS Customer Managed Key (CMK) ARN for EventBridge Scheduler encryption"
 }
 
+variable "cur_retry_interval_seconds" {
+  type        = number
+  description = "Wait duration in seconds before retrying CUR pull"
+  default     = 3600
+}
+
 variable "destroyable" {
   type        = bool
   description = "Set to true to make orchestration DynamoDB tables destroyable (Sandbox exceptions)"

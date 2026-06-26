@@ -504,6 +504,7 @@ module "orchestration" {
   scheduler_kms_key_arn        = module.lakehouse.data_kms_key_arn
   tags                         = var.tags
   destroyable                  = var.destroyable
+  cur_retry_interval_seconds   = 60
 }
 
 # 8. Observability Module

@@ -259,6 +259,7 @@ resource "aws_sfn_state_machine" "workflow" {
     rollback_cache_table_name        = aws_dynamodb_table.rollback_cache.name
     rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
     ai_engine_contract_version       = var.ai_engine_contract_version
+    cur_retry_interval_seconds       = var.cur_retry_interval_seconds
   })))
 
   logging_configuration {

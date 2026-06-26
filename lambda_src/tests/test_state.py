@@ -116,6 +116,7 @@ def test_state_prepare_run_context():
     assert resp["force_dry_run"] is False
     assert resp["cur_retry"]["max"] == 4
     assert resp["ai_retry"]["max"] == 6
+    assert resp["ce_retry"]["max"] == 3
 
 def test_state_prepare_nested_input():
     event_data = {
@@ -131,6 +132,7 @@ def test_state_prepare_nested_input():
     assert resp["tenant_id"] == "999888"
     assert resp["is_ad_hoc"] is True
     assert resp["ai_contract_version"] == "v1.0"
+    assert resp["ce_retry"]["max"] == 3
 
 def test_state_prepare_defaulting():
     event_data = {
