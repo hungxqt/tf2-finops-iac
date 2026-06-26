@@ -1,48 +1,66 @@
 # Orchestration Progress
 
 ## Status
-Completed
+Completed for state/idempotency alignment scope.
 
 ## Scope
-Update the Step Functions flow to match the refreshed docs/tf2-finops stash: synchronous `/v1/detect`, `/v1/decide` for action planning, `/v1/verify` for outcome verification, S3 authoritative audit, DynamoDB hot-path idempotency and rollback cache, no detection polling via `/v1/status` in ASL, and fail-closed containment. 
-
-Specifically, corrected the state machine definition and documentation to explicitly route through the VPC ALB caller helper Lambda:
-- Step Functions -> VpcAlbCallerLambda -> HTTPS private internal ALB -> AI Engine Request Lambda
-- Renamed `${ai_request_lambda_arn}` template placeholder to `${vpc_alb_caller_lambda_arn}` in `InvokeDetect`, `InvokeDecide`, and `ReportVerifyResult` states.
-- Added explanatory comments inside target states describing the ALB routing.
-- Removed unused direct `ai_request` mapping from environment `lambda_function_arns` variables so Step Functions only receives permissions for the VPC ALB caller helper.
-- Updated python unit tests and rendering script to assert and verify the correct structure.
+Aligned the CDO state worker and orchestration idempotency infrastructure with the signed AI API, telemetry, and deployment contracts:
+- Renamed the physical run-state/idempotency table to `finops-idempotency-{environment}` while preserving the `run_state` output key for module compatibility.
+- Enabled DynamoDB TTL on `ttl_expiry` for 24-hour idempotency/run locks.
+- Updated the state worker idempotency key format to `{tenant_id}:{billing_period_date}:{batch_type}`.
+- Added payload hash mismatch handling with `ERR_IDEMPOTENCY_MISMATCH` status semantics.
+- Added `FAILED_CONTRACT_CHECK` through the `fail_contract_check` operation.
+- Added contract field validation for 12-digit AWS account IDs, lowercase SHA-256 payload hashes, and semantic contract versions.
+- Wired `ERROR_BUDGET_TABLE_NAME` into the state worker environment and tested that locked error budgets force dry-run.
+- Removed the legacy standalone `services/state-lambda` directory from the root capstone workspace after confirming the IAC state worker covers the required DynamoDB idempotency behavior.
 
 ## Files Changed
-- [docs/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/statemachine.json)
-- [modules/orchestration/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/statemachine.json)
-- [modules/orchestration/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/main.tf)
-- [modules/orchestration/iam.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/iam.tf)
-- [modules/orchestration/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/outputs.tf)
-- [environments/sandbox/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/main.tf)
-- [environments/staging/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/main.tf)
-- [environments/prod/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/main.tf)
-- [scripts/render-static-asl.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/scripts/render-static-asl.py)
-- [lambda_src/tests/test_state_machine.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_state_machine.py)
-- [lambda_src/tests/test_step_function_lambda_coverage.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_step_function_lambda_coverage.py)
+- `lambda_src/src/workers/state/handler.py`
+- `lambda_src/src/finops_common/utils.py`
+- `lambda_src/src/finops_common/__init__.py`
+- `lambda_src/src/finops_common/aws_clients.py`
+- `lambda_src/tests/test_state.py`
+- `lambda_src/tests/test_finops_common.py`
+- `lambda_src/tests/test_step_function_lambda_coverage.py`
+- `modules/orchestration/main.tf`
+- `modules/compute-lambda/main.tf`
+- `environments/sandbox/main.tf`
+- `environments/staging/main.tf`
+- `environments/prod/main.tf`
+- `docs/progress/orchestration_progress.md`
+- `docs/progress/orchestration_progress_vi.md`
 
 ## Validation Commands
 ```powershell
-terraform fmt -check -recursive
+python -m pytest lambda_src\tests\test_state.py lambda_src\tests\test_finops_common.py lambda_src\tests\test_step_function_lambda_coverage.py -q
+terraform fmt -recursive modules\orchestration modules\compute-lambda environments\sandbox environments\staging environments\prod
+terraform fmt -check -recursive modules\orchestration modules\compute-lambda environments\sandbox environments\staging environments\prod
+python -m pytest
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
-python scripts/render-static-asl.py
-Push-Location lambda_src; python -m pytest; Pop-Location
+terraform -chdir=environments/staging init -backend=false
+terraform -chdir=environments/staging validate
+terraform -chdir=environments/prod init -backend=false
+terraform -chdir=environments/prod validate
 ```
 
 ## Results
-- `terraform fmt -check -recursive`: Success (All files properly formatted)
-- `environments/sandbox validate`: Success (Configuration is valid)
-- Python Lambda tests: Success (All 40 tests passed, including state machine and lambda coverage checks verifying the VPC ALB caller flow)
-- Checkov scan: Passed successfully (All standard policies verified)
+- Focused Python tests: Success, 19 passed.
+- Terraform formatting for touched modules/environments: Success.
+- Full Lambda Python tests: Success, 43 passed with existing `datetime.utcnow()` deprecation warnings in other workers.
+- Sandbox Terraform init with `-backend=false`: Success.
+- Sandbox Terraform validate: Success, configuration is valid.
+- Staging Terraform init with `-backend=false`: Success.
+- Staging Terraform validate: Success, configuration is valid.
+- Prod Terraform init with `-backend=false`: Success.
+- Prod Terraform validate: Success, configuration is valid.
+- Staging Terraform init with `-backend=false`: Success.
+- Staging Terraform validate: Success, configuration is valid.
+- Prod Terraform init with `-backend=false`: Success.
+- Prod Terraform validate: Success, configuration is valid.
 
 ## Blockers
-None
+None for this scope.
 
 ## Next Step
-Proceed with deployment or sandbox validation.
+Run optional Trivy/Checkov scans for the changed Terraform surface when security scan tooling is needed for the next handoff.

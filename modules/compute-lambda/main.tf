@@ -10,7 +10,8 @@ locals {
       timeout     = 30
       memory_size = 256
       env = {
-        RUN_STATE_TABLE_NAME = lookup(var.dynamodb_table_names, "run_state", "")
+        RUN_STATE_TABLE_NAME    = lookup(var.dynamodb_table_names, "run_state", "")
+        ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")
       }
     }
     cost_puller = {

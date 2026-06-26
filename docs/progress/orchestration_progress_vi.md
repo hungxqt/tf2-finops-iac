@@ -1,48 +1,62 @@
 # Tiến độ Orchestration
 
 ## Trạng thái
-Hoàn thành
+Hoàn thành cho phạm vi căn chỉnh state/idempotency.
 
 ## Phạm vi
-Cập nhật luồng Step Functions để phù hợp với kho lưu trữ docs/tf2-finops mới: `/v1/detect` đồng bộ, `/v1/decide` đồng bộ để lập kế hoạch hành động, `/v1/verify` để xác thực kết quả, kiểm toán authoritative qua S3, bộ nhớ đệm rollback cache và cơ chế idempotency hot-path trên DynamoDB, loại bỏ việc polling phát hiện qua `/v1/status` trong ASL, và hoạt động bảo toàn đóng (fail-closed) cho containment.
-
-Cụ thể, đã sửa đổi định nghĩa và tài liệu state machine để điều hướng rõ ràng thông qua Lambda trung gian VPC ALB caller:
-- Step Functions -> VpcAlbCallerLambda -> HTTPS private internal ALB -> AI Engine Request Lambda
-- Đổi tên placeholder `${ai_request_lambda_arn}` thành `${vpc_alb_caller_lambda_arn}` trong các trạng thái `InvokeDetect`, `InvokeDecide`, và `ReportVerifyResult`.
-- Thêm các bình luận (Comment) giải thích bên trong các trạng thái mô tả luồng định tuyến qua ALB.
-- Loại bỏ ánh xạ trực tiếp `ai_request` không sử dụng khỏi danh sách `lambda_function_arns` của môi trường để Step Functions chỉ nhận quyền gọi VPC ALB caller helper.
-- Cập nhật các bài kiểm thử đơn vị Python và kịch bản kết xuất tài liệu để xác thực cấu trúc mới.
+Đã căn chỉnh state worker của CDO và hạ tầng idempotency trong orchestration theo các hợp đồng AI API, telemetry, và deployment đã ký:
+- Đổi tên vật lý của bảng run-state/idempotency thành `finops-idempotency-{environment}` nhưng vẫn giữ output key `run_state` để tương thích module.
+- Bật DynamoDB TTL trên `ttl_expiry` cho khóa idempotency/run trong 24 giờ.
+- Cập nhật định dạng idempotency key của state worker thành `{tenant_id}:{billing_period_date}:{batch_type}`.
+- Thêm xử lý mismatch payload hash với semantics trạng thái `ERR_IDEMPOTENCY_MISMATCH`.
+- Thêm `FAILED_CONTRACT_CHECK` thông qua operation `fail_contract_check`.
+- Thêm kiểm tra trường contract cho AWS account ID 12 chữ số, payload hash SHA-256 chữ thường, và phiên bản contract dạng semantic.
+- Wire `ERROR_BUDGET_TABLE_NAME` vào environment của state worker và kiểm thử việc error budget bị khóa ép hệ thống sang dry-run.
+- Đã xóa thư mục legacy standalone `services/state-lambda` khỏi workspace gốc capstone sau khi xác nhận state worker trong IAC đã cover hành vi idempotency DynamoDB bắt buộc.
 
 ## Các file đã thay đổi
-- [docs/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/statemachine.json)
-- [modules/orchestration/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/statemachine.json)
-- [modules/orchestration/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/main.tf)
-- [modules/orchestration/iam.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/iam.tf)
-- [modules/orchestration/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/outputs.tf)
-- [environments/sandbox/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/main.tf)
-- [environments/staging/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/main.tf)
-- [environments/prod/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/main.tf)
-- [scripts/render-static-asl.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/scripts/render-static-asl.py)
-- [lambda_src/tests/test_state_machine.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_state_machine.py)
-- [lambda_src/tests/test_step_function_lambda_coverage.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_step_function_lambda_coverage.py)
+- `lambda_src/src/workers/state/handler.py`
+- `lambda_src/src/finops_common/utils.py`
+- `lambda_src/src/finops_common/__init__.py`
+- `lambda_src/src/finops_common/aws_clients.py`
+- `lambda_src/tests/test_state.py`
+- `lambda_src/tests/test_finops_common.py`
+- `lambda_src/tests/test_step_function_lambda_coverage.py`
+- `modules/orchestration/main.tf`
+- `modules/compute-lambda/main.tf`
+- `environments/sandbox/main.tf`
+- `environments/staging/main.tf`
+- `environments/prod/main.tf`
+- `docs/progress/orchestration_progress.md`
+- `docs/progress/orchestration_progress_vi.md`
 
 ## Lệnh kiểm tra
 ```powershell
-terraform fmt -check -recursive
+python -m pytest lambda_src\tests\test_state.py lambda_src\tests\test_finops_common.py lambda_src\tests\test_step_function_lambda_coverage.py -q
+terraform fmt -recursive modules\orchestration modules\compute-lambda environments\sandbox environments\staging environments\prod
+terraform fmt -check -recursive modules\orchestration modules\compute-lambda environments\sandbox environments\staging environments\prod
+python -m pytest
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
-python scripts/render-static-asl.py
-Push-Location lambda_src; python -m pytest; Pop-Location
+terraform -chdir=environments/staging init -backend=false
+terraform -chdir=environments/staging validate
+terraform -chdir=environments/prod init -backend=false
+terraform -chdir=environments/prod validate
 ```
 
 ## Kết quả
-- `terraform fmt -check -recursive`: Thành công (Tất cả các tệp đều được định dạng đúng)
-- `environments/sandbox validate`: Thành công (Cấu hình hợp lệ)
-- Các kiểm tra Python Lambda: Thành công (Tất cả 40 kiểm tra đều vượt qua, bao gồm các bài kiểm tra state machine và lambda coverage mới xác thực luồng VPC ALB caller)
-- Quét Checkov: Thành công (Tất cả các chính sách tiêu chuẩn đều được xác minh)
+- Bộ kiểm thử Python tập trung: Thành công, 19 passed.
+- Định dạng Terraform cho các module/environment đã chạm: Thành công.
+- Toàn bộ kiểm thử Python Lambda: Thành công, 43 passed với các warning `datetime.utcnow()` đã có sẵn ở các worker khác.
+- Sandbox Terraform init với `-backend=false`: Thành công.
+- Sandbox Terraform validate: Thành công, cấu hình hợp lệ.
+- Staging Terraform init với `-backend=false`: Thành công.
+- Staging Terraform validate: Thành công, cấu hình hợp lệ.
+- Prod Terraform init với `-backend=false`: Thành công.
+- Prod Terraform validate: Thành công, cấu hình hợp lệ.
 
 ## Vướng mắc
-Không có
+Không có trong phạm vi này.
 
 ## Bước tiếp theo
-Tiến hành triển khai hoặc xác thực trên môi trường sandbox.
+Chạy thêm các scan Trivy/Checkov tùy chọn cho bề mặt Terraform đã thay đổi khi cần bằng chứng security scan cho lần bàn giao tiếp theo.

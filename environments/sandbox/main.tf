@@ -1,14 +1,14 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  dynamodb_table_suffixes = ["run-state", "anomaly", "routing-state", "containment-audit", "dashboard-views", "account-policy", "ai-results", "rollback-cache"]
+  dynamodb_table_suffixes = ["anomaly", "routing-state", "containment-audit", "dashboard-views", "account-policy", "ai-results", "rollback-cache"]
   dynamodb_table_arns = [
     for suffix in local.dynamodb_table_suffixes :
     "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-${suffix}"
   ]
 
   dynamodb_table_names = {
-    run_state       = "${var.project_name}-${var.environment}-run-state"
+    run_state       = "finops-idempotency-${var.environment}"
     anomaly         = "${var.project_name}-${var.environment}-anomaly"
     routing_state   = "${var.project_name}-${var.environment}-routing-state"
     audit           = "${var.project_name}-${var.environment}-containment-audit"
@@ -423,7 +423,7 @@ module "iam" {
   environment               = var.environment
   lakehouse_bucket_arn      = module.lakehouse.lakehouse_bucket_arn
   audit_bucket_arn          = module.lakehouse.audit_bucket_arn
-  dynamodb_table_arns       = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["error_budget"]])
+  dynamodb_table_arns       = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["run_state"], module.orchestration.dynamodb_table_arns["error_budget"]])
   kms_key_arns              = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
   containment_apply_enabled = true
   queue_arns                = [module.orchestration.detection_queue_arn, module.orchestration.detection_dlq_arn, module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]

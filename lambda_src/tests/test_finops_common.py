@@ -52,8 +52,14 @@ def test_parse_s3_uri():
         finops_common.parse_s3_uri("https://my-bucket/path")
 
 def test_idempotency_key():
-    key = finops_common.idempotency_key("123456", "2026-06", "2026-06-24")
-    assert key == "123456:2026-06:2026-06-24"
+    key = finops_common.idempotency_key("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", "2026-06-24", "daily-batch")
+    assert key == "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:2026-06-24:daily-batch"
+
+
+def test_deterministic_tenant_id():
+    tenant_id = finops_common.deterministic_tenant_id("123456789012")
+    assert tenant_id == finops_common.deterministic_tenant_id("123456789012")
+    assert len(tenant_id) == 36
 
 def test_redact_sensitive_info():
     msg = "My secret token: token=abcdefghijklmnopqrstuvwxyz12345"

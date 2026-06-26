@@ -3,7 +3,7 @@ data "aws_caller_identity" "current" {}
 # DynamoDB Tables:
 # - Run state (Hash key: idempotency_key)
 resource "aws_dynamodb_table" "run_state" {
-  name         = "${var.project_name}-${var.environment}-run-state"
+  name         = "finops-idempotency-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "idempotency_key"
 
@@ -21,7 +21,10 @@ resource "aws_dynamodb_table" "run_state" {
     enabled = true
   }
 
-
+  ttl {
+    attribute_name = "ttl_expiry"
+    enabled        = true
+  }
 
   tags = var.tags
 }

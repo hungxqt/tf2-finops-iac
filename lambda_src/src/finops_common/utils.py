@@ -1,6 +1,7 @@
 import os
 import re
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Tuple
 
 class ConfigMissingError(Exception):
@@ -30,15 +31,24 @@ def parse_s3_uri(uri: str) -> Tuple[str, str]:
         raise ValueError(f"invalid S3 URI: {uri}")
     return parts[0], parts[1]
 
-def idempotency_key(account_id: str, period: str, date: str) -> str:
-    return f"{account_id}:{period}:{date}"
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def iso_utc_now() -> str:
+    return utc_now().isoformat().replace("+00:00", "Z")
+
+def deterministic_tenant_id(account_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, account_id or "tenant-default"))
+
+def idempotency_key(tenant_id: str, billing_period_date: str, batch_type: str) -> str:
+    return f"{tenant_id}:{billing_period_date}:{batch_type}"
 
 def redact_sensitive_info(message: str) -> str:
     # Redact credentials/secrets/tokens patterns
     re_secret_key = re.compile(
         r'(?i)(aws_secret_access_key|secret_key|secret|password|auth|token|key|api_key|webhook_url)["\'\s:=]+[a-zA-Z0-9/\+=_\-]{16,}'
     )
-    
+
     def replace_match(match):
         m = match.group(0)
         # Find prefix index like : = " '
@@ -52,18 +62,18 @@ def redact_sensitive_info(message: str) -> str:
         return "[REDACTED]"
 
     redacted = re_secret_key.sub(replace_match, message)
-    
+
     # Redact full secrets manager ARNs
     re_arn_secrets = re.compile(
         r'arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[a-zA-Z0-9/_+=.@-]+'
     )
     redacted = re_arn_secrets.sub("[REDACTED_SECRET_ARN]", redacted)
-    
+
     return redacted
 
 def parse_date(date_str: str) -> datetime:
     if not date_str:
-        return datetime.utcnow()
+        return utc_now()
     try:
         return datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError as e:
