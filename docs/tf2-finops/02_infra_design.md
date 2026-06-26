@@ -10,7 +10,7 @@
 
 ## 1. Architecture diagram
 
-The CDO platform is designed around a lakehouse-centric data plane for ingest and analysis, orchestrated by serverless workflows, and integrated with a shared AIOps-provided AI Engine hosted on AWS Lambda container images. The serverless compute tier utilizes Lambda functions running within private subnets, fronted by a private internal Application Load Balancer (ALB) or target group that exposes the private `/v1/*` HTTPS endpoints. The central Step Functions orchestrator coordinates the execution flow by calling these private HTTPS endpoints (`/v1/detect`, `/v1/status/{id}`, `/v1/decide`, `/v1/verify`, and `/v1/audit/{audit_id}/rollback`) with AWS Signature Version 4 (SigV4) authentication.
+The CDO platform is designed around a lakehouse-centric data plane for ingest and analysis, orchestrated by serverless workflows, and integrated with a shared AIOps-provided AI Engine hosted on AWS Lambda container images. The serverless compute tier utilizes Lambda functions running within private subnets, fronted by a private internal Application Load Balancer (ALB) or target group that exposes the private `/v1/*` HTTPS endpoints. The central Step Functions orchestrator coordinates the execution flow by invoking `VpcAlbCallerLambda`, which signs private HTTPS requests with AWS Signature Version 4 (SigV4) and calls the internal ALB endpoints (`/v1/detect`, `/v1/status/{id}`, `/v1/decide`, `/v1/verify`, and `/v1/audit/{audit_id}/rollback`).
 
 The architecture is sized around recurring CDO platform responsibilities, not around the AIOps model-training dataset. CDO must reliably pull cost and performance data from approved AWS sources, normalize it into a contract-ready shape, invoke the AIOps-owned AI Engine, and preserve the returned decision evidence. Any synthetic historical dataset used to train, enhance, or backtest the model remains AIOps-owned. Detection telemetry includes CUR data as the default source of truth, and Cost Explorer API queries as a conditional fallback only when `telemetry_delay_event = true` (indicating CUR is delayed > 36 hours). If CUR is delayed, the platform automatically fallback-calls with `telemetry_delay_event = true` and populates the CUR/CE mismatch fields (`missing_resources`, `current_ce_cost_gap_usd`, and `comparison_window`), setting `data_confidence = LOW` and forcing dry-run/alert-only containment.
 
@@ -40,6 +40,7 @@ graph TB
         end
 
         subgraph "Private Subnets (Secure AI Hosting)"
+            VpcAlbCaller[VpcAlbCallerLambda]
             ALB[Internal ALB / Target Group]
             AILambda[AI Engine Lambda Container Function]
             VPCEndpoints[Private VPC Endpoints: S3, ECR, KMS, Logs, STS, Secrets]
@@ -82,24 +83,28 @@ graph TB
     SF -->|Sync view updates to cache| DDB
 
     %% AI Engine Integration
-    SF -->|1. POST /v1/detect - private ALB HTTPS with SigV4| ALB
+    SF -->|1. Invoke /v1/detect task| VpcAlbCaller
+    VpcAlbCaller -->|1.1. POST /v1/detect - private ALB HTTPS with SigV4| ALB
     ALB --> AILambda
     AILambda -->|2. Check/Write conditional idempotency| DDBIdempotency
     AILambda -->|3. Read cost & CloudWatch metrics| S3Cur
     AILambda -->|4. Return anomalies_list| SF
     SF -->|5. Write audit record| S3Audit
-    SF -->|6. POST /v1/decide| ALB
+    SF -->|6. Invoke /v1/decide task| VpcAlbCaller
+    VpcAlbCaller -->|6.1. POST /v1/decide| ALB
     ALB --> AILambda
     AILambda -->|7. Return DecideResponse| SF
     SF -->|7.1. Cache rollback_payload.boto3_equivalent| DDBRollback
-    SF -->|8. POST /v1/verify| ALB
+    SF -->|8. Invoke /v1/verify task| VpcAlbCaller
+    VpcAlbCaller -->|8.1. POST /v1/verify| ALB
     ALB --> AILambda
     AILambda -->|9. Return VerifyResponse| SF
     SF -->|10. Offline rollback from Cache - Boto3| MemberAccounts
-    SF -->|"11. POST /v1/audit/{audit_id}/rollback"| ALB
+    SF -->|"11. Invoke rollback audit notification task"| VpcAlbCaller
+    VpcAlbCaller -->|"11.1. POST /v1/audit/{audit_id}/rollback"| ALB
 ```
 
-*Caption: The CDO pipeline is triggered by default by S3 CUR object-arrival EventBridge notifications (no polling), or by EventBridge Scheduler daily as a fallback if CUR data is delayed by more than 36 hours. The Step Functions workflow coordinates ingestion from member accounts, writes raw CUR, Cost Explorer, and CloudWatch performance data to S3, and catalogs it. The workflow invokes the AIOps-owned AI Engine Lambda synchronously through the private internal ALB endpoint (`POST /v1/detect`, with target P99 latency < 300 ms as it operates without LLM calls), which returns anomalies and `data_confidence` directly in the response. Step Functions then requests decisions (`POST /v1/decide`) for any detected anomalies (subject to a Bedrock 45s hard limit for RCA generation), immediately caching `rollback_payload.boto3_equivalent` in DynamoDB table `finops-rollback-cache`. It coordinates alerting, triggers approved containment actions, writes authoritative audit records to S3 (`company-cdo-{account_id}-telemetry` with Object Lock), and verifies outcomes (`POST /v1/verify`) synchronously. Rollbacks are CDO-executed from the DynamoDB cache using Boto3, then reported via `POST /v1/audit/{audit_id}/rollback` and SQS queue `finops-watch-rollback`.*
+*Caption: The CDO pipeline is triggered by default by S3 CUR object-arrival EventBridge notifications (no polling), or by EventBridge Scheduler daily as a fallback if CUR data is delayed by more than 36 hours. The Step Functions workflow coordinates ingestion from member accounts, writes raw CUR, Cost Explorer, and CloudWatch performance data to S3, and catalogs it. For `/v1/*` AI Engine calls, Step Functions invokes `VpcAlbCallerLambda`; that helper signs the request with SigV4 and calls the private internal ALB endpoint (`POST /v1/detect`, with target P99 latency < 300 ms as it operates without LLM calls). The AI Engine returns anomalies and `data_confidence` directly in the synchronous response. Step Functions then requests decisions (`POST /v1/decide`) for any detected anomalies (subject to a Bedrock 45s hard limit for RCA generation), immediately caching `rollback_payload.boto3_equivalent` in DynamoDB table `finops-rollback-cache`. It coordinates alerting, triggers approved containment actions, writes authoritative audit records to S3 (`company-cdo-{account_id}-telemetry` with Object Lock), and verifies outcomes (`POST /v1/verify`) synchronously. Rollbacks are CDO-executed from the DynamoDB cache using Boto3, then reported via `POST /v1/audit/{audit_id}/rollback` and SQS queue `finops-watch-rollback`.*
 
 ---
 
@@ -118,12 +123,15 @@ graph TD
     subgraph "CDO Management Account"
         SF[Step Functions Orchestrator] -->|1. Ingest Data| Lakehouse[("S3 Lakehouse & Athena")]
         Lakehouse -->|2. Cost & Performance Data| SF
-        SF -->|3. POST /v1/detect - Synchronous| AILambda[AI Engine Lambda]
+        SF -->|3. Invoke signed HTTPS helper| VpcAlbCaller[VpcAlbCallerLambda]
+        VpcAlbCaller -->|3.1. POST /v1/detect - Synchronous| AILambda[AI Engine Lambda]
         AILambda -->|4. Return anomalies_list| SF
-        SF -->|5. POST /v1/decide| AILambda
+        SF -->|5. Invoke /v1/decide helper| VpcAlbCaller
+        VpcAlbCaller -->|5.1. POST /v1/decide| AILambda
         AILambda -->|6. Return Action Plan| SF
         SF -->|7. Execute Containment Plan| Actions[Alerting & Containment Engine]
-        SF -->|8. POST /v1/verify| AILambda
+        SF -->|8. Invoke /v1/verify helper| VpcAlbCaller
+        VpcAlbCaller -->|8.1. POST /v1/verify| AILambda
         SF -->|9. Write Authoritative Audit| S3Audit[("S3 Audit Store")]
         SF -->|10. Cache Run State| DDB[("DynamoDB Cache")]
     end
@@ -132,7 +140,7 @@ graph TD
     Actions -->|12. Publish| Dashboard[Finance Dashboard / Channels]
 ```
 
-*Caption: The central Step Functions Orchestrator drives the entire FinOps loop: extracting cost and CloudWatch telemetry (utilizing EventBridge S3 object-arrival triggers by default, or Cost Explorer API fallback if CUR is delayed > 36 hours), calling the AI Engine Lambda synchronously (`POST /v1/detect` with P99 latency < 300 ms), calling `POST /v1/decide` to retrieve containment plans and caching `rollback_payload.boto3_equivalent` in DynamoDB, executing approved actions, verifying outcomes via `POST /v1/verify`, performing Boto3 rollbacks from cache and reporting them via `POST /v1/audit/{audit_id}/rollback`, and committing tamper-proof compliance logs directly to S3.*
+*Caption: The central Step Functions Orchestrator drives the entire FinOps loop: extracting cost and CloudWatch telemetry (utilizing EventBridge S3 object-arrival triggers by default, or Cost Explorer API fallback if CUR is delayed > 36 hours), invoking `VpcAlbCallerLambda` to call the AI Engine synchronously over private SigV4 HTTPS (`POST /v1/detect` with P99 latency < 300 ms), calling `POST /v1/decide` to retrieve containment plans and caching `rollback_payload.boto3_equivalent` in DynamoDB, executing approved actions, verifying outcomes via `POST /v1/verify`, performing Boto3 rollbacks from cache and reporting them via `POST /v1/audit/{audit_id}/rollback`, and committing tamper-proof compliance logs directly to S3.*
 
 Operationally, Step Functions is the control boundary between deterministic CDO logic and probabilistic AI output. Every transition records a `run_id`, cost window, account scope, and contract version so that Finance can trace a dashboard anomaly back to the exact ingestion batch and AI decision. This design also prevents the AI Engine from directly touching member accounts; all alerting and containment actions are mediated by CDO policy workers.
 
@@ -174,12 +182,13 @@ The ingestion workflow normalizes the two operational billing shapes (CUR as def
 
 ### 1.3 AI Engine Lambda Container Hosting Platform
 
-This diagram zooms in on the AWS Lambda container architecture, showing the Step Functions invocation of the AI Engine Lambda function directly and synchronously.
+This diagram zooms in on the AWS Lambda container architecture, showing Step Functions invoking `VpcAlbCallerLambda`, which performs the signed private HTTPS call to the AI Engine ALB synchronously.
 
 ```mermaid
 graph TB
     subgraph "CDO Orchestration"
         SF[Step Functions Workflow]
+        VpcAlbCaller[VpcAlbCallerLambda]
     end
 
     subgraph "Data Lakehouse"
@@ -207,17 +216,20 @@ graph TB
     end
 
     %% Flow
-    SF -->|1. POST /v1/detect - private ALB HTTPS| ALB
+    SF -->|1. Invoke /v1/detect task| VpcAlbCaller
+    VpcAlbCaller -->|1.1. POST /v1/detect - private ALB HTTPS with SigV4| ALB
     ALB --> AILambda
     AILambda -->|2. Check/Write conditional idempotency| DDBIdempotency[("DynamoDB finops-idempotency-{env}")]
     AILambda -->|3. Read Cost & Performance Features| CuratedS3
     AILambda -->|4. Return anomalies_list| SF
     SF -->|5. Write audit record - Object Lock| S3Audit
-    SF -->|6. POST /v1/decide| ALB
+    SF -->|6. Invoke /v1/decide task| VpcAlbCaller
+    VpcAlbCaller -->|6.1. POST /v1/decide| ALB
     ALB --> AILambda
     AILambda -->|7. Return DecideResponse| SF
     SF -->|7.1 Cache rollback boto3_equivalent| DDBRollback[("DynamoDB finops-rollback-cache")]
-    SF -->|8. POST /v1/verify| ALB
+    SF -->|8. Invoke /v1/verify task| VpcAlbCaller
+    VpcAlbCaller -->|8.1. POST /v1/verify| ALB
     ALB --> AILambda
     AILambda -->|9. Return VerifyResponse| SF
     SF -->|10. Sync view cache| DDB
@@ -226,9 +238,9 @@ graph TB
     AILambda -.->|Access SDK| SM
 ```
 
-*Caption: The AI Engine detection request from the Step Functions orchestrator is sent via the private internal ALB to the AI Engine Lambda function (`POST /v1/detect`). The AI Engine Lambda processes cost and CloudWatch utilization metrics synchronously from S3 and returns the detection results immediately. The orchestrator then requests decisions (`POST /v1/decide`), executes containment actions, writes the audit records to S3, and verifies the remediation actions (`POST /v1/verify`) synchronously.*
+*Caption: Step Functions does not call the private ALB directly. For each `/v1/*` operation, it invokes `VpcAlbCallerLambda`, which signs the HTTPS request with SigV4 and sends it to the private internal ALB. The AI Engine Lambda processes cost and CloudWatch utilization metrics synchronously from S3 and returns the detection results immediately. The orchestrator then requests decisions (`POST /v1/decide`), executes containment actions, writes the audit records to S3, and verifies the remediation actions (`POST /v1/verify`) synchronously.*
 
-The Lambda-based platform hosts the containerized AI Engine in private VPC subnets behind a private internal ALB. By invoking the AI Engine through versioned contract endpoints over HTTPS with SigV4 authentication, the Step Functions orchestrator receives the `anomalies_list` and `data_confidence` within the same request lifecycle (target P99 latency for `/v1/detect` is < 300 ms as it performs direct analysis without LLM processing; the Bedrock 45s hard limit is isolated to `/v1/decide` for generating root cause analysis and action plans), eliminating the complexity of status polling loops. The orchestrator records compliance audit records directly in Amazon S3, using Object Lock for WORM immutability. DynamoDB is used for hot-path idempotency (`finops-idempotency-{env}` table with 24h TTL) and to store the rollback payloads (`finops-rollback-cache` table with 90-day TTL) for offline Boto3 execution by CDO workers. This contract-first approach provides predictable, synchronous execution while enforcing strict security boundaries via IAM execution roles and Private VPC Endpoints.
+The Lambda-based platform hosts the containerized AI Engine in private VPC subnets behind a private internal ALB. By invoking `VpcAlbCallerLambda` to call the AI Engine through versioned contract endpoints over HTTPS with SigV4 authentication, the Step Functions orchestrator receives the `anomalies_list` and `data_confidence` within the same request lifecycle (target P99 latency for `/v1/detect` is < 300 ms as it performs direct analysis without LLM processing; the Bedrock 45s hard limit is isolated to `/v1/decide` for generating root cause analysis and action plans), eliminating the complexity of status polling loops. The orchestrator records compliance audit records directly in Amazon S3, using Object Lock for WORM immutability. DynamoDB is used for hot-path idempotency (`finops-idempotency-{env}` table with 24h TTL) and to store the rollback payloads (`finops-rollback-cache` table with 90-day TTL) for offline Boto3 execution by CDO workers. This contract-first approach provides predictable, synchronous execution while enforcing strict security boundaries via IAM execution roles and Private VPC Endpoints.
 
 ### 1.4 Alerting & Containment Engine
 
@@ -284,6 +296,7 @@ sequenceDiagram
     autonumber
     participant SF as Step Functions Orchestrator
     participant Lake as S3 Lakehouse / Ingestion
+    participant Caller as VpcAlbCallerLambda
     participant ALB as Private ALB
     participant AI as AI Engine Lambda
     participant DDB_Idemp as "DynamoDB finops-idempotency-{env}"
@@ -295,8 +308,9 @@ sequenceDiagram
     SF->>Lake: Execute Ingestion (CUR default, CE fallback if CUR delayed > 36h)
     Lake-->>SF: Raw & Curated data stored
     
-    Note over SF, ALB: 2. CDO Calls Synchronous Detection via Private ALB (P99 < 300ms)
-    SF->>ALB: POST /v1/detect (with X-Idempotency-Key & X-Correlation-Id)
+    Note over SF, ALB: 2. CDO Calls Synchronous Detection via VpcAlbCallerLambda and Private ALB (P99 < 300ms)
+    SF->>Caller: Invoke detect task
+    Caller->>ALB: POST /v1/detect with SigV4 and contract headers
     ALB->>AI: Forward request
     Note over AI, DDB_Idemp: AI validates and checks/writes idempotency lock
     AI->>DDB_Idemp: PutItem / GetItem with Conditional Write
@@ -309,7 +323,8 @@ sequenceDiagram
         SF->>S3: Write initial audit record (Object Lock, >=90 days)
         
         Note over SF, ALB: 4. CDO Requests Intervention Plan
-        SF->>ALB: POST /v1/decide (anomaly_context)
+        SF->>Caller: Invoke decide task
+        Caller->>ALB: POST /v1/decide with SigV4
         ALB->>AI: Forward request
         AI-->>SF: 200 OK DecideResponse (action_plan, applied_payload, rollback_payload.boto3_equivalent)
         
@@ -321,7 +336,8 @@ sequenceDiagram
         Cont->>S3: Write execution audit record (Object Lock)
         Cont-->>SF: Execution outcome
         
-        SF->>ALB: POST /v1/verify (action_executed + post_telemetry)
+        SF->>Caller: Invoke verify task
+        Caller->>ALB: POST /v1/verify with SigV4
         ALB->>AI: Forward request
         AI-->>SF: 200 OK VerifyResponse (success, next_action)
         
@@ -334,13 +350,14 @@ sequenceDiagram
         SF->>DDB_Rollback: Read cached boto3_equivalent
         SF->>Cont: Execute Boto3 commands directly (no AI dependency)
         Cont-->>SF: Rollback outcome
-        SF->>ALB: POST /v1/audit/{audit_id}/rollback (results)
+        SF->>Caller: Invoke rollback audit notification task
+        Caller->>ALB: POST /v1/audit/{audit_id}/rollback with SigV4
         ALB->>AI: Forward request
         AI-->>SF: 200 OK RollbackResponse
     end
 ```
 
-*Caption: The programmatic API sequence diagram outlines the synchronous anomaly detection and remediation validation loop, showing synchronous detection via private ALB, conditional idempotency checks in DynamoDB, plan generation, immediate rollback caching, execution of offline rollbacks via boto3, verification, and S3-based audit ledger commits.*
+*Caption: The programmatic API sequence diagram outlines the synchronous anomaly detection and remediation validation loop. Step Functions invokes `VpcAlbCallerLambda` for every `/v1/*` call; that helper signs the request with SigV4 and sends it to the private ALB. The sequence also shows conditional idempotency checks in DynamoDB, plan generation, immediate rollback caching, execution of offline rollbacks via boto3, verification, and S3-based audit ledger commits.*
 
 ---
 
