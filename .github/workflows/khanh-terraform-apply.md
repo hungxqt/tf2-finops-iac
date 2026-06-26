@@ -251,3 +251,7 @@ jobs:
 
       - name: Terraform apply reviewed plan
         run: terraform -chdir="${{ needs.select-environment.outputs.root }}" apply -auto-approve "khanh-${{ needs.select-environment.outputs.environment }}.tfplan"
+
+
+
+
