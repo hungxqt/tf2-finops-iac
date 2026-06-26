@@ -10,10 +10,15 @@
 
 The CDO platform enforces isolation within a dedicated VPC. All compute resources run in isolated private subnets with no internet gateway route. All AWS API communications occur privately using AWS VPC Endpoints.
 
-The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The Step Functions orchestrator interacts with the AI Engine Lambda function (running in a private container execution environment) through a private internal Application Load Balancer (ALB) or equivalent HTTPS adapter using AWS SigV4 signatures. The private endpoints `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}`, and `/v1/audit/{audit_id}/rollback` are fully exposed via this secure private ALB compute target and require SigV4 authentication plus the contract headers. The `/health` endpoint is reachable only through the private internal ALB health-check path and does not require SigV4 authentication. The AI Engine does not receive direct credentials for member account containment actions. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications. They are not used for anomaly detection, AI decision dispatch, or rollback command execution.
+The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The Step Functions orchestrator interacts with the AI Engine Lambda function (running in a private container execution environment) through a private internal Application Load Balancer (ALB) or equivalent HTTPS adapter using AWS SigV4 signatures. When an edge entry point is required, CloudFront reaches the private internal ALB through a CloudFront VPC Origin, keeping the ALB non-internet-facing while adding edge TLS, WAF, and access logging controls. The private endpoints `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}`, and `/v1/audit/{audit_id}/rollback` are fully exposed via this secure private ALB compute target and require SigV4 authentication plus the contract headers. The `/health` endpoint is reachable only through the private internal ALB health-check path and does not require SigV4 authentication. The AI Engine does not receive direct credentials for member account containment actions. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications. They are not used for anomaly detection, AI decision dispatch, or rollback command execution.
 
 ```mermaid
 graph TD
+    subgraph "Edge Access Layer"
+        CF[CloudFront Distribution]
+        VPCOrigin[CloudFront VPC Origin]
+    end
+
     subgraph "CDO Management Account VPC (ap-southeast-1)"
         subgraph "Private Subnets (Serverless Compute)"
             AILambda[AI Engine Lambda Function]
@@ -37,6 +42,8 @@ graph TD
     end
 
     %% Network flows
+    CF -->|Private origin routing| VPCOrigin
+    VPCOrigin -->|HTTPS to internal ALB| ALB
     L_Pull -->|VPC Endpoint HTTPS| VPCE
     VPCE -->|Private link| S3Raw
     VPCE -->|Private link| S3Cur
@@ -53,7 +60,7 @@ graph TD
     VPCE -->|Private link| S3Cur
 ```
 
-*Caption: The AI Engine Lambda function, Application Load Balancer (ALB), and other platform compute tasks run in private-only subnets. They utilize dedicated AWS VPC Interface/Gateway Endpoints (PrivateLink) to connect to AWS services privately. Step Functions and platform compute access the `/v1/*` AI API through the internal ALB using HTTPS and AWS SigV4 authentication, while `/health` is limited to the private ALB health-check path and does not require SigV4. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications, not for detection flow, AI decision dispatch, or rollback command execution.*
+*Caption: The AI Engine Lambda function, Application Load Balancer (ALB), and other platform compute tasks run in private-only subnets. They utilize dedicated AWS VPC Interface/Gateway Endpoints (PrivateLink) to connect to AWS services privately. Step Functions and platform compute access the `/v1/*` AI API through the internal ALB using HTTPS and AWS SigV4 authentication. If external edge access is required, CloudFront uses a VPC Origin to route privately to the internal ALB; the ALB remains non-internet-facing and `/v1/*` requests still require SigV4 plus the contract headers. `/health` is limited to the private ALB health-check path and does not require SigV4. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications, not for detection flow, AI decision dispatch, or rollback command execution.*
 
 ### 1.2 Security Groups
 
@@ -61,7 +68,7 @@ Traffic between compute components is regulated using stateful security groups e
 
 | SG name | Inbound | Outbound | Attached to |
 |---|---|---|---|
-| `alb-sg` | TCP 443 (from orchestration/compute) | TCP 8080 (to `lambda-sg`) | Private Internal ALB / HTTPS Adapter |
+| `alb-sg` | TCP 443 (from orchestration/compute and the CloudFront VPC Origin security group) | TCP 8080 (to `lambda-sg`) | Private Internal ALB / HTTPS Adapter |
 | `lambda-sg` | TCP 8080 (from `alb-sg` only, for AI Engine Lambda) | TCP 443 (to `vpce-sg`) | Ingestion, Containment, Alert Routing, and AI Engine Lambda functions |
 | `vpce-sg` | TCP 443 (from `lambda-sg`) | None | VPC endpoints (S3, DynamoDB, ECR, Secrets Mgr, KMS, Logs, STS) |
 
@@ -81,6 +88,10 @@ VPC interface endpoints are configured with private DNS enabled, routing all tra
 Security groups and IAM resource policies are deployed to restrict communications (e.g., the AI Engine Lambda only accepts invocation actions initiated by the Step Functions role, and the SQS Alert Queue policy allows message publishing exclusively from the Alert Routing Lambda role).
 
 Endpoint policies are scoped to the smallest practical action set. The S3 gateway endpoint allows reads from approved CUR export prefixes, writes only to the CDO raw/curated buckets, and reads/writes to the authoritative `s3_audit_bucket`. The DynamoDB endpoint allows access only to the dashboard-materialization read cache tables. Interface endpoints for Secrets Manager, ECR, and CloudWatch Logs are restricted to the CDO VPC security groups and execution roles. Network ACLs remain simple and stateless, with public ingress denied and ephemeral return traffic allowed only inside private subnet ranges.
+
+### 1.4 CloudFront VPC Origin Access
+
+When the platform needs an edge-controlled entry point, CloudFront is configured with a VPC Origin that connects privately to the internal ALB. This keeps the ALB private and avoids public internet exposure while allowing CloudFront-level TLS policy, WAF inspection, access logging, and controlled viewer access. The CloudFront VPC Origin security group is the only edge-origin source allowed to reach `alb-sg` on TCP 443. CloudFront does not change the AI API trust model: all `/v1/*` requests still require SigV4 authentication and the required contract headers, and `/health` remains an ALB health-check endpoint rather than a public viewer API.
 
 ## 2. IAM & Access Control
 
