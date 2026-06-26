@@ -10,7 +10,7 @@
 
 The CDO platform enforces isolation within a dedicated VPC. All compute resources run in isolated private subnets with no internet gateway route. All AWS API communications occur privately using AWS VPC Endpoints.
 
-The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The Step Functions orchestrator interacts with the AI Engine Lambda function (running in a private container execution environment) through a private internal Application Load Balancer (ALB) or equivalent HTTPS adapter using AWS SigV4 signatures. The private endpoints `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}`, `/v1/audit/{audit_id}/rollback`, and `/health` are fully exposed via this secure private ALB compute target. The AI Engine does not receive direct credentials for member account containment actions. SQS/DLQ are used only for alert routing retry buffers rather than the detection flow.
+The security design assumes two primary trust boundaries: the CDO management account boundary and the member account boundary. Cost data, AI decision payloads, alert payloads, and containment audit records stay inside the CDO-controlled AWS network path. The Step Functions orchestrator interacts with the AI Engine Lambda function (running in a private container execution environment) through a private internal Application Load Balancer (ALB) or equivalent HTTPS adapter using AWS SigV4 signatures. The private endpoints `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}`, `/v1/audit/{audit_id}/rollback`, and `/health` are fully exposed via this secure private ALB compute target. The AI Engine does not receive direct credentials for member account containment actions. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications. They are not used for anomaly detection, AI decision dispatch, or rollback command execution.
 
 ```mermaid
 graph TD
@@ -20,7 +20,7 @@ graph TD
             L_Pull[Ingestion Lambda]
             L_Cont[Containment Lambda]
             L_Alert[Alert Routing Lambda]
-            SQSQueue[SQS Alert Queue]
+            SQSQueue[SQS Alert/rollback audit queues]
         end
 
         subgraph "VPC Endpoint Subnet"
@@ -53,7 +53,7 @@ graph TD
     VPCE -->|Private link| S3Cur
 ```
 
-*Caption: The AI Engine Lambda function, Application Load Balancer (ALB), and other platform compute tasks run in private-only subnets. They utilize dedicated AWS VPC Interface/Gateway Endpoints (PrivateLink) to connect to AWS services privately. Step Functions and platform compute access the AI Engine through the internal ALB using HTTPS and AWS SigV4 authentication. SQS/DLQ are used only for alert routing retry buffers rather than the detection flow.*
+*Caption: The AI Engine Lambda function, Application Load Balancer (ALB), and other platform compute tasks run in private-only subnets. They utilize dedicated AWS VPC Interface/Gateway Endpoints (PrivateLink) to connect to AWS services privately. Step Functions and platform compute access the AI Engine through the internal ALB using HTTPS and AWS SigV4 authentication. SQS/DLQ are used only for alert routing retry buffers and rollback/audit completion notifications, not for detection flow, AI decision dispatch, or rollback command execution.*
 
 ### 1.2 Security Groups
 
