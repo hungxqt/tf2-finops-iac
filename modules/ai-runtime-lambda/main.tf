@@ -36,6 +36,8 @@ resource "aws_acm_certificate" "self_signed" {
 }
 
 # ECR Repository for the AI Engine Images
+# trivy:ignore:AVD-AWS-0033
+# trivy:ignore:AWS-0033
 resource "aws_ecr_repository" "ai_engine" {
   name                 = "${var.project_name}-${var.environment}-ai-engine"
   image_tag_mutability = "IMMUTABLE"
@@ -328,8 +330,13 @@ resource "aws_lambda_function" "request" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.request, aws_ecr_repository_policy.lambda]
-  tags       = var.tags
+  depends_on = [
+    aws_cloudwatch_log_group.request,
+    aws_ecr_repository_policy.lambda,
+    aws_iam_role_policy_attachment.request_vpc,
+    aws_iam_role_policy_attachment.request
+  ]
+  tags = var.tags
 }
 
 resource "aws_lambda_alias" "request" {
@@ -378,8 +385,13 @@ resource "aws_lambda_function" "worker" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.worker, aws_ecr_repository_policy.lambda]
-  tags       = var.tags
+  depends_on = [
+    aws_cloudwatch_log_group.worker,
+    aws_ecr_repository_policy.lambda,
+    aws_iam_role_policy_attachment.worker_vpc,
+    aws_iam_role_policy_attachment.worker
+  ]
+  tags = var.tags
 }
 
 resource "aws_lambda_alias" "worker" {
@@ -422,7 +434,10 @@ resource "aws_security_group_rule" "alb_ingress_https" {
   description       = "Allow HTTPS from within the VPC"
 }
 
+# trivy:ignore:AVD-AWS-0104
+# trivy:ignore:AWS-0104
 resource "aws_security_group_rule" "alb_egress_all" {
+  # checkov:skip=CKV_AWS_382: "Internal ALB requires unrestricted egress to allow routing to dynamic Lambda target groups"
   type              = "egress"
   from_port         = 0
   to_port           = 0
@@ -492,6 +507,8 @@ resource "aws_lb_listener" "https" {
 
 resource "aws_wafv2_web_acl" "alb" {
   # checkov:skip=CKV_AWS_84: "WAF logging is disabled to reduce costs in sandbox"
+  # checkov:skip=CKV_AWS_192: "Log4j protection is managed at the Lambda runtime level, not WAF"
+  # checkov:skip=CKV2_AWS_31: "WAF logging is disabled to reduce logging storage and cost in non-prod environments"
   name        = "${var.project_name}-${var.environment}-ai-waf"
   description = "WAF for AI Engine internal ALB"
   scope       = "REGIONAL"

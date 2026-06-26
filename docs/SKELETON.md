@@ -31,20 +31,25 @@ tf2-finops-iac/
 │   ├── sandbox/                # Fast iteration environment
 │   ├── staging/                # Integration and pre-production testing
 │   └── prod/                   # Production environment (manual gate checks)
-├── lambda_src/                 # Serverless Go Lambda worker source code
-│   ├── finops_common/          # Shared types, validation, and responses
-│   ├── ai_client/              # Ingests normalizer output & contacts AI engine
-│   ├── audit_writer/           # Writes workflow logs & containment audit trails
-│   ├── containment_worker/     # Executes safe remediation/actions
-│   ├── cost_puller/            # Cost data ingestion worker
-│   ├── normalizer/             # Transforms raw cost schema to parquet format
-│   ├── router/                 # Routes findings to alert topics
-│   ├── go.mod
-│   └── go.sum
+├── lambda_src/                 # Serverless Python Lambda worker source code
+│   ├── requirements.txt        # Production dependencies (boto3, etc.)
+│   ├── requirements-dev.txt    # Development/testing dependencies (pytest, etc.)
+│   ├── src/
+│   │   ├── finops_common/      # Shared utilities, dataclasses, validation, and responses
+│   │   └── workers/            # Serverless Python Lambda workers
+│   │       ├── state/          # Manages execution context and idempotency checks
+│   │       ├── cost_puller/    # Cost data ingestion worker
+│   │       ├── normalizer/     # Transforms/standardizes raw cost schema to normalized format
+│   │       ├── router/         # Routes anomalies to alerting topics
+│   │       ├── audit_writer/   # Writes workflow logs & containment audit trails to S3/DynamoDB
+│   │       ├── containment_worker/ # Executes safe containment/remediation actions
+│   │       └── vpc_alb_caller/ # Performs IAM SigV4 requests to private internal ALB for AI Engine
+│   └── tests/                  # Pytest unit tests for all workers and common logic
 ├── modules/                    # Reusable, single-responsibility Terraform modules
+│   ├── ai-runtime-lambda/      # ECR digest-pinned Lambda container runtime behind private internal ALB
 │   ├── alerting/               # Separate SNS routes for Finance and Engineering
-│   ├── compute-lambda/         # Deployment definitions for Go worker stubs
-│   ├── dashboard/              # Athena named queries and QuickSight hooks
+│   ├── compute-lambda/         # Deployment definitions for Python zip Lambda workers
+│   ├── dashboard/              # S3 static assets, CloudFront, Cognito user/identity pools
 │   ├── iam/                    # Least-privilege roles and permissions boundary
 │   ├── lakehouse/              # S3 buckets, Object Lock, Glue Catalog, and KMS keys
 │   ├── networking/             # Private VPC subnets and VPC Interface endpoints
@@ -52,7 +57,7 @@ tf2-finops-iac/
 │   └── orchestration/          # DynamoDB tables and Step Functions state machine
 ├── scripts/                    # Automation utilities
 │   ├── validate.ps1            # Code formatting, linting, and testing verification
-│   └── package-lambdas.ps1     # Go compiling and zip bundling utility
+│   └── package-lambdas.ps1     # Python zip bundling utility
 ├── .gitignore                  # Git pattern ignore configuration
 ├── .pre-commit-config.yaml     # Hooks to prevent bad formatting/commits
 ├── .terraform-version          # Pinned version constraint for Terraform execution
@@ -88,11 +93,12 @@ tf2-finops-iac/
 1. **`networking`**: Creates a private VPC with two public subnets (hosting NAT Gateways) and two private subnets (hosting Lambda workers). Ingress to the private subnets is blocked. Gateway and interface endpoints are defined for required AWS APIs (S3, DynamoDB, KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS) to keep traffic inside the AWS backbone.
 2. **`lakehouse`**: Creates S3 storage zones with Object Lock configured in compliance mode for the Audit bucket (minimum 90 days retention). Sets up bucket versioning, lifecycle transitions, TLS-only policies, KMS keys (for data, audit logs, and DynamoDB), a Glue Catalog database, and an Athena workgroup with byte scan cutoff protection.
 3. **`iam`**: Implements least-privilege AWS execution roles. A permission boundary enforces strict controls: preventing IAM modifications, organization modifications, RDS deletes, EC2 terminations, and S3 deletes. Remediations in production must never terminate servers or mutate policies/data.
-4. **`compute-lambda`**: Deploys the six Go worker binaries as VPC-attached Lambda functions running on the custom Go runtime (`provided.al2023`). Configures appropriate timeouts, RAM allocations, reserved concurrency, active X-Ray tracing, and stable/canary deployment aliases.
-5. **`orchestration`**: Provisions DynamoDB on-demand, encrypted tables to manage state (run state, anomaly list, alert routing index, containment audit trail, materialized views). Builds the Step Functions Standard state machine mapping the data processing workflow.
-6. **`alerting`**: Establishes separate SNS notification topics for Finance (cost alerts, digests) and Engineering (infrastructure health, errors) to keep concern boundaries clear. Alarms use dedicated KMS keys for topic encryption.
-7. **`observability`**: Builds the operational CloudWatch dashboard and registers metric filters and alarms for workflow failures, AI engine timeouts, stale runs (>26h), and CI configuration drift.
-8. **`dashboard`**: Hooks up Athena named queries providing finance-readable spent reports. Direct SQL query execution is abstract and does not require finance user knowledge.
+4. **`ai-runtime-lambda`**: Deploys ECR digest-pinned Lambda container runtime (AI Engine Request Lambda and Worker Lambda) behind a private internal Application Load Balancer (ALB) and maps private DNS lookup names via Route 53 private hosted zones.
+5. **`compute-lambda`**: Deploys the seven Python worker functions (`state`, `cost_puller`, `normalizer`, `router`, `audit_writer`, `containment_worker`, and `vpc_alb_caller`) as VPC-attached Lambda functions running on the standard `python3.13` managed runtime. Configures timeouts, memory sizes, reserved concurrency, active X-Ray tracing, stable/canary deployment aliases, and code signing.
+6. **`orchestration`**: Provisions DynamoDB on-demand, encrypted tables to manage state (run state, anomaly list, alert routing index, containment audit trail, materialized views, and rollback-cache). Builds the Step Functions Standard state machine mapping the data processing workflow.
+7. **`alerting`**: Establishes separate SNS notification topics for Finance (cost alerts, digests) and Engineering (infrastructure health, errors) to keep concern boundaries clear. Alarms use dedicated KMS keys for topic encryption.
+8. **`observability`**: Builds the operational CloudWatch dashboard and registers metric filters and alarms for workflow failures, AI engine timeouts, stale runs (>26h), and CI configuration drift.
+9. **`dashboard`**: Hosts static assets in S3, delivered via CloudFront, authenticated by Cognito user/identity pools, and integrates Athena named queries for finance-readable spent reports with QuickSight as a future optional BI integration.
 
 ### B. Environment Composition Roots (`environments/`)
 Each directory calls the eight core modules sequentially. Environment profiles dictate behaviour:
@@ -110,10 +116,11 @@ Each directory calls the eight core modules sequentially. Environment profiles d
 
 ## 4. Lambda Subsystem (`lambda_src/`)
 
-All workers are implemented in **Go (1.21+)** for performance and static type safety:
-- **`finops_common`**: Holds shared structs for event request deserialization and response envelopes, along with standard contract validation helper functions.
-- **Build / Deploy Packaging**: Go Lambda functions compiled for `linux/amd64` output a single binary named `bootstrap`. The `package-lambdas.ps1` utility compiles each lambda worker and zips the resulting `bootstrap` binary for Terraform deployment.
-- **Unit Testing**: Tests reside directly inside each package (e.g. `cost_puller/main_test.go` and `containment_worker/main_test.go`) and can be executed simultaneously via `go test ./...` in the `lambda_src` directory.
+All workers are implemented in **Python (3.13)** to facilitate native compatibility with CDO adapter frameworks and AWS runtime management:
+- **`finops_common`**: Holds shared utilities, dataclasses, validation, and standard response helpers.
+- **`workers`**: Houses individual packages for each of the seven workers. Handlers conform to the `workers.<worker>.handler.handle_request` signature.
+- **Build / Deploy Packaging**: The `package-lambdas.ps1` script packages each Python function together with required dependencies (from `requirements.txt`) into individual zip files under `.build/lambda/` for deployment.
+- **Unit Testing**: Unit tests reside under the `tests/` directory and can be executed via `pytest` (`Push-Location lambda_src; python -m pytest; Pop-Location`).
 
 ---
 

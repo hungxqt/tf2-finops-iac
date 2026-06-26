@@ -9,7 +9,7 @@ Migrate all seven Lambda workers and common library from Go custom-runtime to ma
 - **State Worker (`state`)**: Ported DynamoDB run-state checking and idempotency.
 - **Cost Puller (`cost_puller`)**: Ported synthetic CUR cost pulling and simulation override modes (`simulate-cur-delay`, `simulate-ce-throttled`).
 - **Normalizer (`normalizer`)**: Ported raw S3 cost parsing, required field filtering, and untagged owner mapping.
-- **AI Client (`ai_client`)**: Ported allowed hosts allowlist validation, token retrieval, HTTPS enforcement, and fail-closed unsafe prod containment.
+- **VPC ALB Caller (`vpc_alb_caller`)**: Ported private internal ALB calling mechanism, IAM SigV4 request signing, and HTTPS routing for secure AI Engine integration.
 - **Router (`router`)**: Ported severities mapping, routing targets, and optional routing state DB persistence.
 - **Audit Writer (`audit_writer`)**: Ported audit type inference, detailed fields formatting, S3 bucket write, and DynamoDB indexing.
 - **Containment Worker (`containment_worker`)**: Ported environment-based containment rules, sandbox approvals, and blocked actions (terminate, delete, modify_iam).

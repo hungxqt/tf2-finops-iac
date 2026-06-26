@@ -1,6 +1,16 @@
 output "lambda_role_arns" {
   description = "Map of Lambda worker execution role ARNs"
   value       = { for k, v in aws_iam_role.workers : k => v.arn }
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_iam_role_policy.state,
+    aws_iam_role_policy.cost_puller,
+    aws_iam_role_policy.normalizer,
+    aws_iam_role_policy.router,
+    aws_iam_role_policy.audit_writer,
+    aws_iam_role_policy.containment_worker,
+    aws_iam_role_policy.workers_xray
+  ]
 }
 
 output "permissions_boundary_arn" {

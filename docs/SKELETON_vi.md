@@ -32,20 +32,25 @@ tf2-finops-iac/
 │   ├── sandbox/                # Môi trường chạy thử nghiệm nhanh (fast iteration)
 │   ├── staging/                # Môi trường tích hợp và chạy thử nghiệm hệ thống (pre-production)
 │   └── prod/                   # Môi trường vận hành thực tế (chốt chặn phê duyệt thủ công)
-├── lambda_src/                 # Mã nguồn Serverless Go Lambda worker
-│   ├── finops_common/          # Các struct dùng chung, validation và phản hồi
-│   ├── ai_client/              # Nhận đầu ra của normalizer và giao tiếp với AI engine
-│   ├── audit_writer/           # Ghi logs workflow và lịch sử containment audit
-│   ├── containment_worker/     # Thực thi các hành động remediation/safe actions
-│   ├── cost_puller/            # Worker thu thập dữ liệu chi phí (cost data ingestion)
-│   ├── normalizer/             # Chuẩn hóa schema dữ liệu chi phí thô sang dạng parquet
-│   ├── router/                 # Điều hướng các cảnh báo phát hiện sang các alert topics
-│   ├── go.mod
-│   └── go.sum
+├── lambda_src/                 # Mã nguồn Serverless Python Lambda worker
+│   ├── requirements.txt        # Các dependency production (boto3, v.v.)
+│   ├── requirements-dev.txt    # Các dependency dev/test (pytest, v.v.)
+│   ├── src/
+│   │   ├── finops_common/      # Các tiện ích dùng chung, dataclass event/response và validation
+│   │   └── workers/            # Các Lambda worker Python serverless
+│   │       ├── state/          # Quản lý context thực thi và kiểm tra idempotency
+│   │       ├── cost_puller/    # Worker thu thập dữ liệu chi phí (cost data ingestion)
+│   │       ├── normalizer/     # Chuẩn hóa schema dữ liệu chi phí thô sang định dạng parquet
+│   │       ├── router/         # Điều hướng phát hiện sang các alert topics
+│   │       ├── audit_writer/   # Ghi logs workflow và lịch sử containment audit lên S3/DynamoDB
+│   │       ├── containment_worker/ # Thực thi các hành động remediation/safe actions
+│   │       └── vpc_alb_caller/ # Thực hiện các cuộc gọi IAM SigV4 qua ALB nội bộ đến AI Engine
+│   └── tests/                  # Bộ kiểm thử đơn vị Pytest cho các worker và finops_common
 ├── modules/                    # Các module Terraform độc lập và có tính tái sử dụng cao
+│   ├── ai-runtime-lambda/      # ECR digest-pinned Lambda container runtime đằng sau private internal ALB
 │   ├── alerting/               # Các tuyến SNS riêng biệt cho Finance và Engineering
-│   ├── compute-lambda/         # Cấu hình triển khai cho các Go worker stubs
-│   ├── dashboard/              # Các Athena named queries và QuickSight hooks
+│   ├── compute-lambda/         # Cấu hình triển khai cho các Python zip Lambda worker
+│   ├── dashboard/              # S3 static assets, CloudFront, Cognito user/identity pools
 │   ├── iam/                    # Phân quyền least-privilege và permissions boundary
 │   ├── lakehouse/              # S3 buckets, Object Lock, Glue Catalog, và KMS keys
 │   ├── networking/             # Mạng VPC bảo mật và các VPC Interface endpoints
@@ -53,7 +58,7 @@ tf2-finops-iac/
 │   └── orchestration/          # Các bảng DynamoDB và Step Functions state machine
 ├── scripts/                    # Các công cụ tự động hóa trợ giúp phát triển
 │   ├── validate.ps1            # Công cụ xác thực định dạng, lints và chạy unit tests
-│   └── package-lambdas.ps1     # Công cụ biên dịch mã nguồn Go và đóng gói zip
+│   └── package-lambdas.ps1     # Công cụ đóng gói zip cho Python Lambda
 ├── .gitignore                  # Cấu hình bỏ qua tệp tin trong Git
 ├── .pre-commit-config.yaml     # Hooks ngăn chặn commit mã nguồn sai định dạng
 ├── .terraform-version          # Chỉ định phiên bản Terraform bắt buộc chạy
@@ -89,11 +94,12 @@ tf2-finops-iac/
 1. **`networking`**: Tạo VPC private với 2 public subnets (để host NAT Gateways) và 2 private subnets (để host Lambda workers). Chặn hoàn toàn mọi truy cập ingress trực tiếp từ ngoài vào các private subnets. Cấu hình các gateway/interface VPC endpoints cho các dịch vụ AWS (S3, DynamoDB, KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS) để lưu lượng mạng nội bộ không đi qua internet.
 2. **`lakehouse`**: Khởi tạo hạ tầng S3 cost-lake với Object Lock được kích hoạt ở chế độ compliance mode đối với Audit bucket (thời gian giữ tối thiểu 90 ngày). Thiết lập bucket versioning, lifecycle transitions, TLS-only bucket policies, KMS keys (cho dữ liệu, audit logs và DynamoDB), một Glue Catalog database, và một Athena workgroup tích hợp tính năng bảo vệ giới hạn quét dữ liệu.
 3. **`iam`**: Thiết lập các execution roles theo mô hình least-privilege. Một permissions boundary được đính kèm để cấm tuyệt đối: thay đổi IAM, thay đổi AWS Organizations, xóa dữ liệu RDS, hủy (terminate) EC2, và xóa bucket S3. Các hành động containment ở môi trường production tuyệt đối không được tắt máy hay thay đổi quyền hạn/dữ liệu.
-4. **`compute-lambda`**: Triển khai sáu worker Go dạng file nén nhị phân lên các Lambda function trong VPC chạy trên custom runtime (`provided.al2023`). Cấu hình timeout, RAM, reserved concurrency, active X-Ray tracing, và các alias stable/canary phù hợp.
-5. **`orchestration`**: Khởi tạo các bảng DynamoDB mã hóa dùng chung để quản lý trạng thái (run state, danh sách anomalies, định tuyến alert, lịch sử containment audit, materialized views). Tạo Step Functions Standard state machine điều phối luồng xử lý dữ liệu.
-6. **`alerting`**: Tạo các SNS alert topic được mã hóa riêng biệt cho Finance (báo cáo spent, digest) và Engineering (lỗi hệ thống, drift hạ tầng) để giữ ranh giới rõ ràng.
-7. **`observability`**: Tạo CloudWatch dashboard tổng quan và đăng ký các metric filters, metric alarms giám sát lỗi chạy workflow, AI engine timeout, runs bị treo quá 26 giờ và cảnh báo cấu hình drift phát hiện từ CI.
-8. **`dashboard`**: Tạo các Athena named queries hỗ trợ tài chính truy vấn dữ liệu chi tiêu trực quan mà không yêu cầu người dùng phải có kỹ năng viết SQL.
+4. **`ai-runtime-lambda`**: Triển khai ECR digest-pinned Lambda container runtime (AI Engine Request Lambda và Worker Lambda) đằng sau private internal Application Load Balancer (ALB) và thiết lập DNS private qua Route 53 private hosted zones.
+5. **`compute-lambda`**: Triển khai bảy Python worker (`state`, `cost_puller`, `normalizer`, `router`, `audit_writer`, `containment_worker`, và `vpc_alb_caller`) dưới dạng file nén zip lên các Lambda function trong VPC chạy trên managed runtime `python3.13`. Cấu hình timeout, RAM, reserved concurrency, active X-Ray tracing, stable/canary aliases và ký mã nguồn (code signing).
+6. **`orchestration`**: Khởi tạo các bảng DynamoDB mã hóa dùng chung để quản lý trạng thái (run state, danh sách anomalies, định tuyến alert, lịch sử containment audit, materialized views, và rollback-cache). Tạo Step Functions Standard state machine điều phối luồng xử lý dữ liệu.
+7. **`alerting`**: Tạo các SNS alert topic được mã hóa riêng biệt cho Finance (báo cáo spent, digest) và Engineering (lỗi hệ thống, drift hạ tầng) để giữ ranh giới rõ ràng.
+8. **`observability`**: Tạo CloudWatch dashboard tổng quan và đăng ký các metric filters, metric alarms giám sát lỗi chạy workflow, AI engine timeout, runs bị treo quá 26 giờ và cảnh báo cấu hình drift phát hiện từ CI.
+9. **`dashboard`**: Lưu trữ các asset static trên S3, phân phối qua CloudFront, xác thực bằng Cognito user/identity pools, và tích hợp Athena named queries để tài chính truy vấn dữ liệu trực quan với tùy chọn tích hợp QuickSight trong tương lai.
 
 ### B. Các Môi trường Gốc Composition (`environments/`)
 Mỗi thư mục composition gọi tuần tự tám module lõi. Các tham số cấu hình riêng biệt được thiết lập cho từng môi trường:
@@ -111,10 +117,11 @@ Mỗi thư mục composition gọi tuần tự tám module lõi. Các tham số 
 
 ## 4. Subsystem Lambda (`lambda_src/`)
 
-Toàn bộ worker được lập trình bằng ngôn ngữ **Go (1.21+)** nhằm tối ưu hóa hiệu năng và tính an toàn kiểu dữ liệu (type safety):
-- **`finops_common`**: Chứa các struct dùng chung cho việc phân tích cú pháp sự kiện đầu vào và phản hồi đầu ra, cùng hàm kiểm tra tính hợp lệ của hợp đồng dữ liệu.
-- **Đóng gói và Triển khai**: Các hàm Go Lambda được biên dịch cho hệ điều hành Linux kiến trúc `amd64` tạo ra file thực thi duy nhất tên là `bootstrap`. Công cụ `package-lambdas.ps1` tự động hóa quá trình biên dịch này và đóng gói zip thành phẩm cho Terraform triển khai.
-- **Unit Testing**: Các kiểm tra nằm trực tiếp bên trong từng package tương ứng (ví dụ: `cost_puller/main_test.go` và `containment_worker/main_test.go`) và có thể chạy đồng thời qua lệnh `go test ./...` tại thư mục `lambda_src`.
+Toàn bộ worker được lập trình bằng ngôn ngữ **Python (3.13)** để tương thích tốt với CDO adapter framework và quản lý runtime của AWS:
+- **`finops_common`**: Chứa các tiện ích dùng chung, các dataclass event/response, logic validation và helper định dạng phản hồi chuẩn.
+- **`workers`**: Chứa các gói code riêng biệt cho từng worker trong bảy worker. Handler tương ứng với signature `workers.<worker>.handler.handle_request`.
+- **Đóng gói và Triển khai**: Kịch bản `package-lambdas.ps1` tự động hóa quá trình đóng gói từng hàm Python cùng các dependency (trong `requirements.txt`) thành file nén zip tại `.build/lambda/` để Terraform triển khai.
+- **Unit Testing**: Các unit test nằm trong thư mục `tests/` và được thực thi thông qua `pytest` (`Push-Location lambda_src; python -m pytest; Pop-Location`).
 
 ---
 

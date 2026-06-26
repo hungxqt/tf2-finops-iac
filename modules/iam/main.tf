@@ -103,6 +103,41 @@ data "aws_iam_policy_document" "boundary" {
   }
 
   statement {
+    # checkov:skip=CKV_AWS_111: "Lambda VPC ENI management actions require wildcard resource *"
+    # checkov:skip=CKV_AWS_356: "ec2:CreateNetworkInterface, ec2:DescribeNetworkInterfaces, ec2:DescribeSubnets, ec2:DeleteNetworkInterface require wildcard resource *"
+    sid    = "AllowLambdaVPCAccess"
+    effect = "Allow"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "DenyENIFromFunctionCode"
+    effect = "Deny"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses"
+    ]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "lambda:SourceFunctionArn"
+      values   = ["false"]
+    }
+  }
+
+  statement {
     # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and xray:* do not support resource-level permissions"
     # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and xray:* require wildcard resource *"
     # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
