@@ -73,14 +73,15 @@ jobs:
 
       - name: TFLint recursive scan
         run: |
+          set +e
           tflint --init
-          tflint --recursive --format compact --no-color; \
-          exit_code=$?; \
-          if [ $exit_code -eq 2 ]; then \
-            echo "Warnings only (exit code 2) — not blocking CI"; \
-            exit 0; \
-          elif [ $exit_code -ne 0 ]; then \
-            exit $exit_code; \
+          tflint --recursive --format compact --no-color
+          exit_code=$?
+          if [ $exit_code -eq 2 ]; then
+            echo "Warnings only (exit code 2) — not blocking CI"
+            exit 0
+          elif [ $exit_code -ne 0 ]; then
+            exit $exit_code
           fi
 
       - name: Trivy config scan
