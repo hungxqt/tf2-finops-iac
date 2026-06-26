@@ -97,6 +97,7 @@ def test_step_function_lambda_coverage():
             
         # Ensure orchestration module is defined and passes lambda_function_arns mapping compute lambda directly without merge or direct ai_request
         assert 'module "orchestration"' in env_content, f"orchestration module missing in environments/{env}/main.tf"
-        assert 'lambda_function_arns         = module.compute_lambda.lambda_alias_arns' in env_content, f"lambda_function_arns mapping missing in environments/{env}/main.tf"
+        # Use regex to allow flexible whitespace in lambda_function_arns assignment
+        assert re.search(r'lambda_function_arns\s*=\s*module\.compute_lambda\.lambda_alias_arns', env_content), f"lambda_function_arns mapping missing in environments/{env}/main.tf"
         assert 'lambda_function_arns = merge(' not in env_content, f"lambda_function_arns merge block should be removed in environments/{env}/main.tf"
         assert 'ai_request = module.ai_runtime_lambda.request_lambda_alias_arn' not in env_content, f"direct ai_request mapping should be removed in environments/{env}/main.tf"
