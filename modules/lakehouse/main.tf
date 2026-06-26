@@ -94,6 +94,7 @@ resource "aws_s3_bucket" "logging" {
   # checkov:skip=CKV_AWS_18: "Logging bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Logging bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Logging bucket does not need versioning"
+  # checkov:skip=CKV_AWS_145: "S3 server access logging target bucket uses SSE-S3 because default SSE-KMS is not supported for S3 server access log delivery"
   # checkov:skip=CKV2_AWS_61: "Logging bucket does not need lifecycle configuration"
   # checkov:skip=CKV2_AWS_62: "Logging bucket does not need event notifications"
   bucket        = "${var.project_name}-${var.environment}-s3-logging"
@@ -112,19 +113,14 @@ resource "aws_s3_bucket_public_access_block" "logging" {
 resource "aws_s3_bucket_ownership_controls" "logging" {
   bucket = aws_s3_bucket.logging.id
   rule {
-    object_ownership = "BucketOwnerPreferred"
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
-resource "aws_s3_bucket_acl" "logging" {
-  depends_on = [
-    aws_s3_bucket_ownership_controls.logging,
-    aws_s3_bucket_public_access_block.logging,
-  ]
-  bucket = aws_s3_bucket.logging.id
-  acl    = "log-delivery-write"
-}
 
+
+# trivy:ignore:AVD-AWS-0132
+# trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "logging" {
   bucket = aws_s3_bucket.logging.id
   rule {

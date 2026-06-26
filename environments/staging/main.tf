@@ -18,6 +18,40 @@ locals {
   }
 }
 
+
+data "aws_iam_policy_document" "replica_kms_policy" {
+  statement {
+    # checkov:skip=CKV_AWS_109: "KMS key policy must specify resource = * because it is attached directly to the key"
+    # checkov:skip=CKV_AWS_111: "KMS key policy must specify resource = * because it is attached directly to the key"
+    # checkov:skip=CKV_AWS_356: "KMS key policy must specify resource = * because it is attached directly to the key"
+    sid    = "EnableRootAccountAdministration"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "S3 service usage on a directly attached KMS key policy requires resource = *"
+    # checkov:skip=CKV_AWS_356: "S3 service usage on a directly attached KMS key policy requires resource = *"
+    sid    = "AllowS3ReplicaBucketUsage"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey*"
+    ]
+    resources = ["*"]
+  }
+}
+
 # ================= Replica S3 Buckets in Replica Region (ap-southeast-2) =================
 
 # 1. Lakehouse Replica S3 Bucket
@@ -236,6 +270,7 @@ resource "aws_kms_key" "replica" {
   description             = "KMS key for replica region S3 buckets"
   deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.replica_kms_policy.json
   tags                    = var.tags
 }
 
