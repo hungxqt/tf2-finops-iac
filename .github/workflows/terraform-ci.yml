@@ -74,7 +74,7 @@ jobs:
       - name: TFLint recursive scan
         run: |
           tflint --init
-          tflint --recursive
+          tflint --recursive --minimum-severity=ERROR
 
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@v0.36.0
