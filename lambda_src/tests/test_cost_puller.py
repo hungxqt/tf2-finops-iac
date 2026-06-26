@@ -421,19 +421,19 @@ def test_handle_request_remote_session_override():
     from unittest.mock import patch, MagicMock
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-999999999999-telemetry"
     os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-999999999999-telemetry"
-    
+
     def fake_get_caller_identity():
         return {"AccountId": "112233445566"}
-    
+
     fake_sts = finops_common.FakeSTS(
         get_caller_identity_func=fake_get_caller_identity
     )
-    
+
     mock_session = MagicMock()
     mock_s3 = MagicMock()
     mock_ce = MagicMock()
     mock_cw = MagicMock()
-    
+
     mock_s3.list_objects_v2.return_value = {
         "Contents": [
             {
@@ -442,7 +442,7 @@ def test_handle_request_remote_session_override():
             }
         ]
     }
-    
+
     def mock_client(service_name):
         if service_name == "s3":
             return mock_s3
@@ -451,9 +451,9 @@ def test_handle_request_remote_session_override():
         elif service_name == "cloudwatch":
             return mock_cw
         return None
-        
+
     mock_session.client.side_effect = mock_client
-    
+
     event_data = {
         "run_id": "run-remote-override",
         "correlation_id": "corr-remote-override",
@@ -461,17 +461,24 @@ def test_handle_request_remote_session_override():
         "cost_period": "2026-06",
         "execution_date": "2026-06-24",
     }
-    
+
+    # Set all global clients to prevent Real* classes (which need boto3) from being created
+    handler.s3_client = finops_common.FakeS3()
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = fake_sts
-    
+
     with patch("workers.cost_puller.handler.get_cross_account_session", return_value=mock_session):
         resp = handler.handle_request(event_data, None)
-        
+
     assert resp["status"] == "READY"
     mock_s3.list_objects_v2.assert_called_with("company-cdo-999999999999-telemetry", "")
     mock_s3.put_object.assert_called()
     mock_cw.get_metric_data.assert_called()
-    
+
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
+    handler.s3_client = None
+    handler.ce_client = None
+    handler.cw_client = None
     handler.sts_client = None

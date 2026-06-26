@@ -31,6 +31,7 @@ locals {
       memory_size = 512
       env = {
         LAKEHOUSE_BUCKET_NAME = var.lakehouse_bucket_name
+        RUN_STATE_TABLE_NAME  = lookup(var.dynamodb_table_names, "run_state", "")
       }
     }
     router = {

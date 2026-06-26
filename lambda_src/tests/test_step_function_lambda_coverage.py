@@ -86,7 +86,15 @@ def test_step_function_lambda_coverage():
     for p in expected_placeholders:
         assert p in main_tf_content, f"orchestration/main.tf does not map placeholder: {p}"
 
-    # 7. Assert all environment main.tf files configure lambda_function_arns correctly
+    # 7. Assert normalizer env wiring includes RUN_STATE_TABLE_NAME
+    normalizer_env_match = re.search(
+        r'normalizer\s*=\s*\{.*?env\s*=\s*\{.*?LAKEHOUSE_BUCKET_NAME.*?RUN_STATE_TABLE_NAME',
+        compute_content, re.DOTALL
+    )
+    assert normalizer_env_match, \
+        "normalizer env in compute-lambda/main.tf must include RUN_STATE_TABLE_NAME for fail_contract_check"
+
+    # 9. Assert all environment main.tf files configure lambda_function_arns correctly
     environments = ["sandbox", "staging", "prod"]
     for env in environments:
         env_main_tf = os.path.join(base_dir, f"environments/{env}/main.tf")
