@@ -1,5 +1,9 @@
 data "aws_caller_identity" "current" {}
 
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 # Generate self-signed certificate if no certificate_arn is provided or if it's the dummy certificate
 locals {
   is_dummy_cert = var.alb_certificate_arn == "" || contains(split(":", var.alb_certificate_arn), "123456789012")
@@ -452,6 +456,16 @@ resource "aws_security_group_rule" "alb_ingress_https" {
   cidr_blocks       = [var.vpc_cidr_block]
   security_group_id = aws_security_group.alb.id
   description       = "Allow HTTPS from within the VPC"
+}
+
+resource "aws_security_group_rule" "alb_ingress_cloudfront" {
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront.id]
+  security_group_id = aws_security_group.alb.id
+  description       = "Allow HTTPS from CloudFront origin-facing IPs"
 }
 
 # trivy:ignore:AVD-AWS-0104

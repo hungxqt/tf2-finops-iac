@@ -19,9 +19,9 @@ output "permissions_boundary_arn" {
   value       = aws_iam_policy.boundary.arn
 }
 
-output "member_read_policy_json" {
-  description = "The JSON policy document for cross-account cost reading"
-  value       = data.aws_iam_policy_document.member_read.json
+output "member_telemetry_ingestion_role_arn" {
+  description = "The ARN of the deployable member telemetry ingestion role"
+  value       = var.create_member_telemetry_ingestion_role && length(aws_iam_role.member_telemetry_ingestion) > 0 ? aws_iam_role.member_telemetry_ingestion[0].arn : null
 }
 
 output "member_containment_policy_json" {

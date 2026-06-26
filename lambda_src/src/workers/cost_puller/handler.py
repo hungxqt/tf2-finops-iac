@@ -6,6 +6,7 @@ import hashlib
 import re
 from datetime import datetime, timedelta
 from typing import Any, Tuple, Optional, Dict
+import boto3
 import finops_common
 
 logger = logging.getLogger()
@@ -186,6 +187,8 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
             aws_session_token=creds["SessionToken"]
         )
     except Exception as e:
+        if isinstance(e, (NameError, TypeError, ValueError, KeyError, AttributeError, ImportError, IndexError, SyntaxError)):
+            raise e
         logger.warning("Failed to assume role %s: %s. Using default session.", role_arn, e)
         return None
 

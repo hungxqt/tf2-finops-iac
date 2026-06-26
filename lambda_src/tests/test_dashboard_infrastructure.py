@@ -1,0 +1,88 @@
+import os
+
+def test_cognito_oauth_flows():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    assert os.path.exists(main_tf_path)
+    
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Assert allowed_oauth_flows contains "code" but NOT "implicit"
+    assert 'allowed_oauth_flows' in content
+    flows_line = [line for line in content.splitlines() if 'allowed_oauth_flows' in line][0]
+    assert 'code' in flows_line
+    assert 'implicit' not in flows_line
+
+def test_cognito_identity_pool_token_check():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Check identity pool token check is true
+    assert "server_side_token_check" in content
+    token_check_line = [line for line in content.splitlines() if 'server_side_token_check' in line][0]
+    assert 'true' in token_check_line
+
+def test_cloudfront_behaviors():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Assert aws_cloudfront_vpc_origin exists
+    assert "resource \"aws_cloudfront_vpc_origin\" \"api\"" in content
+    assert "VpcOrigin-API" in content
+    
+    # Assert viewer request Lambda@Edge is associated
+    assert "aws_lambda_function.edge_viewer_auth.qualified_arn" in content
+    assert "aws_lambda_function.edge_origin_sigv4.qualified_arn" in content
+    
+    # Verify ordered cache behaviors have correct configuration
+    assert "/v1/*" in content
+    assert "dashboard_data_prefix" in content
+
+def test_s3_replication_kms():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Assert that S3 replication configuration specifies source_selection_criteria and replica_kms_key_id
+    assert "source_selection_criteria" in content
+    assert "sse_kms_encrypted_objects" in content
+    assert "replica_kms_key_id" in content
+
+def test_dashboard_asset_force_destroy():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Assert force_destroy = var.destroyable in dashboard_assets
+    assert "force_destroy" in content
+    fd_lines = [line for line in content.splitlines() if 'force_destroy' in line]
+    # Check that at least one of the force_destroy occurrences uses var.destroyable
+    assert any('var.destroyable' in line for line in fd_lines)
+
+def test_readme_unauthenticated_access():
+    readme_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/README.md"))
+    assert os.path.exists(readme_path)
+    with open(readme_path, "r", encoding="utf-8") as f:
+        content = f.read().lower()
+        
+    # Assert README no longer claims unauthenticated shell access is the primary model
+    assert "unauthenticated" not in content or "authenticated front door" in content
+
+def test_edge_auth_handlers():
+    viewer_auth_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../edge/dashboard_auth/viewer_auth.py"))
+    origin_sigv4_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../edge/dashboard_auth/origin_sigv4.py"))
+    
+    assert os.path.exists(viewer_auth_path), "viewer_auth.py does not exist"
+    assert os.path.exists(origin_sigv4_path), "origin_sigv4.py does not exist"
+    
+    with open(viewer_auth_path, "r", encoding="utf-8") as f:
+        viewer_code = f.read()
+    with open(origin_sigv4_path, "r", encoding="utf-8") as f:
+        origin_code = f.read()
+        
+    assert "def handler(" in viewer_code
+    assert "def handler(" in origin_code
+    assert "urllib.request" in viewer_code
+    assert "SigV4Auth" in origin_code

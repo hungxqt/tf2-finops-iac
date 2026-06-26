@@ -11,6 +11,16 @@ Hãy đảm bảo bạn đã cài đặt và cấu hình đầy đủ các công
 * **Python** (>= 3.13) & `pip` (để chạy các thử nghiệm worker cục bộ)
 * **PowerShell** (để chạy script đóng gói trên môi trường Windows)
 
+### 1.1 Điều kiện tiên quyết đối với Thu thập số liệu liên tài khoản (Tùy chọn)
+Nếu triển khai của bạn liên quan đến việc thu thập số liệu chi phí và sử dụng (telemetry) từ các tài khoản thành viên AWS (member accounts) riêng biệt:
+1. **Cấu hình tại Tài khoản Payer/CDO**:
+   - Thiết lập biến đầu vào `telemetry_member_account_ids` là danh sách các ID của tài khoản thành viên.
+   - Cấu hình bucket và tiền tố CUR nguồn bằng cách sử dụng `cur_source_bucket_arn` và `cur_source_prefix` trong các tham số của module `iam`.
+2. **Cấu hình Vai trò (Role) tại Tài khoản Thành viên**:
+   - Mỗi tài khoản thành viên phải triển khai vai trò IAM thu thập dữ liệu (`cdo-telemetry-ingestion-role`).
+   - Chính sách ủy thác (trust policy) của vai trò này phải cho phép ARN của vai trò IAM CDO cost-puller từ tài khoản Payer/CDO giả định (assume role).
+   - Chính sách phân quyền của vai trò phải cấp quyền đọc (`s3:ListBucket`, `s3:GetObject`) đối với bucket/tiền tố CUR cục bộ, và cho phép truy vấn Cost Explorer (`ce:GetCostAndUsage`) và số liệu CloudWatch (`cloudwatch:GetMetricData`).
+
 ---
 
 ## 2. Quy trình triển khai từng bước
@@ -176,10 +186,13 @@ terraform output
 
 ### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
 Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:
-1. **Vai trò của Terraform**: Terraform chỉ khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution, Cognito Identity & User Pools, các Athena named queries và vai trò IAM truy cập dữ liệu).
-2. **Tải lên Tài nguyên Static (Asset Upload)**: Các tài nguyên static của frontend (ứng dụng giao diện UI) phải được tải lên riêng biệt vào S3 bucket chứa static assets (được cấu hình trong giá trị đầu ra `dashboard_asset_bucket_name`).
-3. **Quản trị Cognito**: Các tài khoản người dùng, nhóm (groups) và mật khẩu thật trong Cognito phải được quản trị trực tiếp trên AWS Console hoặc qua Cognito API/CLI bên ngoài Terraform.
-4. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi/tóm hợp dữ liệu chi phí (ví dụ: Lambda hoặc các batch jobs) phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).
+1. **Vai trò của Terraform**: Terraform khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution với VPC Origin và liên kết Lambda@Edge, Cognito Identity & User Pools, các Athena named queries và vai trò IAM).
+2. **Cổng Xác thực (Authenticated Front Door)**: Tất cả tài nguyên tĩnh và tệp tóm tắt JSON (dưới `/${dashboard_data_prefix}*`) được phục vụ qua CloudFront và bảo vệ bởi hàm Lambda@Edge viewer-request sử dụng xác thực Cognito PKCE.
+3. **Định tuyến API qua VPC Origin**: Các yêu cầu gửi tới `/v1/*` được ký bằng AWS SigV4 thông qua Lambda@Edge origin-request trước khi chuyển tiếp tới private internal ALB, đồng thời loại bỏ các cookie Cognito.
+4. **Tải lên Tài nguyên Static (Asset Upload)**: Các tài nguyên static của frontend (ứng dụng giao diện UI) phải được tải lên riêng biệt vào S3 bucket chứa static assets (được cấu hình trong giá trị đầu ra `dashboard_asset_bucket_name`).
+5. **Nhóm Cognito (Cognito Groups)**: Người dùng cần được thêm vào các nhóm Cognito tương ứng (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) để kiểm soát quyền hạn.
+6. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi dữ liệu chi phí phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).
+
 
 ---
 

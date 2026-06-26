@@ -1,45 +1,34 @@
 # Dashboard Module
 
-This module provisions an AWS-native, low-cost static dashboard hosting and data access foundation for Finance users. It includes S3 bucket structures for dashboard assets and precomputed summary data, CloudFront with Origin Access Control (OAC), Cognito user authentication, and Athena named queries for finance-facing data insights.
+This module provisions an AWS-native, secure dashboard hosting and data access foundation. It enforces CloudFront as the authenticated front door for static assets, dashboard JSON summaries, and `/v1/*` API actions using Cognito Authorization Code + PKCE authentication at the edge.
 
-## Cognito Data-Access Model
+## Authenticated Front-Door Architecture
 
-Rather than making dashboard summary data public, this module implements a secure, authenticated data-access model:
-1. **CloudFront Delivery**: Serves public static frontend shell assets (e.g., `index.html`, javascript packages) from the asset bucket via a CloudFront distribution with Origin Access Control (OAC).
-2. **Cognito Authentication**: The static frontend app must enforce login using the Cognito User Pool (Hosted UI).
-3. **IAM S3 Data Access**: Once authenticated, the frontend swaps Cognito user tokens for temporary credentials via the Cognito Identity Pool.
-4. **S3 Direct Fetch**: The frontend fetches precomputed dashboard JSON summaries directly from the private dashboard data bucket using these temporary credentials.
-
-An unauthenticated visitor can view the static shell but cannot access any underlying cost summary files.
-
-## Runtime Configuration Discovery
-
-During deployment, this module emits a non-secret configuration file `dashboard_runtime_config.json` directly into the static assets S3 bucket:
-```json
-{
-  "aws_region": "ap-southeast-1",
-  "user_pool_id": "ap-southeast-1_XXXXX",
-  "user_pool_client_id": "XXXXX",
-  "identity_pool_id": "ap-southeast-1:XXXX-XXXX-XXXX",
-  "hosted_ui_domain": "my-project-sandbox-dash.auth.ap-southeast-1.amazoncognito.com",
-  "data_bucket_name": "my-project-sandbox-dashboard-data",
-  "data_prefix": "summaries/",
-  "cloudfront_domain": "dxxxxx.cloudfront.net"
-}
-```
-The static frontend application fetches this JSON at startup (relative path: `/dashboard_runtime_config.json`) to discover Cognito and data S3 bucket coordinates dynamically.
+Rather than allowing unauthenticated access to frontend shells or exposing API endpoints directly:
+1. **Authenticated Delivery**: All static assets and precomputed JSON summaries (`/${dashboard_data_prefix}*`) are delivered via CloudFront and protected by Lambda@Edge viewer-request JWT authentication.
+2. **Cognito Authorization Code + PKCE**: Unauthenticated requests are intercepted at the edge and redirected to the Cognito Hosted UI to initiate code exchange and PKCE validation.
+3. **Protected API Gateway Proxy**: Requests to `/v1/*` are routed through a CloudFront VPC Origin targeting the private internal ALB. These requests are signed with AWS SigV4 by the origin-request Lambda@Edge handler, which also strips any Cognito cookies before reaching the ALB.
+4. **KMS Encrypted Replication**: S3 replication configurations for both assets and data are secured with source KMS decryption and destination KMS encryption.
 
 ## Usage Example
 
 ```hcl
 module "dashboard" {
-  source                 = "../../modules/dashboard"
-  project_name           = "tf2-finops"
-  environment            = "sandbox"
-  glue_database_name     = "tf2_finops_lakehouse_sandbox"
-  athena_workgroup_name  = "tf2-finops-athena-sandbox"
-  dashboard_kms_key_arn  = "arn:aws:kms:ap-southeast-1:123456789012:key/xxx"
-  dashboard_data_prefix  = "summaries/"
-  enable_quicksight      = false
+  source                              = "../../modules/dashboard"
+  project_name                        = "tf2-finops"
+  environment                         = "sandbox"
+  glue_database_name                  = "tf2_finops_lakehouse_sandbox"
+  athena_workgroup_name               = "tf2-finops-athena-sandbox"
+  dashboard_kms_key_arn               = "arn:aws:kms:ap-southeast-1:123456789012:key/xxx"
+  dashboard_replica_kms_key_arn       = "arn:aws:kms:ap-southeast-2:123456789012:key/yyy"
+  dashboard_api_vpc_origin_alb_arn    = "arn:aws:elasticloadbalancing:ap-southeast-1:123456789012:loadbalancer/app/ai-alb/abc"
+  dashboard_api_origin_domain_name    = "ai-alb-12345.ap-southeast-1.elb.amazonaws.com"
+  dashboard_data_prefix               = "summaries/"
+  s3_logging_bucket_id                = "logging-bucket-id"
+  dashboard_assets_replica_bucket_arn = "arn:aws:s3:::replica-assets-bucket"
+  dashboard_data_replica_bucket_arn   = "arn:aws:s3:::replica-data-bucket"
+  cloudfront_acm_certificate_arn      = ""
+  cloudfront_aliases                  = []
+  destroyable                         = true
 }
 ```

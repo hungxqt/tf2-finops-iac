@@ -231,6 +231,21 @@ data "aws_iam_policy_document" "replica_tls_only_athena" {
   }
 }
 
+# KMS Key in the replica region (ap-southeast-2)
+resource "aws_kms_key" "replica" {
+  provider                = aws.replica
+  description             = "KMS key for replica region S3 buckets"
+  deletion_window_in_days = var.destroyable ? 7 : 30
+  enable_key_rotation     = true
+  tags                    = var.tags
+}
+
+resource "aws_kms_alias" "replica" {
+  provider      = aws.replica
+  name          = "alias/${var.project_name}-${var.environment}-replica-key"
+  target_key_id = aws_kms_key.replica.key_id
+}
+
 # 4. Dashboard Assets Replica S3 Bucket
 resource "aws_s3_bucket" "dashboard_assets_replica" {
   provider      = aws.replica
@@ -259,7 +274,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "dashboard_assets_
   bucket   = aws_s3_bucket.dashboard_assets_replica.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = aws_kms_key.replica.arn
+      sse_algorithm     = "aws:kms"
     }
   }
 }
@@ -329,7 +345,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "dashboard_data_re
   bucket   = aws_s3_bucket.dashboard_data_replica.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = aws_kms_key.replica.arn
+      sse_algorithm     = "aws:kms"
     }
   }
 }
@@ -419,16 +436,21 @@ module "alerting" {
 module "iam" {
   source = "../../modules/iam"
 
-  project_name              = var.project_name
-  environment               = var.environment
-  lakehouse_bucket_arn      = module.lakehouse.lakehouse_bucket_arn
-  audit_bucket_arn          = module.lakehouse.audit_bucket_arn
-  dynamodb_table_arns       = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["error_budget"]])
-  kms_key_arns              = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
-  containment_apply_enabled = true
-  queue_arns                = [module.orchestration.detection_queue_arn, module.orchestration.detection_dlq_arn, module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
-  sns_topic_arns            = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
-  tags                      = var.tags
+  project_name                           = var.project_name
+  environment                            = var.environment
+  lakehouse_bucket_arn                   = module.lakehouse.lakehouse_bucket_arn
+  audit_bucket_arn                       = module.lakehouse.audit_bucket_arn
+  dynamodb_table_arns                    = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["error_budget"]])
+  kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
+  containment_apply_enabled              = true
+  queue_arns                             = [module.orchestration.detection_queue_arn, module.orchestration.detection_dlq_arn, module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
+  sns_topic_arns                         = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
+  telemetry_member_account_ids           = var.telemetry_member_account_ids
+  telemetry_member_role_name             = var.telemetry_member_role_name
+  cur_source_bucket_arn                  = var.cur_source_bucket_arn
+  create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
+  trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
+  tags                                   = var.tags
 }
 
 # 5. Lambda-based AI Engine Runtime
@@ -486,12 +508,12 @@ module "compute_lambda" {
   sigv4_service_name             = var.sigv4_service_name
   tags                           = var.tags
 
-  cur_source_bucket              = var.cur_source_bucket
-  cur_source_prefix              = var.cur_source_prefix
-  cur_delay_threshold_hours      = var.cur_delay_threshold_hours
-  ce_lookback_window_days        = var.ce_lookback_window_days
-  traffic_metric_identifiers      = var.traffic_metric_identifiers
-  synthetic_fallback_enabled     = var.synthetic_fallback_enabled
+  cur_source_bucket          = var.cur_source_bucket
+  cur_source_prefix          = var.cur_source_prefix
+  cur_delay_threshold_hours  = var.cur_delay_threshold_hours
+  ce_lookback_window_days    = var.ce_lookback_window_days
+  traffic_metric_identifiers = var.traffic_metric_identifiers
+  synthetic_fallback_enabled = var.synthetic_fallback_enabled
 }
 
 # 7. Orchestration Module
@@ -551,6 +573,9 @@ module "dashboard" {
   athena_workgroup_name               = module.lakehouse.athena_workgroup_name
   enable_quicksight                   = false
   dashboard_kms_key_arn               = module.lakehouse.data_kms_key_arn
+  dashboard_replica_kms_key_arn       = aws_kms_key.replica.arn
+  dashboard_api_vpc_origin_alb_arn    = module.ai_runtime_lambda.alb_arn
+  dashboard_api_origin_domain_name    = module.ai_runtime_lambda.alb_dns_name
   dashboard_data_prefix               = "summaries/"
   s3_logging_bucket_id                = module.lakehouse.logging_bucket_name
   dashboard_assets_replica_bucket_arn = aws_s3_bucket.dashboard_assets_replica.arn

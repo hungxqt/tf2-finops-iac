@@ -378,3 +378,99 @@ def test_cost_puller_unsafe_cross_tenant_paths():
     handler.ce_client = None
     handler.cw_client = None
     handler.sts_client = None
+
+def test_get_cross_account_session_success():
+    from unittest.mock import patch, MagicMock
+    fake_sts = finops_common.FakeSTS()
+    with patch("workers.cost_puller.handler.boto3.Session") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        
+        session = handler.get_cross_account_session(fake_sts, "999999999999", "112233445566")
+        
+        assert session == mock_session
+        mock_session_class.assert_called_once_with(
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_session_token="fake-session-token"
+        )
+
+def test_get_cross_account_session_same_account():
+    fake_sts = finops_common.FakeSTS()
+    session = handler.get_cross_account_session(fake_sts, "112233445566", "112233445566")
+    assert session is None
+
+def test_get_cross_account_session_assume_role_failure():
+    def fake_assume_role(**kwargs):
+        raise RuntimeError("AccessDenied: Not authorized to assume this role")
+    
+    fake_sts = finops_common.FakeSTS(assume_role_func=fake_assume_role)
+    session = handler.get_cross_account_session(fake_sts, "999999999999", "112233445566")
+    assert session is None
+
+def test_get_cross_account_session_programming_error_propagates():
+    def fake_assume_role(**kwargs):
+        raise KeyError("missing_key")
+    
+    fake_sts = finops_common.FakeSTS(assume_role_func=fake_assume_role)
+    with pytest.raises(KeyError):
+        handler.get_cross_account_session(fake_sts, "999999999999", "112233445566")
+
+def test_handle_request_remote_session_override():
+    from unittest.mock import patch, MagicMock
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-999999999999-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-999999999999-telemetry"
+    
+    def fake_get_caller_identity():
+        return {"AccountId": "112233445566"}
+    
+    fake_sts = finops_common.FakeSTS(
+        get_caller_identity_func=fake_get_caller_identity
+    )
+    
+    mock_session = MagicMock()
+    mock_s3 = MagicMock()
+    mock_ce = MagicMock()
+    mock_cw = MagicMock()
+    
+    mock_s3.list_objects_v2.return_value = {
+        "Contents": [
+            {
+                "Key": "cur/manifest.json",
+                "LastModified": datetime.utcnow()
+            }
+        ]
+    }
+    
+    def mock_client(service_name):
+        if service_name == "s3":
+            return mock_s3
+        elif service_name == "ce":
+            return mock_ce
+        elif service_name == "cloudwatch":
+            return mock_cw
+        return None
+        
+    mock_session.client.side_effect = mock_client
+    
+    event_data = {
+        "run_id": "run-remote-override",
+        "correlation_id": "corr-remote-override",
+        "account_id": "999999999999",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+    }
+    
+    handler.sts_client = fake_sts
+    
+    with patch("workers.cost_puller.handler.get_cross_account_session", return_value=mock_session):
+        resp = handler.handle_request(event_data, None)
+        
+    assert resp["status"] == "READY"
+    mock_s3.list_objects_v2.assert_called_with("company-cdo-999999999999-telemetry", "")
+    mock_s3.put_object.assert_called()
+    mock_cw.get_metric_data.assert_called()
+    
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    handler.sts_client = None

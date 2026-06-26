@@ -137,4 +137,34 @@ variable "synthetic_fallback_enabled" {
   default     = true
 }
 
+variable "telemetry_member_account_ids" {
+  type        = list(string)
+  description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
+  default     = []
+}
+
+variable "telemetry_member_role_name" {
+  type        = string
+  description = "The IAM role name expected in member accounts for CDO telemetry ingestion"
+  default     = "cdo-telemetry-ingestion-role"
+}
+
+variable "cur_source_bucket_arn" {
+  type        = string
+  description = "The ARN of the member CUR source S3 bucket"
+  default     = ""
+}
+
+variable "create_member_telemetry_ingestion_role" {
+  type        = bool
+  description = "Whether to create the member telemetry ingestion role in this deployment context"
+  default     = false
+}
+
+variable "trusted_cost_puller_role_arns" {
+  type        = list(string)
+  description = "The ARNs of trusted cost puller IAM roles allowed to assume the ingestion role"
+  default     = []
+}
+
 

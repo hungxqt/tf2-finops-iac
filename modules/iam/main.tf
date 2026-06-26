@@ -18,12 +18,18 @@ data "aws_iam_policy_document" "boundary" {
       "s3:PutObject",
       "s3:ListBucket"
     ]
-    resources = [
-      var.lakehouse_bucket_arn,
-      "${var.lakehouse_bucket_arn}/*",
-      var.audit_bucket_arn,
-      "${var.audit_bucket_arn}/*"
-    ]
+    resources = concat(
+      [
+        var.lakehouse_bucket_arn,
+        "${var.lakehouse_bucket_arn}/*",
+        var.audit_bucket_arn,
+        "${var.audit_bucket_arn}/*"
+      ],
+      var.cur_source_bucket_arn != "" ? [
+        var.cur_source_bucket_arn,
+        "${var.cur_source_bucket_arn}/*"
+      ] : []
+    )
   }
 
   statement {
@@ -179,6 +185,16 @@ data "aws_iam_policy_document" "boundary" {
       resources = ["*"]
     }
   }
+
+  dynamic "statement" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
+    content {
+      sid       = "AllowSTSAssumeRole"
+      effect    = "Allow"
+      actions   = ["sts:AssumeRole"]
+      resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
+    }
+  }
 }
 
 # Trust policy for Lambda service
@@ -246,9 +262,49 @@ resource "aws_iam_role_policy" "cost_puller" {
 
 data "aws_iam_policy_document" "cost_puller" {
   statement {
-    actions   = ["s3:PutObject"]
+    sid       = "AllowLakehouseTelemetryList"
+    actions   = ["s3:ListBucket"]
+    resources = [var.lakehouse_bucket_arn]
+  }
+
+  statement {
+    sid = "AllowLakehouseObjectAccess"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
     resources = ["${var.lakehouse_bucket_arn}/*"]
   }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "AllowCURSourceList"
+      actions   = ["s3:ListBucket"]
+      resources = [var.cur_source_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid     = "AllowCURSourceGet"
+      actions = ["s3:GetObject"]
+      resources = [
+        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
+    content {
+      sid       = "AllowAssumeRoleInMembers"
+      actions   = ["sts:AssumeRole"]
+      resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
+    }
+  }
+
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
@@ -256,10 +312,20 @@ data "aws_iam_policy_document" "cost_puller" {
       resources = var.kms_key_arns
     }
   }
+
   statement {
     # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
     # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
+    sid       = "AllowCostExplorer"
     actions   = ["ce:GetCostAndUsage"]
+    resources = ["*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "cloudwatch:GetMetricData does not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "cloudwatch:GetMetricData requires wildcard resource"
+    sid       = "AllowCloudWatchMetricData"
+    actions   = ["cloudwatch:GetMetricData"]
     resources = ["*"]
   }
 }
@@ -381,19 +447,7 @@ data "aws_iam_policy_document" "containment_worker" {
   }
 }
 
-# Cross-account cost data read and containment documents for outputs
-data "aws_iam_policy_document" "member_read" {
-  statement {
-    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
-    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
-    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage and member S3 cost reading require wildcard permissions"
-    actions = [
-      "ce:GetCostAndUsage",
-      "s3:GetObject"
-    ]
-    resources = ["*"]
-  }
-}
+# Cross-account containment documents for outputs
 
 data "aws_iam_policy_document" "member_containment" {
   statement {
@@ -449,4 +503,66 @@ data "aws_iam_policy_document" "workers_sqs" {
       resources = var.queue_arns
     }
   }
+}
+
+data "aws_iam_policy_document" "member_telemetry_assume_role" {
+  count = var.create_member_telemetry_ingestion_role ? 1 : 0
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = var.trusted_cost_puller_role_arns
+    }
+  }
+}
+
+# checkov:skip=CKV_AWS_274: "Permissions boundary is managed at the organization level or by the member account platform controls"
+resource "aws_iam_role" "member_telemetry_ingestion" {
+  count              = var.create_member_telemetry_ingestion_role ? 1 : 0
+  name               = var.telemetry_member_role_name
+  assume_role_policy = data.aws_iam_policy_document.member_telemetry_assume_role[0].json
+  tags               = var.tags
+}
+
+data "aws_iam_policy_document" "member_telemetry_ingestion" {
+  count = var.create_member_telemetry_ingestion_role ? 1 : 0
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and cloudwatch:GetMetricData do not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and cloudwatch:GetMetricData require wildcard resource"
+    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
+    sid = "AllowMemberCostExplorerAndMetrics"
+    actions = [
+      "ce:GetCostAndUsage",
+      "cloudwatch:GetMetricData"
+    ]
+    resources = ["*"]
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "AllowMemberCURList"
+      actions   = ["s3:ListBucket"]
+      resources = [var.cur_source_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid     = "AllowMemberCURGet"
+      actions = ["s3:GetObject"]
+      resources = [
+        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "member_telemetry_ingestion" {
+  count  = var.create_member_telemetry_ingestion_role ? 1 : 0
+  name   = "member-telemetry-ingestion-policy"
+  role   = aws_iam_role.member_telemetry_ingestion[0].id
+  policy = data.aws_iam_policy_document.member_telemetry_ingestion[0].json
 }

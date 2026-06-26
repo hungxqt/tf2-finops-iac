@@ -1,7 +1,7 @@
 # Cost Puller Telemetry Progress
 
 ## Status
-Completed
+Completed (Updated with Cross-Account Support)
 
 ## Scope
 Implement `lambda_src/src/workers/cost_puller` as the raw telemetry acquisition worker:
@@ -9,8 +9,10 @@ Implement `lambda_src/src/workers/cost_puller` as the raw telemetry acquisition 
 - Implemented telemetry acquisition with CUR freshness detection and fallback to Cost Explorer daily costs when CUR is delayed > 36 hours.
 - Implemented fallback to cached S3 telemetry when Cost Explorer is throttled, returning `READY` with `stale_cost_explorer = true` flag.
 - Integrated best-effort CloudWatch metrics enrichment and priority traffic context routing (ALB, CloudFront, API Gateway, and Synthetic fallback).
+- Fixed boto3 import issue in remote session role assumption and avoided swallowing programming errors.
+- Extended IAM module and environments with optional deployable cross-account member telemetry ingestion role and trusted roles.
 - Wired CUR and CE configuration variables into the `compute_lambda` Terraform module and environments.
-- Implemented comprehensive unit tests for all fallback, delay, throttling, safety, and tenant-isolation validations.
+- Implemented comprehensive unit tests for all fallback, delay, throttling, safety, and tenant-isolation validations, plus cross-account session construction and client overrides.
 - Updated `normalizer` to support gzipped JSON raw envelopes and parquet curation of CUR/CE data.
 
 ## Files Changed

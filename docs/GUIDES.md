@@ -11,6 +11,16 @@ Ensure you have the following tools installed and configured:
 * **Python** (>= 3.13) & `pip` (for local worker testing)
 * **PowerShell** (for packaging scripts on Windows)
 
+### 1.1 Cross-Account Telemetry Prerequisites (Optional)
+If your deployment involves pulling cost and utilization telemetry from separate AWS member accounts:
+1. **Payer/CDO Account Configuration**:
+   - Set the `telemetry_member_account_ids` input variable to the list of member account IDs.
+   - Configure the CUR source bucket and prefix using `cur_source_bucket_arn` and `cur_source_prefix` in the `iam` module parameters.
+2. **Member Account Role Setup**:
+   - Each member account must deploy the telemetry ingestion IAM role (`cdo-telemetry-ingestion-role`).
+   - The role trust policy must authorize the CDO cost-puller IAM role ARN from the Payer/CDO account.
+   - The role permissions policy must grant read access (`s3:ListBucket`, `s3:GetObject`) to the local CUR bucket/prefix, and allow querying Cost Explorer (`ce:GetCostAndUsage`) and CloudWatch metrics (`cloudwatch:GetMetricData`).
+
 ---
 
 ## 2. Step-by-Step Deployment Workflow
@@ -177,10 +187,13 @@ terraform output
 
 ### Step 3.1: Dashboard Deployment & Asset Handoff
 Once the Terraform plan is applied, the dashboard infrastructure is ready. The handoff process follows these rules:
-1. **Terraform Roles**: Terraform only provisions the underlying AWS assets (S3 buckets, CloudFront distribution, Cognito Identity & User Pools, Athena named queries, and IAM data access role).
-2. **Asset Upload**: Static frontend assets (the UI app) must be uploaded separately to the static asset S3 bucket (configured in the output `dashboard_asset_bucket_name`).
-3. **Cognito Administration**: Real Cognito users, groups, and passwords must be administered directly in the AWS Console or via Cognito API/CLI outside of Terraform.
-4. **Data Generation**: Cost-data writers/summarizers (e.g., Lambda functions or batch jobs) must publish JSON summaries to the configured prefix (e.g., `summaries/`) inside the dashboard data S3 bucket (configured in the output `dashboard_data_bucket_name`).
+1. **Terraform Roles**: Terraform provisions the underlying AWS assets, S3 buckets, CloudFront distribution with VPC Origin and Lambda@Edge associations, Cognito Identity & User Pools, Athena named queries, and IAM roles.
+2. **Authenticated Front Door**: All static assets and JSON summaries (under `/${dashboard_data_prefix}*`) are served via CloudFront and protected by the viewer-request Lambda@Edge function using Cognito PKCE auth.
+3. **API Routing via VPC Origin**: Requests to `/v1/*` are signed by the origin-request Lambda@Edge using AWS SigV4 before being routed to the private internal ALB, stripping any Cognito cookies.
+4. **Asset Upload**: Static frontend assets must be uploaded separately to the static asset S3 bucket (configured in the output `dashboard_asset_bucket_name`).
+5. **Cognito Groups**: Users should be added to the created Cognito groups (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) to control authorization.
+6. **Data Generation**: Cost-data writers must publish JSON summaries to the configured prefix (e.g., `summaries/`) inside the dashboard data S3 bucket (configured in the output `dashboard_data_bucket_name`).
+
 
 ---
 
