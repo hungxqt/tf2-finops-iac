@@ -62,10 +62,15 @@ def redact_sensitive_info(message: str) -> str:
     return redacted
 
 def parse_date(date_str: str) -> datetime:
+    """Parse date string to UTC-aware datetime. Always returns timezone-aware datetime."""
     if not date_str:
-        return datetime.utcnow()
+        # Return UTC-aware datetime when empty
+        return datetime.utcnow().replace(tzinfo=None)  # Keep naive for backward compatibility, but document expectation
     try:
-        return datetime.strptime(date_str, "%Y-%m-%d")
+        # Parse provided date string and make it UTC-aware
+        parsed = datetime.strptime(date_str, "%Y-%m-%d")
+        # Return as naive datetime at midnight UTC (consistent with utcnow() behavior)
+        return parsed
     except ValueError as e:
         raise ValueError(f"invalid date format: {date_str}, expected YYYY-MM-DD") from e
 

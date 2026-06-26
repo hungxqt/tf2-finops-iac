@@ -80,15 +80,34 @@ class FakeDynamoDB(DynamoDBClient):
         self.get_item_func = get_item_func
         self.put_item_func = put_item_func
         self.update_item_func = update_item_func
+        # Isolate items by table name to prevent cross-table collisions
+        self.items: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     def get_item(self, table_name: str, key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self.get_item_func:
             return self.get_item_func(table_name, key)
-        return None
+        # Use table-isolated storage
+        table_items = self.items.get(table_name, {})
+        key_str = str(sorted(key.items()))
+        return table_items.get(key_str)
 
-    def put_item(self, table_name: str, item: Dict[str, Any]) -> None:
+    def put_item(self, table_name: str, item: Dict[str, Any], condition_expression: Optional[str] = None) -> None:
         if self.put_item_func:
             self.put_item_func(table_name, item)
+            return
+        # Use table-isolated storage
+        if table_name not in self.items:
+            self.items[table_name] = {}
+        # Extract key from item (assume first key in item dict is the hash key)
+        key = {k: v for k, v in item.items() if k in ["idempotency_key", "tenant_id", "anomaly_id"]}
+        key_str = str(sorted(key.items()))
+        
+        # Handle conditional put
+        if condition_expression and "attribute_not_exists" in condition_expression:
+            if key_str in self.items[table_name]:
+                raise ValueError("ConditionalCheckFailedException: Item already exists")
+        
+        self.items[table_name][key_str] = item
 
     def update_item(self, table_name: str, key: Dict[str, Any], update_expression: str, expression_attribute_values: Dict[str, Any]) -> None:
         if self.update_item_func:

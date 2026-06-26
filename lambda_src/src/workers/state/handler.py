@@ -175,14 +175,24 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 item = client.get_item(table_name, {"idempotency_key": idempotency_key})
                 if not item:
                     # Fresh run: conditionally write IN_PROGRESS but status is NEW
-                    client.put_item(table_name, {
-                        "idempotency_key": idempotency_key,
-                        "status": "IN_PROGRESS",
-                        "run_id": event.run_id,
-                        "correlation_id": event.correlation_id,
-                        "updated_at": datetime.utcnow().isoformat() + "Z"
-                    })
-                    status = "NEW"
+                    try:
+                        client.put_item(table_name, {
+                            "idempotency_key": idempotency_key,
+                            "status": "IN_PROGRESS",
+                            "run_id": event.run_id,
+                            "correlation_id": event.correlation_id,
+                            "updated_at": datetime.utcnow().isoformat() + "Z"
+                        }, condition_expression="attribute_not_exists(idempotency_key)")
+                        status = "NEW"
+                    except Exception as conditional_error:
+                        # Race condition: another invocation won the lock
+                        # Retrieve and return the existing status instead of failing
+                        if "ConditionalCheckFailed" in str(conditional_error) or "ConditionalCheckFailedException" in str(conditional_error):
+                            logger.info("Idempotency lock already acquired by another invocation, retrieving existing status")
+                            existing_item = client.get_item(table_name, {"idempotency_key": idempotency_key})
+                            status = existing_item.get("status", "IN_PROGRESS") if existing_item else "IN_PROGRESS"
+                        else:
+                            raise conditional_error
                 else:
                     status = item.get("status", "IN_PROGRESS")
             except Exception as e:
