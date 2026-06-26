@@ -183,6 +183,8 @@ terraform output
 * `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
 * `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, và rollback cache.
+* `synchronous_ai_endpoints`: Các endpoint `/v1/detect`, `/v1/decide`, và `/v1/verify` là các hoạt động đồng bộ được gọi qua `VpcAlbCallerLambda` và Route 53 private DNS alias. `/v1/status/{id}` chỉ dành cho remediation audit/status, không dùng cho việc polling phát hiện. Không có hàng đợi SQS detect hoặc vòng lặp polling trong luồng mặc định; SQS được giới hạn cho việc thử lại cảnh báo và thông báo hoàn thành audit `finops-watch-rollback`.
+
 
 ### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
 Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:
@@ -210,7 +212,7 @@ terraform -chdir=environments/prod validate
 
 # Quét phân tích bảo mật tĩnh
 trivy config .
-checkov -d modules/orchestration --framework terraform
+checkov -d . --framework terraform
 ```
 
 ---

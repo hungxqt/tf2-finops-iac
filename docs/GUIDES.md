@@ -183,6 +183,7 @@ terraform output
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
 * `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
+* `synchronous_ai_endpoints`: The endpoints `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous operations called via `VpcAlbCallerLambda` and Route 53 private DNS alias. `/v1/status/{id}` is for remediation audit/status only, not for detection polling. There is no detection SQS or polling loop in the default path; SQS is restricted to alert retry and `finops-watch-rollback` audit completion notifications.
 
 
 ### Step 3.1: Dashboard Deployment & Asset Handoff
@@ -211,7 +212,7 @@ terraform -chdir=environments/prod validate
 
 # Verify static security analysis
 trivy config .
-checkov -d modules/orchestration --framework terraform
+checkov -d . --framework terraform
 ```
 
 ---

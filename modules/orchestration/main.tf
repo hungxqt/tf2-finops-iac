@@ -176,30 +176,7 @@ resource "aws_dynamodb_table" "error_budget" {
   tags = var.tags
 }
 
-# - AI results table (Hash key: audit_id)
-resource "aws_dynamodb_table" "ai_results" {
-  name         = "${var.project_name}-${var.environment}-ai-results"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "audit_id"
 
-  attribute {
-    name = "audit_id"
-    type = "S"
-  }
-
-  server_side_encryption {
-    enabled     = true
-    kms_key_arn = var.ddb_kms_key_arn
-  }
-
-  point_in_time_recovery {
-    enabled = true
-  }
-
-
-
-  tags = var.tags
-}
 
 # - Rollback Cache table (Hash key: anomaly_id)
 resource "aws_dynamodb_table" "rollback_cache" {
@@ -254,8 +231,8 @@ resource "aws_sfn_state_machine" "workflow" {
     containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
     finance_alerts_sns_topic_arn     = var.finance_alerts_topic_arn
     engineering_alerts_sns_topic_arn = var.engineering_alerts_topic_arn
+
     account_policy_table_name        = aws_dynamodb_table.account_policy.name
-    results_table_name               = aws_dynamodb_table.ai_results.name
     rollback_cache_table_name        = aws_dynamodb_table.rollback_cache.name
     rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
     ai_engine_contract_version       = var.ai_engine_contract_version
@@ -300,31 +277,7 @@ resource "aws_scheduler_schedule" "run_workflow" {
   }
 }
 
-# DLQ for the detection queue
-resource "aws_sqs_queue" "detection_dlq" {
-  name                              = "${var.project_name}-${var.environment}-detection-dlq"
-  kms_master_key_id                 = var.sqs_kms_key_arn
-  kms_data_key_reuse_period_seconds = 300
-  message_retention_seconds         = 1209600 # 14 days
 
-  tags = var.tags
-}
-
-# Primary detection queue
-resource "aws_sqs_queue" "detection_queue" {
-  name                              = "${var.project_name}-${var.environment}-detection-queue"
-  kms_master_key_id                 = var.sqs_kms_key_arn
-  kms_data_key_reuse_period_seconds = 300
-  visibility_timeout_seconds        = 300
-  message_retention_seconds         = 1209600 # 14 days
-
-  redrive_policy = jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.detection_dlq.arn
-    maxReceiveCount     = 3
-  })
-
-  tags = var.tags
-}
 
 # Rollback/status queue
 resource "aws_sqs_queue" "rollback_status_queue" {

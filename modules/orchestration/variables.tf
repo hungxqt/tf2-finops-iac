@@ -56,17 +56,7 @@ variable "ai_engine_contract_version" {
   default     = "v1"
 }
 
-variable "ai_poll_max_attempts" {
-  type        = number
-  description = "Maximum attempts for AI Engine async result polling"
-  default     = 6
-}
 
-variable "ai_poll_interval_seconds" {
-  type        = number
-  description = "Wait duration in seconds between AI polling attempts"
-  default     = 10
-}
 
 variable "cloudwatch_log_kms_key_arn" {
   type        = string

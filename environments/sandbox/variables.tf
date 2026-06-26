@@ -35,14 +35,7 @@ variable "request_image_uri" {
   }
 }
 
-variable "worker_image_uri" {
-  type        = string
-  description = "ECR image URI with immutable digest for the AI Worker Lambda function"
-  validation {
-    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.worker_image_uri))
-    error_message = "The worker_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
-  }
-}
+
 
 variable "replica_region" {
   type        = string

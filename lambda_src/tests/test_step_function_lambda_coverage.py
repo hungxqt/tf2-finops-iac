@@ -105,7 +105,41 @@ def test_step_function_lambda_coverage():
             
         # Ensure orchestration module is defined and passes lambda_function_arns mapping compute lambda directly without merge or direct ai_request
         assert 'module "orchestration"' in env_content, f"orchestration module missing in environments/{env}/main.tf"
-        # Use regex to allow flexible whitespace in lambda_function_arns assignment
         assert re.search(r'lambda_function_arns\s*=\s*module\.compute_lambda\.lambda_alias_arns', env_content), f"lambda_function_arns mapping missing in environments/{env}/main.tf"
         assert 'lambda_function_arns = merge(' not in env_content, f"lambda_function_arns merge block should be removed in environments/{env}/main.tf"
         assert 'ai_request = module.ai_runtime_lambda.request_lambda_alias_arn' not in env_content, f"direct ai_request mapping should be removed in environments/{env}/main.tf"
+
+def test_reintroduction_of_retired_async_detection_resources():
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    target_dirs = [
+        "modules/orchestration",
+        "modules/ai-runtime-lambda",
+        "environments/sandbox",
+        "environments/staging",
+        "environments/prod"
+    ]
+    
+    forbidden_terms = [
+        "detection_queue",
+        "detection_dlq",
+        "detect_queue_",
+        "aws_lambda_event_source_mapping",
+        "worker_image_uri",
+        "worker_event_source_mapping_uuid",
+        "ai_poll_",
+        "results_table_name",
+        "ai_results"
+    ]
+    
+    for d in target_dirs:
+        dir_path = os.path.join(base_dir, d)
+        assert os.path.exists(dir_path), f"Directory {dir_path} does not exist"
+        for root, _, files in os.walk(dir_path):
+            for file in files:
+                if file.endswith(".tf"):
+                    file_path = os.path.join(root, file)
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    for term in forbidden_terms:
+                        assert term not in content, f"Forbidden term '{term}' found in {file_path}"
+
