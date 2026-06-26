@@ -260,5 +260,94 @@ Xác minh các tệp JSON gzipped được tạo ra bằng cách kiểm tra các
 
 ---
 
-## 8. Bảo trì tài liệu hướng dẫn
+## 8. Containment Worker — Phát triển cục bộ & Kiểm thử
+
+`containment_worker` là một Lambda production-grade thực thi các containment action trên
+resource của member account. Vì nó thực hiện các lời gọi AWS thật (EC2, RDS, SageMaker, STS, S3,
+DynamoDB), toàn bộ test suite dùng **moto** để mock tầng AWS — không cần AWS credentials hay
+resource thật để chạy local.
+
+### 8.1 Cài đặt Dev Dependencies
+
+```powershell
+cd lambda_src
+pip install -r requirements-dev.txt
+```
+
+Lệnh này cài `moto[ec2,rds,s3,dynamodb,sts]>=5.0.0` cùng với `pytest` và `boto3`.
+
+### 8.2 Chạy toàn bộ Tests
+
+```powershell
+# Từ thư mục gốc của repo
+Push-Location lambda_src; python -m pytest; Pop-Location
+```
+
+### 8.3 Chạy chỉ Tests của Containment Worker
+
+```powershell
+Push-Location lambda_src
+# Toàn bộ containment suite
+python -m pytest tests/test_containment_worker.py -v
+
+# Chỉ hard-boundary tests (không cần moto — chạy nhanh)
+python -m pytest tests/test_containment_worker.py -v -k "boundary"
+
+# Chỉ audit/S3/DynamoDB tests (yêu cầu moto)
+python -m pytest tests/test_containment_worker.py -v -k "audit"
+
+# Chỉ action-dispatch tests (yêu cầu moto)
+python -m pytest tests/test_containment_worker.py -v -k "actions"
+Pop-Location
+```
+
+### 8.4 Hard Boundaries cần kiểm tra
+
+| Kịch bản | Input | `execution_mode_applied` kỳ vọng | `status` kỳ vọng |
+|---|---|---|---|
+| Môi trường prod + apply | `environment=prod`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Low confidence | `data_confidence=LOW`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Approval denied | `approval_status=denied` | `denied` | `denied` |
+| Sandbox apply (đã duyệt) | `environment=sandbox`, `approval_status=approved` | `apply` | `completed` |
+| Prod tag (được phép) | `environment=prod`, `execution_mode=tag` | `tag` | `completed` |
+
+### 8.5 Xác minh S3 và DynamoDB Audit sau khi chạy thật (Sandbox)
+
+Sau khi invoke Lambda trên môi trường sandbox bằng test events từ
+`containment-lambda/test-events/`:
+
+```bash
+aws lambda invoke \
+  --function-name tf2-finops-sandbox-containment_worker \
+  --payload file://containment-lambda/test-events/01_dry_run_sandbox.json \
+  --cli-binary-format raw-in-base64-out \
+  output.json && cat output.json
+```
+
+**S3 Audit** — phải có hai file (pre-action + post-action):
+```
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}.json
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}_post.json
+```
+
+**DynamoDB Dashboard Cache** — một item cho mỗi anomaly:
+```
+Table : finops-dashboard-cache-{env}
+Key   : anomaly_id = "<anomaly_id từ event>"
+Fields: status, execution_mode_applied, audit_record_s3_uri
+```
+
+**DynamoDB Rollback Cache** — được cache trước khi thực thi action:
+```
+Table : finops-rollback-cache
+Key   : anomaly_id = "<anomaly_id từ event>"
+Fields: boto3_equivalent, ttl_epoch (TTL 90 ngày)
+```
+
+> **Lưu ý (kịch bản Denied):** Khi `approval_status=denied` Lambda trả về ngay lập tức.
+> Không có gì được ghi vào S3 hay DynamoDB — đây là hành vi đúng và mong đợi.
+
+---
+
+## 9. Bảo trì tài liệu hướng dẫn
 Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.

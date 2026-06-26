@@ -445,6 +445,53 @@ data "aws_iam_policy_document" "containment_worker" {
       }
     }
   }
+
+  # Cross-account AssumeRole into member accounts for containment execution
+  statement {
+    # checkov:skip=CKV_AWS_111: "sts:AssumeRole for cross-account containment requires member account role ARNs"
+    sid     = "AssumeContainmentRoleInMembers"
+    actions = ["sts:AssumeRole"]
+    resources = length(var.telemetry_member_account_ids) > 0 ? [
+      for acc in var.telemetry_member_account_ids :
+      "arn:aws:iam::${acc}:role/FinOpsContainmentWorkerRole"
+    ] : ["arn:aws:iam::*:role/FinOpsContainmentWorkerRole"]
+  }
+
+  # Write pre-action and post-action audit records to S3 Object Lock
+  statement {
+    sid       = "AuditBucketWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.audit_bucket_arn}/audit/*"]
+  }
+
+  # Update DynamoDB Dashboard Cache (best-effort)
+  statement {
+    sid       = "DashboardCacheWrite"
+    actions   = ["dynamodb:PutItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Cache and read rollback payload (finops-rollback-cache)
+  statement {
+    sid       = "RollbackCacheReadWrite"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Read external_id from Secrets Manager
+  statement {
+    sid       = "SecretsManagerContainmentExternalId"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:*:*:secret:finops/containment/*"]
+  }
+
+  dynamic "statement" {
+    for_each = length(var.kms_key_arns) > 0 ? [1] : []
+    content {
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      resources = var.kms_key_arns
+    }
+  }
 }
 
 # Cross-account containment documents for outputs

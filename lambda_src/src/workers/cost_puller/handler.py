@@ -184,7 +184,8 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
         return boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
             aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"]
+            aws_session_token=creds["SessionToken"],
+            region_name=os.environ.get("AWS_REGION", "ap-southeast-1"),
         )
     except Exception as e:
         if isinstance(e, (NameError, TypeError, ValueError, KeyError, AttributeError, ImportError, IndexError, SyntaxError)):

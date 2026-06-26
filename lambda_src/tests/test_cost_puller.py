@@ -392,7 +392,8 @@ def test_get_cross_account_session_success():
         mock_session_class.assert_called_once_with(
             aws_access_key_id="fake-access-key",
             aws_secret_access_key="fake-secret-key",
-            aws_session_token="fake-session-token"
+            aws_session_token="fake-session-token",
+            region_name="ap-southeast-1",
         )
 
 def test_get_cross_account_session_same_account():

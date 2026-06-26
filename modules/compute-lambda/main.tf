@@ -49,10 +49,13 @@ locals {
       }
     }
     containment_worker = {
-      timeout     = 60
+      timeout     = 120
       memory_size = 256
       env = {
         CONTAINMENT_APPLY_ENABLED = tostring(var.containment_apply_enabled)
+        ROLLBACK_CACHE_TABLE      = lookup(var.dynamodb_table_names, "rollback_cache", "")
+        DASHBOARD_CACHE_TABLE     = lookup(var.dynamodb_table_names, "dashboard_views", "")
+        AUDIT_BUCKET_NAME         = var.audit_bucket_name
       }
     }
     vpc_alb_caller = {
