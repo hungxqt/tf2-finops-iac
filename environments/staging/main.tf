@@ -23,8 +23,9 @@ locals {
 
 # 1. Lakehouse Replica S3 Bucket
 resource "aws_s3_bucket" "lakehouse_replica" {
-  provider = aws.replica
-  bucket   = "${var.project_name}-${var.environment}-lakehouse-replica"
+  provider      = aws.replica
+  bucket        = "${var.project_name}-${var.environment}-lakehouse-replica"
+  force_destroy = var.destroyable
   # checkov:skip=CKV_AWS_18: "Replica bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Replica bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Versioning is enabled"
@@ -92,8 +93,9 @@ data "aws_iam_policy_document" "replica_tls_only_lakehouse" {
 
 # 2. Audit Replica S3 Bucket
 resource "aws_s3_bucket" "audit_replica" {
-  provider = aws.replica
-  bucket   = "${var.project_name}-${var.environment}-audit-replica"
+  provider      = aws.replica
+  bucket        = "${var.project_name}-${var.environment}-audit-replica"
+  force_destroy = var.destroyable
   # checkov:skip=CKV_AWS_18: "Replica bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Replica bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Versioning is enabled"
@@ -161,8 +163,9 @@ data "aws_iam_policy_document" "replica_tls_only_audit" {
 
 # 3. Athena Results Replica S3 Bucket
 resource "aws_s3_bucket" "athena_results_replica" {
-  provider = aws.replica
-  bucket   = "${var.project_name}-${var.environment}-athena-results-replica"
+  provider      = aws.replica
+  bucket        = "${var.project_name}-${var.environment}-athena-results-replica"
+  force_destroy = var.destroyable
   # checkov:skip=CKV_AWS_18: "Replica bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Replica bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Versioning is enabled"
@@ -230,8 +233,9 @@ data "aws_iam_policy_document" "replica_tls_only_athena" {
 
 # 4. Dashboard Assets Replica S3 Bucket
 resource "aws_s3_bucket" "dashboard_assets_replica" {
-  provider = aws.replica
-  bucket   = "${var.project_name}-${var.environment}-dashboard-assets-replica"
+  provider      = aws.replica
+  bucket        = "${var.project_name}-${var.environment}-dashboard-assets-replica"
+  force_destroy = var.destroyable
   # checkov:skip=CKV_AWS_18: "Replica bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Replica bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Versioning is enabled"
@@ -299,8 +303,9 @@ data "aws_iam_policy_document" "replica_tls_only_assets" {
 
 # 5. Dashboard Data Replica S3 Bucket
 resource "aws_s3_bucket" "dashboard_data_replica" {
-  provider = aws.replica
-  bucket   = "${var.project_name}-${var.environment}-dashboard-data-replica"
+  provider      = aws.replica
+  bucket        = "${var.project_name}-${var.environment}-dashboard-data-replica"
+  force_destroy = var.destroyable
   # checkov:skip=CKV_AWS_18: "Replica bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Replica bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Versioning is enabled"
@@ -397,6 +402,7 @@ module "lakehouse" {
   audit_replica_bucket_arn     = aws_s3_bucket.audit_replica.arn
   athena_replica_bucket_arn    = aws_s3_bucket.athena_results_replica.arn
   tags                         = var.tags
+  destroyable                  = var.destroyable
 }
 
 # 3. Alerting Module
@@ -455,6 +461,7 @@ module "ai_runtime_lambda" {
   secret_arns  = []
   kms_key_arns = [module.lakehouse.data_kms_key_arn]
   tags         = var.tags
+  destroyable  = var.destroyable
 }
 
 # 6. Compute Lambda Module
@@ -484,15 +491,10 @@ module "compute_lambda" {
 module "orchestration" {
   source = "../../modules/orchestration"
 
-  project_name         = var.project_name
-  environment          = var.environment
-  scheduler_expression = "rate(24 hours)"
-  lambda_function_arns = merge(
-    module.compute_lambda.lambda_alias_arns,
-    {
-      ai_request = module.ai_runtime_lambda.request_lambda_alias_arn
-    }
-  )
+  project_name                 = var.project_name
+  environment                  = var.environment
+  scheduler_expression         = "rate(24 hours)"
+  lambda_function_arns         = module.compute_lambda.lambda_alias_arns
   ddb_kms_key_arn              = module.lakehouse.ddb_kms_key_arn
   sqs_kms_key_arn              = module.lakehouse.data_kms_key_arn
   audit_bucket_name            = module.lakehouse.audit_bucket_name
@@ -501,6 +503,7 @@ module "orchestration" {
   cloudwatch_log_kms_key_arn   = module.lakehouse.data_kms_key_arn
   scheduler_kms_key_arn        = module.lakehouse.data_kms_key_arn
   tags                         = var.tags
+  destroyable                  = var.destroyable
 }
 
 # 8. Observability Module
@@ -549,4 +552,5 @@ module "dashboard" {
   dashboard_geo_restriction_type      = var.dashboard_geo_restriction_type
   dashboard_geo_restriction_locations = var.dashboard_geo_restriction_locations
   tags                                = var.tags
+  destroyable                         = var.destroyable
 }

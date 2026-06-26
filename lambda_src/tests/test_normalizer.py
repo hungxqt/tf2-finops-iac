@@ -42,6 +42,7 @@ def test_normalizer_s3_read_write_filtering():
             "service": "AmazonRDS",
             "region": "us-east-1",
             "owner": "Finance",
+            "team": "Finance",
             "cost": 250.00,
             "currency": "USD",
             "timestamp": "2026-06-24T00:00:00Z"
@@ -107,7 +108,7 @@ def test_normalizer_s3_read_write_filtering():
 
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "NORMALIZED"
-    assert resp["curated_data_uri"] == "s3://test-lakehouse/cost/curated/year=2026/month=06/day=24/run-400_curated.parquet"
+    assert resp["curated_data_uri"] == "s3://test-lakehouse/cost/curated/account_id=112233/year=2026/month=06/run-400_curated.parquet"
 
     # Assert S3 GET was called on the correct path
     assert len(get_called) == 1
@@ -116,9 +117,13 @@ def test_normalizer_s3_read_write_filtering():
     # Assert S3 PUT was called with filtered/curated records
     assert len(put_called) == 1
     assert put_called[0]["bucket"] == "test-lakehouse"
-    assert put_called[0]["key"] == "cost/curated/year=2026/month=06/day=24/run-400_curated.parquet"
+    assert put_called[0]["key"] == "cost/curated/account_id=112233/year=2026/month=06/run-400_curated.parquet"
 
-    curated_records = json.loads(put_called[0]["body"].decode("utf-8"))
+    # Parse Parquet data using pyarrow
+    import io
+    import pyarrow.parquet as pq
+    table = pq.read_table(io.BytesIO(put_called[0]["body"]))
+    curated_records = table.to_pylist()
     
     # 4 input records, 2 should be filtered out
     assert len(curated_records) == 2
@@ -127,11 +132,17 @@ def test_normalizer_s3_read_write_filtering():
     assert curated_records[0]["service"] == "AmazonEC2"
     assert curated_records[0]["owner"] == "untagged"
     assert curated_records[0]["cost"] == 100.00
+    assert curated_records[0]["unblended_cost"] == 100.00
+    assert curated_records[0]["service_code"] == "AmazonEC2"
+    assert curated_records[0]["schema_version"] == "3.2.0"
+    assert curated_records[0]["correlation_id"] == "corr-400"
+    assert curated_records[0]["quality_score"] == 1.0
     
     # Second record should preserve "Finance"
     assert curated_records[1]["service"] == "AmazonRDS"
     assert curated_records[1]["owner"] == "Finance"
     assert curated_records[1]["cost"] == 250.00
+    assert curated_records[1]["squad"] == "Finance"
 
     # Clean up
     del os.environ["LAKEHOUSE_BUCKET_NAME"]

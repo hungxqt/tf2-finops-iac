@@ -77,3 +77,8 @@ variable "dashboard_data_replica_bucket_arn" {
   type        = string
   description = "ARN of the replica S3 bucket for dashboard data"
 }
+
+variable "destroyable" {
+  type        = bool
+  description = "Set to true to make dashboard data S3 bucket destroyable (Sandbox exceptions)"
+}

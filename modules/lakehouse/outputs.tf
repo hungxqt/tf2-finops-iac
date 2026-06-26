@@ -23,6 +23,27 @@ output "glue_database_name" {
   value       = aws_glue_catalog_database.lakehouse.name
 }
 
+output "cur_data_table_name" {
+  description = "The name of the Glue Catalog table for curated cost data"
+  value       = aws_glue_catalog_table.cur_data.name
+}
+
+output "containment_audit_table_name" {
+  description = "The name of the Glue Catalog table for containment audit records"
+  value       = aws_glue_catalog_table.containment_audit.name
+}
+
+output "glue_catalog_tables" {
+  description = "Map of Glue database and tables"
+  value = {
+    database = aws_glue_catalog_database.lakehouse.name
+    tables = {
+      cur_data          = aws_glue_catalog_table.cur_data.name
+      containment_audit = aws_glue_catalog_table.containment_audit.name
+    }
+  }
+}
+
 output "athena_workgroup_name" {
   description = "The name of the Athena workgroup"
   value       = aws_athena_workgroup.lakehouse.name

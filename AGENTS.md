@@ -229,8 +229,11 @@ tf2-finops-iac/
 - The default AI Engine execution path is: Step Functions → AI Engine Request Lambda (direct invocation) → SQS detection queue → AI Engine Worker Lambda (event source mapping) → DynamoDB results table / S3 evidence → Step Functions (direct DynamoDB getItem polling).
 - If the AI Engine is unavailable, fails schema validation, times out, returns a cross-tenant result, exceeds rate limits, or returns an unsafe recommendation, fail closed for containment: do not apply automatic containment, alert operators through the static/rule-based fallback path where applicable, preserve run state, and write an audit record.
 - Use CDO as the telemetry source of truth. AI Engine components must not directly pull CDO-owned Cost Explorer, CUR, CloudWatch, Athena, Glue, or containment-state data unless a user explicitly changes the ownership boundary.
-- Implement contract queues, DLQs, rollback queues, idempotency stores, and error-budget/circuit-breaker state in `modules/orchestration` unless the user explicitly approves a new module boundary.
-- Use `prevent_destroy` for state, audit, lakehouse, KMS, and core DynamoDB resources.
+- Reusable modules must support `destroyable = true` for sandbox teardown, but default to protected behavior (`destroyable = false`) for staging/prod.
+- Use static destroy guard resources (such as `terraform_data.destroy_guard` with `count = var.destroyable ? 0 : 1` and static `lifecycle { prevent_destroy = true }`) for non-sandbox environments. Do not put unconditional `prevent_destroy` on shared module resources that sandbox must destroy.
+- Configure S3 bucket `force_destroy = var.destroyable` for logging, lakehouse, audit, dashboard data, and replica buckets.
+- Configure ECR repository `force_delete = var.destroyable` and KMS key `deletion_window_in_days = var.destroyable ? 7 : 30` to permit sandbox teardown.
+- Staging and production state, audit, lakehouse, KMS, and core DynamoDB resources must remain protected from accidental teardowns via the static destroy guard sentinel resources when `destroyable = false`.
 
 ## Read-Only Documentation Sources
 
@@ -315,6 +318,7 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 
 - **Idempotency Hot Path**: DynamoDB `finops-idempotency-{env}` is the hot path for idempotency validation (keyed on composite key with a 24-hour TTL (`ttl_expiry`)).
 - **Durable Audit Trail**: S3 with Object Lock (compliance mode) remains the authoritative evidence store for audit and telemetry retention, and must retain containment logs for at least 90 days.
+  - **Object Lock Sandbox Teardown Caveat**: Compliance-mode retained S3 objects cannot be destroyed until retention expires, so sandbox audit buckets must avoid Compliance retention if full teardown is required. Staging and production audit buckets must retain the mandatory 90-day compliance-mode Object Lock.
 - **Rollback Caching**: DynamoDB `finops-rollback-cache` stores the `rollback_payload.boto3_equivalent` cached from `/v1/decide` for 90 days (backed by Object Lock S3 copies).
 - **Rollback Execution**: CDO workers execute rollbacks directly using the cached Boto3 payload from `finops-rollback-cache` (enabling independent execution even when the AI Engine is offline). The SQS queue `finops-watch-rollback` is for audit completion notification only, not rollback command dispatch.
 
@@ -347,6 +351,7 @@ All implementation must preserve these hard requirements:
 - Production containment is tag, suggest, or dry-run only.
 - Audit records must capture actor, timestamp, correlation ID, idempotency key, anomaly ID, target owner, before state, proposed or applied after state, execution mode, rollback path, approval status, retention location, and retention period.
 - Audit retention must be at least 90 days.
+  - **Sandbox Exception**: Sandbox contains synthetic/non-production data and may use teardown-compatible retention settings; staging/prod must preserve audit/state/lakehouse/KMS/DynamoDB protection.
 - Automated containment must **NEVER terminate prod, delete data, or modify IAM**.
 - Every AI request and telemetry payload must preserve tenant isolation, account context, idempotency, correlation ID, and contract/schema version.
 - Telemetry quality failures, stale Cost Explorer data, delayed CUR data, missing CloudWatch metrics, estimated billing data, and low completeness scores must force dry-run or alert-only containment.
@@ -444,8 +449,8 @@ Progress files must be factual. Do not claim a module is complete until validati
 
 Agents must keep `docs/GUIDES.md` and `docs/GUIDES_vi.md` current whenever they add or change a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure.
 
-- Update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a new working flow is added or an existing flow changes.
-- A "working flow" includes bootstrap, backend migration, Lambda packaging/testing, Terraform init/validate/plan/apply, environment deployment, drift detection, security scans, CI jobs, Makefile/script usage, AI Engine integration handoff, and any new required manual operator step.
+- Update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a new working flow is added, an existing flow changes, or sandbox destroy workflow commands change.
+- A "working flow" includes bootstrap, backend migration, Lambda packaging/testing, Terraform init/validate/plan/apply, environment deployment, drift detection, security scans, CI jobs, sandbox destroy plans, Makefile/script usage, AI Engine integration handoff, and any new required manual operator step.
 - Do not update guides for purely internal implementation changes that do not change commands, order of operations, prerequisites, or operator/developer behavior.
 - If no guide update is needed, the final response must explicitly say `No guide impact` with a short explanation.
 - Keep `docs/GUIDES.md` and `docs/GUIDES_vi.md` factually equivalent, with the same section order and command blocks. Translate prose in Vietnamese, but keep technical names, commands, file paths, and AWS service names in English.
@@ -453,7 +458,7 @@ Agents must keep `docs/GUIDES.md` and `docs/GUIDES_vi.md` current whenever they 
 
 ## Validation Requirements
 
-Run the narrowest relevant validation after each meaningful change. Before calling a task complete, run the broad validation set when the files exist:
+Run the narrowest relevant validation after each meaningful change. Before calling a task complete, run the broad validation set when the files exist. In particular, verify sandbox destroyability using the sandbox destroy-plan check (`terraform -chdir=environments/sandbox plan -destroy -out=sandbox-destroy.tfplan`), with the expected result being no prevent_destroy blocker:
 
 ```powershell
 terraform fmt -check -recursive
@@ -461,6 +466,7 @@ terraform -chdir=bootstrap init -backend=false
 terraform -chdir=bootstrap validate
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
+terraform -chdir=environments/sandbox plan -destroy -out=sandbox-destroy.tfplan
 terraform -chdir=environments/staging init -backend=false
 terraform -chdir=environments/staging validate
 terraform -chdir=environments/prod init -backend=false

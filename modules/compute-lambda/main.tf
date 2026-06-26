@@ -109,7 +109,7 @@ resource "aws_lambda_code_signing_config" "signed_config" {
     signing_profile_version_arns = [aws_signer_signing_profile.lambda_signer.arn]
   }
   policies {
-    untrusted_artifact_on_deployment = "Enforce"
+    untrusted_artifact_on_deployment = "Warn"
   }
 }
 

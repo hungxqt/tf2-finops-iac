@@ -34,18 +34,19 @@ def test_audit_writer_s3_and_dynamodb_integration():
         "cost_period": "2026-06",
         "execution_date": "2026-06-23",
         "environment": "sandbox",
-        "approval_status": "pending"
+        "approval_status": "pending",
+        "telemetry_quality": 1.0
     }
 
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "AUDIT_WRITTEN"
     assert resp["audit_id"] == "audit-pending_approval-corr-456"
-    assert resp["audit_uri"] == "s3://my-test-audit-bucket/audit/corr-456_pending_approval.json"
+    assert resp["audit_uri"] == "s3://my-test-audit-bucket/audit/account_id=123456789012/year=2026/month=06/audit-pending_approval-corr-456.json"
 
     # Assert S3 put
     assert len(s3_put_called) == 1
     assert s3_put_called[0]["bucket"] == "my-test-audit-bucket"
-    assert s3_put_called[0]["key"] == "audit/corr-456_pending_approval.json"
+    assert s3_put_called[0]["key"] == "audit/account_id=123456789012/year=2026/month=06/audit-pending_approval-corr-456.json"
     
     body = json.loads(s3_put_called[0]["body"].decode("utf-8"))
     assert body["audit_id"] == "audit-pending_approval-corr-456"
@@ -54,6 +55,12 @@ def test_audit_writer_s3_and_dynamodb_integration():
     assert body["retention_period"] == "90 days"
     assert body["rollback_path"] == "revert-resource-tags"
     assert body["approval_status"] == "pending"
+    assert body["account_id"] == "123456789012"
+    assert body["resource_id"] == "N/A"
+    assert body["owner"] == "untagged"
+    assert body["target_owner"] == "untagged"
+    assert body["audit_score"] == 1.0
+    assert body["numeric_audit_score"] == 1.0
 
     # Assert DynamoDB index
     assert len(ddb_put_called) == 1

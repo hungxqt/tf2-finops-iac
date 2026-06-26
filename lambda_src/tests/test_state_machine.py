@@ -11,7 +11,8 @@ def check_asl_file(asl_path, is_template=True):
     if is_template:
         # Check for placeholders directly in raw file content
         assert "${rollback_cache_table_name}" in raw_content, "Missing placeholder ${rollback_cache_table_name}"
-        assert "${ai_request_lambda_arn}" in raw_content, "Missing placeholder ${ai_request_lambda_arn}"
+        assert "${vpc_alb_caller_lambda_arn}" in raw_content, "Missing placeholder ${vpc_alb_caller_lambda_arn}"
+        assert "${ai_request_lambda_arn}" not in raw_content, "Obsolete placeholder ${ai_request_lambda_arn} still present"
         assert "ai_client" not in raw_content, "Stale ai_client reference in statemachine.json"
         
         # Preprocess template variables to make it valid JSON for loading
@@ -168,6 +169,21 @@ def check_asl_file(asl_path, is_template=True):
         assert "ecs" not in resource.lower()
         if "arn:aws:states:::sns:publish" not in resource and "arn:aws:states:::dynamodb" not in resource:
             assert "http" not in resource.lower()
+
+    # Assert InvokeDetect, InvokeDecide, ReportVerifyResult use the VPC ALB caller resource
+    if is_template:
+        assert states["InvokeDetect"]["Resource"] == "arn:aws:placeholder"
+        assert states["InvokeDecide"]["Resource"] == "arn:aws:placeholder"
+        assert states["ReportVerifyResult"]["Resource"] == "arn:aws:placeholder"
+    else:
+        assert states["InvokeDetect"]["Resource"] == "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller"
+        assert states["InvokeDecide"]["Resource"] == "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller"
+        assert states["ReportVerifyResult"]["Resource"] == "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller"
+
+    # Assert AI states keep /v1/detect, /v1/decide, and /v1/verify paths
+    assert states["InvokeDetect"]["Parameters"]["path.$"] == "$.ai_detect_request.path"
+    assert states["InvokeDecide"]["Parameters"]["path"] == "/v1/decide"
+    assert states["ReportVerifyResult"]["Parameters"]["path"] == "/v1/verify"
 
 def test_state_machine_asl_contract():
     asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")

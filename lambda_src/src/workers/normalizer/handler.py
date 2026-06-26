@@ -36,7 +36,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         logger.error("Invalid execution date: %s", e)
         raise e
 
-    partition_path = f"year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}"
+    partition_path = f"account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}"
     curated_key = f"cost/curated/{partition_path}/{event.run_id}_curated.parquet"
     curated_data_uri = f"s3://{bucket_name}/{curated_key}"
     
@@ -98,30 +98,62 @@ def handle_request(event_data: dict, context: Any) -> dict:
     curated_records = []
     for rec in raw_records:
         account_id = rec.get("account_id", "")
-        service = rec.get("service", "")
-        cost = rec.get("cost", 0.0)
+        cost = float(rec.get("cost") or rec.get("line_item_unblended_cost") or 0.0)
         
         # Validate required cost fields
+        service = rec.get("service") or rec.get("line_item_product_code") or ""
         if not account_id or not service or cost < 0:
             logger.info("Filtering out invalid cost record: %s", rec)
             continue
             
-        owner = rec.get("owner", "")
+        owner = rec.get("owner") or rec.get("resource_tags_user_owner") or ""
         if not owner or owner.strip() == "":
             owner = "untagged"
             
+        squad = rec.get("squad") or rec.get("team") or rec.get("resource_tags_user_team") or "untagged"
+        cost_center = rec.get("cost_center") or rec.get("resource_tags_user_cost_center") or "untagged"
+        region = rec.get("region") or rec.get("product_region_code") or ""
+        resource_id = rec.get("resource_id") or rec.get("line_item_resource_id") or ""
+        currency = rec.get("currency") or rec.get("line_item_currency_code") or "USD"
+        timestamp = rec.get("timestamp") or rec.get("line_item_usage_start_date") or ""
+            
         curated_records.append({
+            # Original fields for backward compatibility
             "account_id": account_id,
             "service": service,
-            "region": rec.get("region", ""),
+            "region": region,
             "owner": owner,
             "cost": cost,
-            "currency": rec.get("currency", ""),
-            "timestamp": rec.get("timestamp", ""),
-            "curated_at": datetime.utcnow().isoformat() + "Z"
+            "currency": currency,
+            "timestamp": timestamp,
+            "curated_at": datetime.utcnow().isoformat() + "Z",
+            
+            # Formally required/documented cost fields
+            "unblended_cost": cost,
+            "service_code": service,
+            "resource_id": resource_id,
+            "squad": squad,
+            "cost_center": cost_center,
+            "schema_version": "3.2.0",
+            "correlation_id": event.correlation_id,
+            "idempotency_key": event_data.get("idempotency_key") or event.correlation_id,
+            "quality_score": completeness_score
         })
         
-    curated_data = json.dumps(curated_records).encode("utf-8")
+    # Write to Parquet format using pyarrow
+    import io
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        
+        table = pa.Table.from_pylist(curated_records)
+        buf = io.BytesIO()
+        pq.write_table(table, buf)
+        curated_data = buf.getvalue()
+        logger.info("Successfully generated Parquet bytes: %d bytes", len(curated_data))
+    except Exception as e:
+        logger.error("Failed to write Parquet using pyarrow: %s. Falling back to JSON bytes.", e)
+        curated_data = json.dumps(curated_records).encode("utf-8")
     
     # 4. Save to S3 curated folder
     if client:
@@ -139,3 +171,4 @@ def handle_request(event_data: dict, context: Any) -> dict:
     response.telemetry_quality = completeness_score
     logger.info("Response: %s", response.to_dict())
     return response.to_dict()
+

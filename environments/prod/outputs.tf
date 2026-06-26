@@ -203,5 +203,10 @@ output "private_alb_endpoint" {
   value       = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? "https://${var.private_dns_name}" : "https://${module.ai_runtime_lambda.alb_dns_name}"
 }
 
+output "glue_catalog_tables" {
+  description = "Map of Glue database and tables"
+  value       = module.lakehouse.glue_catalog_tables
+}
+
 
 

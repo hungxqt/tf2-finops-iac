@@ -95,3 +95,9 @@ variable "sigv4_service_name" {
   default     = "ai-engine"
 }
 
+variable "destroyable" {
+  type        = bool
+  description = "Set to true to make S3 buckets, KMS keys, ECR, etc. destroyable (Sandbox exceptions)"
+  default     = false
+}
+

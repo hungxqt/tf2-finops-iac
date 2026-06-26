@@ -109,6 +109,26 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
    terraform apply prod.tfplan
    ```
 
+### 2.4. Teardown / Destroy Sandbox Environment
+
+To destroy the sandbox environment for cleanups or testing teardowns:
+1. Generate the destroy plan:
+   ```powershell
+   cd environments/sandbox
+   terraform plan -destroy -out=sandbox-destroy.tfplan
+   ```
+2. Review the generated plan to verify the resources being destroyed.
+3. Apply the destroy plan:
+   ```powershell
+   terraform apply sandbox-destroy.tfplan
+   ```
+
+> [!WARNING]
+> **AWS Object Lock Teardown Limitation**: 
+> If the sandbox audit bucket already contains compliance-mode retained object versions, AWS enforces a hard restriction that prevents deleting these versions until their retention period expires. In this case, Terraform will fail to delete the audit bucket itself. Compliance-mode object lock is disabled for *newly created* sandbox audit buckets to make teardowns possible, but if retention was previously enabled and objects exist, they must expire before full teardown can succeed.
+
+Staging and production environments are strictly protected by a count-conditional `destroy_guard` sentinel resource and cannot be destroyed using a standard destroy plan.
+
 ---
 
 ## 3. Post-Deployment GitOps Handoff
@@ -155,6 +175,27 @@ checkov -d modules/orchestration --framework terraform
 
 ---
 
-## 5. Guide Maintenance
+## 5. Glue Schema & Partition Projection Validation
+
+To support automated and cost-effective querying without maintaining resource-heavy crawlers or scheduling manual repair queries, the lakehouse uses Athena Partition Projection.
+
+### Step 5.1: Verify Terraform glue table configurations
+Run the focused module test to assert partition keys, input/output formats, and static table configurations:
+```powershell
+cd modules/lakehouse
+terraform init
+terraform test
+cd ../..
+```
+
+### Step 5.2: Validate Athena DDL Matching Schemas
+To inspect, debug, or manually check the schema definitions and parameters for the Parquet `cur_data` and JSON `containment_audit` tables, review the validation script:
+* [scripts/athena_validation.sql](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/scripts/athena_validation.sql)
+
+Ensure the table projection ranges (e.g. `2024,2035`), formats, and S3 partition locations exactly align with the worker output paths.
+
+---
+
+## 6. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
 

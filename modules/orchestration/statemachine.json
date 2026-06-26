@@ -491,7 +491,8 @@
     },
     "InvokeDetect": {
       "Type": "Task",
-      "Resource": "${ai_request_lambda_arn}",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "${vpc_alb_caller_lambda_arn}",
       "Parameters": {
         "path.$": "$.ai_detect_request.path",
         "method.$": "$.ai_detect_request.method",
@@ -561,7 +562,8 @@
     },
     "InvokeDecide": {
       "Type": "Task",
-      "Resource": "${ai_request_lambda_arn}",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "${vpc_alb_caller_lambda_arn}",
       "Parameters": {
         "path": "/v1/decide",
         "method": "POST",
@@ -976,7 +978,8 @@
     },
     "ReportVerifyResult": {
       "Type": "Task",
-      "Resource": "${ai_request_lambda_arn}",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "${vpc_alb_caller_lambda_arn}",
       "Parameters": {
         "path": "/v1/verify",
         "method": "POST",

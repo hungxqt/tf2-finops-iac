@@ -37,7 +37,7 @@ def test_step_function_lambda_coverage():
         "router_lambda_arn",
         "audit_writer_lambda_arn",
         "containment_worker_lambda_arn",
-        "ai_request_lambda_arn"
+        "vpc_alb_caller_lambda_arn"
     ]
     
     for p in expected_placeholders:
@@ -95,8 +95,8 @@ def test_step_function_lambda_coverage():
         with open(env_main_tf, "r", encoding="utf-8") as f:
             env_content = f.read()
             
-        # Ensure orchestration module is defined and passes lambda_function_arns merging compute lambda and ai_request
+        # Ensure orchestration module is defined and passes lambda_function_arns mapping compute lambda directly without merge or direct ai_request
         assert 'module "orchestration"' in env_content, f"orchestration module missing in environments/{env}/main.tf"
-        assert 'lambda_function_arns = merge(' in env_content, f"lambda_function_arns merge block missing in environments/{env}/main.tf"
-        assert 'module.compute_lambda.lambda_alias_arns' in env_content, f"compute_lambda alias arns missing in environments/{env}/main.tf"
-        assert 'ai_request = module.ai_runtime_lambda.request_lambda_alias_arn' in env_content, f"ai_request mapping missing in environments/{env}/main.tf"
+        assert 'lambda_function_arns         = module.compute_lambda.lambda_alias_arns' in env_content, f"lambda_function_arns mapping missing in environments/{env}/main.tf"
+        assert 'lambda_function_arns = merge(' not in env_content, f"lambda_function_arns merge block should be removed in environments/{env}/main.tf"
+        assert 'ai_request = module.ai_runtime_lambda.request_lambda_alias_arn' not in env_content, f"direct ai_request mapping should be removed in environments/{env}/main.tf"

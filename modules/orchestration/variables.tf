@@ -77,3 +77,8 @@ variable "scheduler_kms_key_arn" {
   type        = string
   description = "KMS Customer Managed Key (CMK) ARN for EventBridge Scheduler encryption"
 }
+
+variable "destroyable" {
+  type        = bool
+  description = "Set to true to make orchestration DynamoDB tables destroyable (Sandbox exceptions)"
+}

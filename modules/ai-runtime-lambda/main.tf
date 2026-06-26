@@ -1,7 +1,45 @@
+data "aws_caller_identity" "current" {}
+
+# Generate self-signed certificate if no certificate_arn is provided or if it's the dummy certificate
+locals {
+  is_dummy_cert = var.alb_certificate_arn == "" || contains(split(":", var.alb_certificate_arn), "123456789012")
+}
+
+resource "tls_private_key" "self_signed" {
+  count     = local.is_dummy_cert ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "self_signed" {
+  count           = local.is_dummy_cert ? 1 : 0
+  private_key_pem = tls_private_key.self_signed[0].private_key_pem
+
+  subject {
+    common_name  = "*.ap-southeast-1.compute.internal"
+    organization = "TF2 FinOps"
+  }
+
+  validity_period_hours = 87600 # 10 years
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "aws_acm_certificate" "self_signed" {
+  count            = local.is_dummy_cert ? 1 : 0
+  private_key      = tls_private_key.self_signed[0].private_key_pem
+  certificate_body = tls_self_signed_cert.self_signed[0].cert_pem
+}
+
 # ECR Repository for the AI Engine Images
 resource "aws_ecr_repository" "ai_engine" {
   name                 = "${var.project_name}-${var.environment}-ai-engine"
   image_tag_mutability = "IMMUTABLE"
+  force_delete         = var.destroyable
 
   image_scanning_configuration {
     scan_on_push = true
@@ -12,6 +50,43 @@ resource "aws_ecr_repository" "ai_engine" {
   }
 
   tags = var.tags
+}
+
+resource "aws_ecr_repository_policy" "lambda" {
+  repository = aws_ecr_repository.ai_engine.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaECRImageRetrievalPolicy"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+      },
+      {
+        Sid    = "AllowAccountAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+      }
+    ]
+  })
 }
 
 # CloudWatch Log Groups
@@ -253,7 +328,7 @@ resource "aws_lambda_function" "request" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.request]
+  depends_on = [aws_cloudwatch_log_group.request, aws_ecr_repository_policy.lambda]
   tags       = var.tags
 }
 
@@ -303,7 +378,7 @@ resource "aws_lambda_function" "worker" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.worker]
+  depends_on = [aws_cloudwatch_log_group.worker, aws_ecr_repository_policy.lambda]
   tags       = var.tags
 }
 
@@ -383,7 +458,6 @@ resource "aws_lb" "ai" {
 resource "aws_lb_target_group" "ai" {
   name        = "${var.project_name}-${var.environment}-ai-tg"
   target_type = "lambda"
-  vpc_id      = var.vpc_id
 
   tags = var.tags
 }
@@ -408,7 +482,7 @@ resource "aws_lb_listener" "https" {
   port              = "443"
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.alb_certificate_arn
+  certificate_arn   = local.is_dummy_cert ? aws_acm_certificate.self_signed[0].arn : var.alb_certificate_arn
 
   default_action {
     type             = "forward"
@@ -472,6 +546,13 @@ resource "aws_route53_record" "alb" {
     name                   = aws_lb.ai.dns_name
     zone_id                = aws_lb.ai.zone_id
     evaluate_target_health = true
+  }
+}
+
+resource "terraform_data" "destroy_guard" {
+  count = var.destroyable ? 0 : 1
+  lifecycle {
+    prevent_destroy = true
   }
 }
 

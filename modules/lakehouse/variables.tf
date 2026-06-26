@@ -49,3 +49,8 @@ variable "athena_replica_bucket_arn" {
   type        = string
   description = "ARN of the replica S3 bucket for Athena query results"
 }
+
+variable "destroyable" {
+  type        = bool
+  description = "Set to true to make S3 buckets, KMS keys, ECR, etc. destroyable (Sandbox exceptions)"
+}

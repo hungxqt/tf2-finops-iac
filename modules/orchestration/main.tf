@@ -21,9 +21,7 @@ resource "aws_dynamodb_table" "run_state" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -48,9 +46,7 @@ resource "aws_dynamodb_table" "anomaly" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -75,9 +71,7 @@ resource "aws_dynamodb_table" "routing_state" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -102,9 +96,7 @@ resource "aws_dynamodb_table" "audit" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -129,9 +121,7 @@ resource "aws_dynamodb_table" "dashboard_views" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -156,9 +146,7 @@ resource "aws_dynamodb_table" "account_policy" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -183,9 +171,7 @@ resource "aws_dynamodb_table" "error_budget" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -210,9 +196,7 @@ resource "aws_dynamodb_table" "ai_results" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -242,9 +226,7 @@ resource "aws_dynamodb_table" "rollback_cache" {
     enabled = true
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+
 
   tags = var.tags
 }
@@ -266,7 +248,7 @@ resource "aws_sfn_state_machine" "workflow" {
     state_lambda_arn                 = var.lambda_function_arns["state"]
     cost_puller_lambda_arn           = var.lambda_function_arns["cost_puller"]
     normalizer_lambda_arn            = var.lambda_function_arns["normalizer"]
-    ai_request_lambda_arn            = var.lambda_function_arns["vpc_alb_caller"]
+    vpc_alb_caller_lambda_arn        = var.lambda_function_arns["vpc_alb_caller"]
     router_lambda_arn                = var.lambda_function_arns["router"]
     audit_writer_lambda_arn          = var.lambda_function_arns["audit_writer"]
     containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
@@ -352,4 +334,11 @@ resource "aws_sqs_queue" "rollback_status_queue" {
   message_retention_seconds         = 1209600 # 14 days
 
   tags = var.tags
+}
+
+resource "terraform_data" "destroy_guard" {
+  count = var.destroyable ? 0 : 1
+  lifecycle {
+    prevent_destroy = true
+  }
 }

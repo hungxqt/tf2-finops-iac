@@ -70,20 +70,38 @@ def handle_request(event_data: dict, context: Any) -> dict:
             else:
                 audit_type = "PENDING_APPROVAL"
 
-    audit_key = f"audit/{event.correlation_id}_{audit_type.lower()}.json"
-    audit_uri = f"s3://{bucket_name}/{audit_key}"
     audit_id = f"audit-{audit_type.lower()}-{event.correlation_id}"
+
+    try:
+        exec_time = finops_common.parse_date(event.execution_date)
+    except Exception:
+        exec_time = datetime.utcnow()
+
+    year_str = f"{exec_time.year:04d}"
+    month_str = f"{exec_time.month:02d}"
+
+    audit_key = f"audit/account_id={event.account_id}/year={year_str}/month={month_str}/{audit_id}.json"
+    audit_uri = f"s3://{bucket_name}/{audit_key}"
 
     # 2. Gather AGENTS-required audit fields
     anomaly_id = "N/A"
     execution_mode = "dry-run"
-    target_owner = "engineering"
     
     if event.ai:
         if event.ai.anomaly_id:
             anomaly_id = event.ai.anomaly_id
         if event.ai.recommended_containment_mode:
             execution_mode = event.ai.recommended_containment_mode
+
+    resource_id = "N/A"
+    owner = "untagged"
+    
+    if event.ai and event.ai.details:
+        resource_id = event.ai.details.get("resource_id") or event.ai.details.get("line_item_resource_id") or resource_id
+        owner = event.ai.details.get("owner") or event.ai.details.get("resource_tags_user_owner") or owner
+    if event.containment and event.containment.details:
+        resource_id = event.containment.details.get("resource_id") or event.containment.details.get("line_item_resource_id") or resource_id
+        owner = event.containment.details.get("owner") or event.containment.details.get("resource_tags_user_owner") or owner
 
     before_state = "anomaly_detected"
     proposed_after_state = "containment_proposed"
@@ -108,6 +126,13 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
     idemp_key = finops_common.idempotency_key(event.account_id, event.cost_period, event.execution_date)
 
+    # Calculate numeric audit score based on severity/confidence/quality
+    audit_score = 1.0
+    if event.ai and event.ai.confidence is not None:
+        audit_score = float(event.ai.confidence)
+    elif event.telemetry_quality is not None:
+        audit_score = float(event.telemetry_quality)
+
     details = {
         "audit_id": audit_id,
         "audit_uri": audit_uri,
@@ -117,15 +142,21 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "correlation_id": event.correlation_id,
         "idempotency_key": idemp_key,
         "anomaly_id": anomaly_id,
-        "target_owner": target_owner,
+        "account_id": event.account_id,
+        "resource_id": resource_id,
+        "owner": owner,
+        "target_owner": owner,
         "before_state": before_state,
         "proposed_after_state": proposed_after_state,
         "applied_after_state": applied_after_state,
+        "after_state": applied_after_state,
         "execution_mode": execution_mode,
         "rollback_path": "revert-resource-tags",
         "approval_status": approval_status,
         "retention_location": audit_uri,
         "retention_period": "90 days",
+        "audit_score": audit_score,
+        "numeric_audit_score": audit_score,
         "error_details": error_details
     }
 

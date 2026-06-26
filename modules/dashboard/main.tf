@@ -200,16 +200,15 @@ resource "aws_s3_bucket_replication_configuration" "dashboard_assets" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.dashboard_assets]
 }
 
-# 2. Private S3 bucket for precomputed dashboard JSON summaries (retained, prevent_destroy)
+# 2. Private S3 bucket for precomputed dashboard JSON summaries
 resource "aws_s3_bucket" "dashboard_data" {
   bucket        = "${var.project_name}-${var.environment}-dashboard-data"
-  force_destroy = false
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  force_destroy = var.destroyable
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "dashboard_data" {
@@ -281,6 +280,8 @@ resource "aws_s3_bucket_replication_configuration" "dashboard_data" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.dashboard_data]
 }
 
 # S3 Bucket CORS Configuration for the dashboard data bucket
@@ -444,7 +445,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   web_acl_id          = aws_wafv2_web_acl.cloudfront.arn
-  aliases             = var.cloudfront_aliases
+  aliases             = var.cloudfront_acm_certificate_arn != "" ? var.cloudfront_aliases : []
 
   logging_config {
     bucket          = "${var.s3_logging_bucket_id}.s3.amazonaws.com"
@@ -765,5 +766,12 @@ resource "aws_iam_role_policy" "replication" {
       }
     ]
   })
+}
+
+resource "terraform_data" "destroy_guard" {
+  count = var.destroyable ? 0 : 1
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 

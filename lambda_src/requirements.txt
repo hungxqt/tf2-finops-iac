@@ -1,1 +1,2 @@
 # Production runtime dependencies (none required beyond python standard library and standard boto3)
+pyarrow

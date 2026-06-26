@@ -109,6 +109,26 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
    terraform apply prod.tfplan
    ```
 
+### 2.4. Hủy / Giải phóng môi trường Sandbox (Teardown / Destroy Sandbox)
+
+Để hủy bỏ môi trường sandbox nhằm dọn dẹp hoặc kiểm tra quy trình giải phóng tài nguyên:
+1. Tạo kế hoạch hủy tài nguyên:
+   ```powershell
+   cd environments/sandbox
+   terraform plan -destroy -out=sandbox-destroy.tfplan
+   ```
+2. Xem xét kỹ kế hoạch hủy đã tạo để đảm bảo các tài nguyên bị hủy là chính xác.
+3. Áp dụng kế hoạch hủy:
+   ```powershell
+   terraform apply sandbox-destroy.tfplan
+   ```
+
+> [!WARNING]
+> **Giới hạn kỹ thuật của AWS Object Lock**:
+> Nếu bucket audit sandbox đã chứa các phiên bản đối tượng được giữ lại theo chế độ Tuân thủ (Compliance-mode), AWS sẽ áp dụng một hạn chế cứng ngăn việc xóa các đối tượng này cho đến khi thời hạn lưu trữ hết hạn. Trong trường hợp đó, Terraform sẽ thất bại khi xóa bucket audit. Mặc dù Object Lock chế độ Tuân thủ đã được tắt cho các bucket audit sandbox *mới tạo* để cho phép dọn dẹp, nhưng nếu Object Lock đã được cấu hình trước đó và có dữ liệu, các đối tượng này phải hết hạn trước khi có thể dọn dẹp hoàn toàn.
+
+Các môi trường Staging và Production được bảo vệ nghiêm ngặt bằng tài nguyên tuần tra `destroy_guard` (terraform_data) và không thể bị xóa thông qua kế hoạch hủy thông thường.
+
 ---
 
 ## 3. Bàn giao sau khi triển khai cho GitOps (`tf2-finops-gitops`)
@@ -154,6 +174,27 @@ checkov -d modules/orchestration --framework terraform
 
 ---
 
-## 5. Bảo trì tài liệu hướng dẫn
+## 5. Xác thực Glue Schema & Partition Projection
+
+Để hỗ trợ truy vấn tự động và tối ưu chi phí mà không cần duy trì các crawler tiêu tốn tài nguyên hoặc lập lịch các truy vấn sửa chữa phân vùng thủ công (MSCK REPAIR), lakehouse sử dụng tính năng Athena Partition Projection.
+
+### Bước 5.1: Xác thực cấu hình bảng Glue trong Terraform
+Chạy các kiểm thử tập trung cho module để kiểm tra các khóa phân vùng, định dạng đầu vào/đầu ra và cấu hình bảng tĩnh:
+```powershell
+cd modules/lakehouse
+terraform init
+terraform test
+cd ../..
+```
+
+### Bước 5.2: Kiểm tra DDL Athena khớp với Schema
+Để kiểm tra, gỡ lỗi hoặc tạo thủ công các bảng Parquet `cur_data` và JSON `containment_audit`, xem file script xác thực:
+* [scripts/athena_validation.sql](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/scripts/athena_validation.sql)
+
+Đảm bảo phạm vi projection của bảng (ví dụ: `2024,2035`), định dạng và đường dẫn phân vùng S3 khớp chính xác với đường dẫn đầu ra của worker.
+
+---
+
+## 6. Bảo trì tài liệu hướng dẫn
 Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.
 

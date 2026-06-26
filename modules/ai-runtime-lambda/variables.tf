@@ -183,3 +183,8 @@ variable "alb_access_logs_prefix" {
   default     = "alb-access-logs"
 }
 
+variable "destroyable" {
+  type        = bool
+  description = "Set to true to make ECR repository destroyable (Sandbox exceptions)"
+}
+

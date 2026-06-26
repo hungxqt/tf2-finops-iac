@@ -491,7 +491,8 @@
     },
     "InvokeDetect": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-ai_request",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
       "Parameters": {
         "path.$": "$.ai_detect_request.path",
         "method.$": "$.ai_detect_request.method",
@@ -561,7 +562,8 @@
     },
     "InvokeDecide": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-ai_request",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
       "Parameters": {
         "path": "/v1/decide",
         "method": "POST",
@@ -976,7 +978,8 @@
     },
     "ReportVerifyResult": {
       "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-ai_request",
+      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
       "Parameters": {
         "path": "/v1/verify",
         "method": "POST",

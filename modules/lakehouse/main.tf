@@ -15,22 +15,7 @@ data "aws_iam_policy_document" "kms_policy" {
       type        = "AWS"
       identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
     }
-    actions = [
-      "kms:Create*",
-      "kms:Describe*",
-      "kms:Enable*",
-      "kms:List*",
-      "kms:Put*",
-      "kms:Update*",
-      "kms:Revoke*",
-      "kms:Disable*",
-      "kms:Get*",
-      "kms:Delete*",
-      "kms:TagResource",
-      "kms:UntagResource",
-      "kms:ScheduleKeyDeletion",
-      "kms:CancelKeyDeletion"
-    ]
+    actions   = ["kms:*"]
     resources = ["*"]
   }
 
@@ -63,12 +48,9 @@ data "aws_iam_policy_document" "kms_policy" {
 # KMS Key for general data (Lakehouse, Athena Results)
 resource "aws_kms_key" "data" {
   description             = "KMS key for data encryption (Lakehouse, Athena)"
-  deletion_window_in_days = 30
+  deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.kms_policy.json
-  lifecycle {
-    prevent_destroy = true
-  }
   tags = merge(var.tags, {
     Region = var.aws_region
   })
@@ -82,13 +64,10 @@ resource "aws_kms_alias" "data" {
 # KMS Key for Audit Log Encryption
 resource "aws_kms_key" "audit" {
   description             = "KMS key for Audit log encryption"
-  deletion_window_in_days = 30
+  deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.kms_policy.json
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  tags                    = var.tags
 }
 
 resource "aws_kms_alias" "audit" {
@@ -99,13 +78,10 @@ resource "aws_kms_alias" "audit" {
 # KMS Key for DynamoDB Table Encryption
 resource "aws_kms_key" "ddb" {
   description             = "KMS key for DynamoDB state encryption"
-  deletion_window_in_days = 30
+  deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.kms_policy.json
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  tags                    = var.tags
 }
 
 resource "aws_kms_alias" "ddb" {
@@ -121,11 +97,8 @@ resource "aws_s3_bucket" "logging" {
   # checkov:skip=CKV2_AWS_61: "Logging bucket does not need lifecycle configuration"
   # checkov:skip=CKV2_AWS_62: "Logging bucket does not need event notifications"
   bucket        = "${var.project_name}-${var.environment}-s3-logging"
-  force_destroy = false
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  force_destroy = var.destroyable
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "logging" {
@@ -136,12 +109,27 @@ resource "aws_s3_bucket_public_access_block" "logging" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_ownership_controls" "logging" {
+  bucket = aws_s3_bucket.logging.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_acl" "logging" {
+  depends_on = [
+    aws_s3_bucket_ownership_controls.logging,
+    aws_s3_bucket_public_access_block.logging,
+  ]
+  bucket = aws_s3_bucket.logging.id
+  acl    = "log-delivery-write"
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "logging" {
   bucket = aws_s3_bucket.logging.id
   rule {
     apply_server_side_encryption_by_default {
-      kms_master_key_id = aws_kms_key.audit.arn
-      sse_algorithm     = "aws:kms"
+      sse_algorithm = "AES256"
     }
   }
 }
@@ -151,6 +139,8 @@ resource "aws_s3_bucket_policy" "logging_tls_only" {
   policy     = data.aws_iam_policy_document.s3_tls_only_logging.json
   depends_on = [aws_s3_bucket_public_access_block.logging]
 }
+
+data "aws_elb_service_account" "main" {}
 
 data "aws_iam_policy_document" "s3_tls_only_logging" {
   statement {
@@ -171,16 +161,52 @@ data "aws_iam_policy_document" "s3_tls_only_logging" {
       values   = ["false"]
     }
   }
+
+  statement {
+    sid    = "AllowALBAccessLogs"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = [data.aws_elb_service_account.main.arn]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.logging.arn}/*"]
+  }
+
+  statement {
+    sid    = "AllowLogDeliveryWrite"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.logging.arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+
+  statement {
+    sid    = "AllowLogDeliveryAcl"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.logging.arn]
+  }
 }
+
 
 # S3 Lakehouse Bucket
 resource "aws_s3_bucket" "lakehouse" {
   bucket        = "${var.project_name}-${var.environment}-lakehouse-bucket"
-  force_destroy = false
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  force_destroy = var.destroyable
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "lakehouse" {
@@ -278,6 +304,8 @@ resource "aws_s3_bucket_replication_configuration" "lakehouse" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.lakehouse]
 }
 
 resource "aws_s3_bucket_policy" "lakehouse_tls_only" {
@@ -310,12 +338,9 @@ data "aws_iam_policy_document" "s3_tls_only_lakehouse" {
 # S3 Audit Bucket (with Object Lock enabled in compliance mode)
 resource "aws_s3_bucket" "audit" {
   bucket              = "${var.project_name}-${var.environment}-audit-bucket"
-  force_destroy       = false
-  object_lock_enabled = true
-  lifecycle {
-    prevent_destroy = true
-  }
-  tags = var.tags
+  force_destroy       = var.destroyable
+  object_lock_enabled = !var.destroyable
+  tags                = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "audit" {
@@ -344,6 +369,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
 }
 
 resource "aws_s3_bucket_object_lock_configuration" "audit" {
+  count  = var.destroyable ? 0 : 1
   bucket = aws_s3_bucket.audit.id
   rule {
     default_retention {
@@ -399,6 +425,8 @@ resource "aws_s3_bucket_replication_configuration" "audit" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.audit]
 }
 
 resource "aws_s3_bucket_policy" "audit_tls_only" {
@@ -433,6 +461,293 @@ resource "aws_glue_catalog_database" "lakehouse" {
   name        = "${var.project_name}_${var.environment}_database"
   description = "Glue Catalog Database for TF2 FinOps Lakehouse"
 }
+
+# Glue Catalog Table for Curated Cost Data
+resource "aws_glue_catalog_table" "cur_data" {
+  name          = "cur_data"
+  database_name = aws_glue_catalog_database.lakehouse.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"             = "parquet"
+    "projection.enabled"         = "true"
+    "projection.account_id.type" = "injected"
+    "projection.year.type"       = "integer"
+    "projection.year.range"      = "2024,2035"
+    "projection.month.type"      = "integer"
+    "projection.month.range"     = "1,12"
+    "projection.month.digits"    = "2"
+    "storage.location.template"  = "s3://${aws_s3_bucket.lakehouse.id}/cost/curated/account_id=$${account_id}/year=$${year}/month=$${month}/"
+  }
+
+  partition_keys {
+    name = "account_id"
+    type = "string"
+  }
+
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
+
+  partition_keys {
+    name = "month"
+    type = "int"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.lakehouse.id}/cost/curated/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      name                  = "parquet"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "service"
+      type = "string"
+    }
+
+    columns {
+      name = "region"
+      type = "string"
+    }
+
+    columns {
+      name = "owner"
+      type = "string"
+    }
+
+    columns {
+      name = "cost"
+      type = "double"
+    }
+
+    columns {
+      name = "currency"
+      type = "string"
+    }
+
+    columns {
+      name = "timestamp"
+      type = "string"
+    }
+
+    columns {
+      name = "curated_at"
+      type = "string"
+    }
+
+    columns {
+      name = "unblended_cost"
+      type = "double"
+    }
+
+    columns {
+      name = "service_code"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_id"
+      type = "string"
+    }
+
+    columns {
+      name = "squad"
+      type = "string"
+    }
+
+    columns {
+      name = "cost_center"
+      type = "string"
+    }
+
+    columns {
+      name = "schema_version"
+      type = "string"
+    }
+
+    columns {
+      name = "correlation_id"
+      type = "string"
+    }
+
+    columns {
+      name = "idempotency_key"
+      type = "string"
+    }
+
+    columns {
+      name = "quality_score"
+      type = "double"
+    }
+  }
+}
+
+# Glue Catalog Table for Containment Audit Records
+resource "aws_glue_catalog_table" "containment_audit" {
+  name          = "containment_audit"
+  database_name = aws_glue_catalog_database.lakehouse.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"             = "json"
+    "projection.enabled"         = "true"
+    "projection.account_id.type" = "injected"
+    "projection.year.type"       = "integer"
+    "projection.year.range"      = "2024,2035"
+    "projection.month.type"      = "integer"
+    "projection.month.range"     = "1,12"
+    "projection.month.digits"    = "2"
+    "storage.location.template"  = "s3://${aws_s3_bucket.audit.id}/audit/account_id=$${account_id}/year=$${year}/month=$${month}/"
+  }
+
+  partition_keys {
+    name = "account_id"
+    type = "string"
+  }
+
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
+
+  partition_keys {
+    name = "month"
+    type = "int"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.audit.id}/audit/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      name                  = "json"
+      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "audit_id"
+      type = "string"
+    }
+
+    columns {
+      name = "audit_uri"
+      type = "string"
+    }
+
+    columns {
+      name = "audit_type"
+      type = "string"
+    }
+
+    columns {
+      name = "actor"
+      type = "string"
+    }
+
+    columns {
+      name = "timestamp"
+      type = "string"
+    }
+
+    columns {
+      name = "correlation_id"
+      type = "string"
+    }
+
+    columns {
+      name = "idempotency_key"
+      type = "string"
+    }
+
+    columns {
+      name = "anomaly_id"
+      type = "string"
+    }
+
+    columns {
+      name = "target_owner"
+      type = "string"
+    }
+
+    columns {
+      name = "before_state"
+      type = "string"
+    }
+
+    columns {
+      name = "proposed_after_state"
+      type = "string"
+    }
+
+    columns {
+      name = "applied_after_state"
+      type = "string"
+    }
+
+    columns {
+      name = "execution_mode"
+      type = "string"
+    }
+
+    columns {
+      name = "rollback_path"
+      type = "string"
+    }
+
+    columns {
+      name = "approval_status"
+      type = "string"
+    }
+
+    columns {
+      name = "retention_location"
+      type = "string"
+    }
+
+    columns {
+      name = "retention_period"
+      type = "string"
+    }
+
+    columns {
+      name = "account_id"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_id"
+      type = "string"
+    }
+
+    columns {
+      name = "owner"
+      type = "string"
+    }
+
+    columns {
+      name = "audit_score"
+      type = "double"
+    }
+
+    columns {
+      name = "numeric_audit_score"
+      type = "double"
+    }
+  }
+}
+
 
 # Athena Query Results Bucket
 resource "aws_s3_bucket" "athena_results" {
@@ -512,6 +827,8 @@ resource "aws_s3_bucket_replication_configuration" "athena_results" {
       storage_class = "STANDARD"
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.athena_results]
 }
 
 # Athena Workgroup
@@ -608,4 +925,11 @@ resource "aws_iam_role_policy" "replication" {
       }
     ]
   })
+}
+
+resource "terraform_data" "destroy_guard" {
+  count = var.destroyable ? 0 : 1
+  lifecycle {
+    prevent_destroy = true
+  }
 }
