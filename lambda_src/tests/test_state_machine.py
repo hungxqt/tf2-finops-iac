@@ -55,7 +55,9 @@ def check_asl_file(asl_path, is_template=True):
         "FailClosed",
         "SendFailClosedAlert",
         "SendCURDelayAlert",
-        "WriteCURDelayAudit"
+        "WriteCURDelayAudit",
+        "IncrementCERetry",
+        "CERetryExceeded"
     ]
     for s in required_states:
         assert s in states, f"Required state '{s}' missing from state machine in {asl_path}"
@@ -79,7 +81,10 @@ def check_asl_file(asl_path, is_template=True):
     assert found_limit, "CUR retry limit of 4 not enforced in Choice state"
     
     assert "WaitForCURExport" in states
-    assert states["WaitForCURExport"]["Seconds"] == 3600, "CUR retry interval must be 1 hour (3600 seconds)"
+    if is_template:
+        assert states["WaitForCURExport"]["Seconds"] == 6, "Template WaitForCURExport Seconds should be replaced with 6"
+    else:
+        assert states["WaitForCURExport"]["Seconds"] == 3600, "CUR retry interval must be 1 hour (3600 seconds)"
     
     # Assert terminal fail-closed AI handling includes audit + engineering alert
     assert "SetCURDelayExceededError" in states

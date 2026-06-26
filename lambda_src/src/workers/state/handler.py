@@ -47,6 +47,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         
         cur_retry = payload.get("cur_retry") or event_data.get("cur_retry") or {"count": 0, "max": 4}
         ai_retry = payload.get("ai_retry") or event_data.get("ai_retry") or {"count": 0, "max": 6}
+        ce_retry = payload.get("ce_retry") or event_data.get("ce_retry") or {"count": 0, "max": 3}
         
         details = {
             "run_id": run_id,
@@ -58,6 +59,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "ai_contract_version": ai_contract_version,
             "cur_retry": cur_retry,
             "ai_retry": ai_retry,
+            "ce_retry": ce_retry,
             "force_dry_run": False,
             "account_id": event_data.get("account_id", "")
         }

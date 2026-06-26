@@ -297,7 +297,7 @@
         {
           "Variable": "$.ingestion.status",
           "StringEquals": "CE_THROTTLED",
-          "Next": "WaitForCostExplorer"
+          "Next": "IncrementCERetry"
         },
         {
           "Variable": "$.ingestion.status",
@@ -326,6 +326,26 @@
         }
       ],
       "Default": "WaitForCURExport"
+    },
+    "IncrementCERetry": {
+      "Type": "Pass",
+      "Parameters": {
+        "count.$": "States.MathAdd($.ce_retry.count, 1)",
+        "max.$": "$.ce_retry.max"
+      },
+      "ResultPath": "$.ce_retry",
+      "Next": "CERetryExceeded"
+    },
+    "CERetryExceeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ce_retry.count",
+          "NumericGreaterThanEquals": 3,
+          "Next": "SetDefaultIngestionError"
+        }
+      ],
+      "Default": "WaitForCostExplorer"
     },
     "SetCURDelayExceededError": {
       "Type": "Pass",
@@ -371,7 +391,7 @@
     },
     "WaitForCURExport": {
       "Type": "Wait",
-      "Seconds": 3600,
+      "Seconds": ${cur_retry_interval_seconds},
       "Next": "IngestCostData"
     },
     "WaitForCostExplorer": {
