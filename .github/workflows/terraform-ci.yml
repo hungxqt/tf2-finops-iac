@@ -64,7 +64,7 @@ jobs:
 
       - name: Lambda unit tests
         working-directory: lambda_src
-        run: python -m pytest
+        run: python -m pytest --tb=long -v
 
       - name: Install TFLint
         uses: terraform-linters/setup-tflint@v4
