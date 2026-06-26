@@ -479,13 +479,10 @@ data "aws_iam_policy_document" "containment_worker" {
   }
 
   # Read external_id from Secrets Manager
-  dynamic "statement" {
-    for_each = var.ai_engine_secret_arn != "" ? [1] : []
-    content {
-      sid       = "SecretsManagerContainmentExternalId"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = ["arn:aws:secretsmanager:*:*:secret:finops/containment/*"]
-    }
+  statement {
+    sid       = "SecretsManagerContainmentExternalId"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:*:*:secret:finops/containment/*"]
   }
 
   dynamic "statement" {
