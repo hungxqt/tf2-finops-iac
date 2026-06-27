@@ -35,14 +35,7 @@ variable "request_image_uri" {
   }
 }
 
-variable "worker_image_uri" {
-  type        = string
-  description = "ECR image URI with immutable digest for the AI Worker Lambda function"
-  validation {
-    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.worker_image_uri))
-    error_message = "The worker_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
-  }
-}
+
 
 variable "replica_region" {
   type        = string
@@ -131,12 +124,6 @@ variable "traffic_metric_identifiers" {
   default     = []
 }
 
-variable "synthetic_fallback_enabled" {
-  type        = bool
-  description = "Flag to enable synthetic fallback logic if real AWS collection fails or environment variables are not set"
-  default     = true
-}
-
 variable "telemetry_member_account_ids" {
   type        = list(string)
   description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
@@ -166,5 +153,4 @@ variable "trusted_cost_puller_role_arns" {
   description = "The ARNs of trusted cost puller IAM roles allowed to assume the ingestion role"
   default     = []
 }
-
 

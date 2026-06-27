@@ -8,7 +8,7 @@ Triển khai `lambda_src/src/workers/cost_puller` thành worker thu thập dữ 
 - Thêm các lớp wrapper client AWS trong `finops_common` cho S3, Cost Explorer, CloudWatch, và STS với quyền tối thiểu.
 - Triển khai quá trình thu thập dữ liệu với tính năng phát hiện độ trễ của CUR (CUR freshness) và tự động chuyển hướng sang Cost Explorer nếu CUR trễ > 36 giờ.
 - Triển khai phương án dự phòng sử dụng cache S3 khi Cost Explorer bị throttling, trả về trạng thái `READY` với cờ `stale_cost_explorer = true`.
-- Tích hợp thu thập CloudWatch metrics dạng best-effort và thiết lập thứ tự ưu tiên dữ liệu traffic (ALB, CloudFront, API Gateway, và dự phòng Synthetic).
+- Tích hợp thu thập CloudWatch metrics dạng best-effort và định tuyến ngữ cảnh traffic hợp lệ theo contract. Khi thiếu traffic metrics, hệ thống giảm chất lượng telemetry thay vì tạo dữ liệu traffic dự phòng.
 - Sửa lỗi import thư viện boto3 trong quá trình giả định vai trò (assume role) liên tài khoản từ xa và tránh nuốt lỗi lập trình.
 - Mở rộng module IAM và các môi trường với tùy chọn triển khai vai trò thu thập số liệu liên tài khoản và danh sách vai trò tin cậy.
 - Khai báo và cấu hình các biến CUR và CE vào Terraform module `compute_lambda` và các môi trường sandbox/staging/prod.

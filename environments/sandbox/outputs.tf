@@ -123,54 +123,14 @@ output "request_lambda_alias_arn" {
   value       = module.ai_runtime_lambda.request_lambda_alias_arn
 }
 
-output "worker_lambda_function_name" {
-  description = "The name of the AI Worker Lambda function"
-  value       = module.ai_runtime_lambda.worker_lambda_function_name
-}
-
-output "worker_lambda_alias_arn" {
-  description = "The ARN of the AI Worker Lambda live alias"
-  value       = module.ai_runtime_lambda.worker_lambda_alias_arn
-}
-
 output "request_execution_role_arn" {
   description = "The ARN of the AI Request Lambda execution role"
   value       = module.ai_runtime_lambda.request_execution_role_arn
 }
 
-output "worker_execution_role_arn" {
-  description = "The ARN of the AI Worker Lambda execution role"
-  value       = module.ai_runtime_lambda.worker_execution_role_arn
-}
-
-output "worker_event_source_mapping_uuid" {
-  description = "The UUID of the SQS worker event source mapping"
-  value       = module.ai_runtime_lambda.worker_event_source_mapping_uuid
-}
-
 output "ai_runtime_log_group_names" {
   description = "List of CloudWatch log group names created by the runtime"
   value       = module.ai_runtime_lambda.ai_runtime_log_group_names
-}
-
-output "detection_queue_url" {
-  description = "The URL of the primary detection SQS queue"
-  value       = module.orchestration.detection_queue_url
-}
-
-output "detection_queue_arn" {
-  description = "The ARN of the primary detection SQS queue"
-  value       = module.orchestration.detection_queue_arn
-}
-
-output "detection_dlq_url" {
-  description = "The URL of the detection SQS DLQ"
-  value       = module.orchestration.detection_dlq_url
-}
-
-output "detection_dlq_arn" {
-  description = "The ARN of the detection SQS DLQ"
-  value       = module.orchestration.detection_dlq_arn
 }
 
 output "rollback_status_queue_url" {

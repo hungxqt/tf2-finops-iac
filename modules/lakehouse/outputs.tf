@@ -69,3 +69,28 @@ output "logging_bucket_name" {
   value       = aws_s3_bucket.logging.id
 }
 
+output "glue_database_arn" {
+  description = "The ARN of the Glue Catalog database"
+  value       = aws_glue_catalog_database.lakehouse.arn
+}
+
+output "cur_data_table_arn" {
+  description = "The ARN of the Glue Catalog table for curated cost data"
+  value       = aws_glue_catalog_table.cur_data.arn
+}
+
+output "athena_workgroup_arn" {
+  description = "The ARN of the Athena workgroup"
+  value       = aws_athena_workgroup.lakehouse.arn
+}
+
+output "athena_results_bucket_arn" {
+  description = "The ARN of the Athena query results S3 bucket"
+  value       = aws_s3_bucket.athena_results.arn
+}
+
+output "athena_results_bucket_name" {
+  description = "The name of the Athena query results S3 bucket"
+  value       = aws_s3_bucket.athena_results.id
+}
+

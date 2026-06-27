@@ -89,3 +89,27 @@ variable "trusted_cost_puller_role_arns" {
   description = "The ARNs of trusted cost puller IAM roles allowed to assume the ingestion role"
   default     = []
 }
+
+variable "athena_results_bucket_arn" {
+  type        = string
+  description = "The ARN of the Athena query results S3 bucket"
+  default     = ""
+}
+
+variable "athena_workgroup_arn" {
+  type        = string
+  description = "The ARN of the Athena workgroup"
+  default     = ""
+}
+
+variable "glue_database_arn" {
+  type        = string
+  description = "The ARN of the Glue Catalog database"
+  default     = ""
+}
+
+variable "cur_data_table_arn" {
+  type        = string
+  description = "The ARN of the Glue Catalog table for curated cost data"
+  default     = ""
+}

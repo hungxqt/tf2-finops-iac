@@ -175,23 +175,25 @@ Sau khi quÃ¡ trÃ¬nh deploy hoÃ n táº¥t, hÃ£y láº¥y cÃ¡c dá»¯ 
 terraform output
 ```
 
-* `private_alb_endpoint`: URL HTTPS cÆ¡ sá»Ÿ Ä‘á»ƒ truy cáº­p private ALB (qua Route 53 private DNS alias hoáº·c DNS name cá»§a internal ALB).
-* `private_alb_dns_name`: TÃªn miá»n DNS thÃ´ cá»§a internal ALB.
-* `private_alb_security_group_id`: ID security group cá»§a internal ALB.
-* `request_lambda_function_name`: TÃªn cá»§a hÃ m AI Engine Request Lambda (cháº¡y báº±ng container image, Ä‘Æ°á»£c gá»i qua target group cá»§a internal ALB trÃªn cá»•ng 443).
-* `worker_lambda_function_name`: TÃªn cá»§a hÃ m AI Engine Worker Lambda (cháº¡y báº±ng container image, xá»­ lÃ½ viá»‡c nháº­p báº¥t thÆ°á»ng báº¥t Ä‘á»“ng bá»™).
-* `ecr_repository_url`: URL cá»§a kho lÆ°u trá»¯ ECR Ä‘á»ƒ push container image cho Lambda.
-* `state_machine_arn`: ARN cá»§a Orchestrator State Machine.
-* `dynamodb_table_names`: CÃ¡c tÃªn báº£ng DynamoDB phá»¥c vá»¥ cho viá»‡c lÆ°u trá»¯ tráº¡ng thÃ¡i cháº¡y, káº¿t quáº£, audit, vÃ  rollback cache.
+* `private_alb_endpoint`: URL HTTPS cơ sở để truy cập private ALB (qua Route 53 private DNS alias hoặc DNS name của internal ALB).
+* `private_alb_dns_name`: Tên miền DNS thô của internal ALB.
+* `private_alb_security_group_id`: ID security group của internal ALB.
+* `request_lambda_function_name`: Tên của hàm AI Engine Request Lambda (chạy bằng container image, được gọi qua target group của internal ALB trên cổng 443).
+* `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda (chạy bằng container image, xử lý việc nhập bất thường bất đồng bộ).
+* `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
+* `state_machine_arn`: ARN của Orchestrator State Machine.
+* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, và rollback cache.
+* `synchronous_ai_endpoints`: Các endpoint `/v1/detect`, `/v1/decide`, và `/v1/verify` là các hoạt động đồng bộ được gọi qua `VpcAlbCallerLambda` và Route 53 private DNS alias. `/v1/status/{id}` chỉ dành cho remediation audit/status, không dùng cho việc polling phát hiện. Không có hàng đợi SQS detect hoặc vòng lặp polling trong luồng mặc định; SQS được giới hạn cho việc thử lại cảnh báo và thông báo hoàn thành audit `finops-watch-rollback`.
 
-### BÆ°á»›c 3.1: Triá»ƒn khai Dashboard & BÃ n giao TÃ i nguyÃªn (Asset Handoff)
-Sau khi mÃ£ nguá»“n Terraform Ä‘Æ°á»£c Ã¡p dá»¥ng (apply), háº¡ táº§ng Dashboard Ä‘Ã£ sáºµn sÃ ng. Quy trÃ¬nh bÃ n giao tuÃ¢n theo cÃ¡c quy táº¯c sau:
-1. **Vai trÃ² cá»§a Terraform**: Terraform khá»Ÿi táº¡o cÃ¡c tÃ i nguyÃªn AWS ná»n táº£ng (S3 buckets, CloudFront distribution vá»›i VPC Origin vÃ  liÃªn káº¿t Lambda@Edge, Cognito Identity & User Pools, cÃ¡c Athena named queries vÃ  vai trÃ² IAM).
-2. **Cá»•ng XÃ¡c thá»±c (Authenticated Front Door)**: Táº¥t cáº£ tÃ i nguyÃªn tÄ©nh vÃ  tá»‡p tÃ³m táº¯t JSON (dÆ°á»›i `/${dashboard_data_prefix}*`) Ä‘Æ°á»£c phá»¥c vá»¥ qua CloudFront vÃ  báº£o vá»‡ bá»Ÿi hÃ m Lambda@Edge viewer-request sá»­ dá»¥ng xÃ¡c thá»±c Cognito PKCE.
-3. **Äá»‹nh tuyáº¿n API qua VPC Origin**: CÃ¡c yÃªu cáº§u gá»­i tá»›i `/v1/*` Ä‘Æ°á»£c kÃ½ báº±ng AWS SigV4 thÃ´ng qua Lambda@Edge origin-request trÆ°á»›c khi chuyá»ƒn tiáº¿p tá»›i private internal ALB, Ä‘á»“ng thá»i loáº¡i bá» cÃ¡c cookie Cognito.
-4. **Asset Upload**: Các static frontend assets của UI shell phải được build và upload độc lập/thủ công lên S3 bucket chứa static assets (được cấu hình trong output `dashboard_asset_bucket_name`). Terraform chỉ provision private bucket, CloudFront front door, Cognito access control, và object không chứa secret `dashboard_runtime_config.json`; Terraform không tự động publish file UI.
-5. **NhÃ³m Cognito (Cognito Groups)**: NgÆ°á»i dÃ¹ng cáº§n Ä‘Æ°á»£c thÃªm vÃ o cÃ¡c nhÃ³m Cognito tÆ°Æ¡ng á»©ng (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) Ä‘á»ƒ kiá»ƒm soÃ¡t quyá»n háº¡n.
-6. **Data Generation**: Cost-data writers phải publish các JSON summaries vào prefix đã cấu hình (ví dụ: `summaries/`) bên trong dashboard data S3 bucket (được cấu hình trong output `dashboard_data_bucket_name`).
+
+### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
+Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:
+1. **Vai trò của Terraform**: Terraform khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution với VPC Origin và liên kết Lambda@Edge, Cognito Identity & User Pools, các Athena named queries và vai trò IAM).
+2. **Cổng Xác thực (Authenticated Front Door)**: Tất cả tài nguyên tĩnh và tệp tóm tắt JSON (dưới `/${dashboard_data_prefix}*`) được phục vụ qua CloudFront và bảo vệ bởi hàm Lambda@Edge viewer-request sử dụng xác thực Cognito PKCE.
+3. **Định tuyến API qua VPC Origin**: Các yêu cầu gửi tới `/v1/*` được ký bằng AWS SigV4 thông qua Lambda@Edge origin-request trước khi chuyển tiếp tới private internal ALB, đồng thời loại bỏ các cookie Cognito.
+4. **Tải lên Tài nguyên Static (Asset Upload)**: Các tài nguyên static của frontend (ứng dụng giao diện UI) phải được tải lên riêng biệt vào S3 bucket chứa static assets (được cấu hình trong giá trị đầu ra `dashboard_asset_bucket_name`).
+5. **Nhóm Cognito (Cognito Groups)**: Người dùng cần được thêm vào các nhóm Cognito tương ứng (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) để kiểm soát quyền hạn.
+6. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi dữ liệu chi phí phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).
 
 
 ---
@@ -210,7 +212,7 @@ terraform -chdir=environments/prod validate
 
 # QuÃ©t phÃ¢n tÃ­ch báº£o máº­t tÄ©nh
 trivy config .
-checkov -d modules/orchestration --framework terraform
+checkov -d . --framework terraform
 ```
 
 ---
@@ -240,19 +242,20 @@ cd ../..
 
 Worker `cost_puller` Ä‘áº£m nháº­n viá»‡c thu tháº­p dá»¯ liá»‡u chi phÃ­ (billing) vÃ  hiá»‡u nÄƒng (utilization) thÃ´. NÃ³ hoáº¡t Ä‘á»™ng á»Ÿ cháº¿ Ä‘á»™ thu tháº­p há»—n há»£p (hybrid ingestion), Ä‘á»c cÃ¡c tá»‡p CUR tá»« S3 source bucket hoáº·c tá»± Ä‘á»™ng chuyá»ƒn sang Cost Explorer khi CUR bá»‹ trá»….
 
-### BÆ°á»›c 7.1: CÃ¡c tham sá»‘ cáº¥u hÃ¬nh
-HÃ nh vi thu tháº­p dá»¯ liá»‡u Ä‘Æ°á»£c kiá»ƒm soÃ¡t bá»Ÿi cÃ¡c biáº¿n Terraform Ä‘Æ°á»£c truyá»n vÃ o module `compute_lambda`:
-* `cur_source_bucket`: Bucket S3 nÆ¡i AWS CUR Ä‘Æ°á»£c lÆ°u trá»¯.
-* `cur_source_prefix`: ÄÆ°á»ng dáº«n prefix trong source bucket cho cÃ¡c tá»‡p CUR.
-* `cur_delay_threshold_hours`: NgÆ°á»¡ng thá»i gian trá»… (tÃ­nh báº±ng giá») trÆ°á»›c khi chuyá»ƒn sang cháº¿ Ä‘á»™ dá»± phÃ²ng CE (máº·c Ä‘á»‹nh: `36`).
-* `ce_lookback_window_days`: Sá»‘ ngÃ y lá»‹ch sá»­ CE cáº§n láº¥y khi cháº¡y dá»± phÃ²ng (máº·c Ä‘á»‹nh: `30`).
-* `traffic_metric_identifiers`: Äá»‹nh danh dÃ¹ng Ä‘á»ƒ truy váº¥n dá»¯ liá»‡u traffic váº­t lÃ½ (vÃ­ dá»¥: tÃªn ALB).
-* `synthetic_fallback_enabled`: Báº­t/táº¯t cháº¿ Ä‘á»™ tá»± Ä‘á»™ng táº¡o dá»¯ liá»‡u giáº£ láº­p cho local tests/simulations (máº·c Ä‘á»‹nh: `true`).
+### Bước 7.1: Các tham số cấu hình
+Hành vi thu thập dữ liệu được kiểm soát bởi các biến Terraform được truyền vào module `compute_lambda`:
+* `cur_source_bucket`: Bucket S3 nơi AWS CUR được lưu trữ.
+* `cur_source_prefix`: Đường dẫn prefix trong source bucket cho các tệp CUR.
+* `cur_delay_threshold_hours`: Ngưỡng thời gian trễ (tính bằng giờ) trước khi chuyển sang chế độ dự phòng CE (mặc định: `36`).
+* `ce_lookback_window_days`: Số ngày lịch sử CE cần lấy khi chạy dự phòng (mặc định: `30`).
+* `traffic_metric_identifiers`: Định danh dùng để truy vấn dữ liệu traffic vật lý (ví dụ: tên ALB).
 
-### BÆ°á»›c 7.2: XÃ¡c minh vÃ  Giáº£ láº­p
-NgÆ°á»i váº­n hÃ nh cÃ³ thá»ƒ xÃ¡c minh luá»“ng retry/wait vÃ  xá»­ lÃ½ lá»—i cá»§a State Machine thÃ´ng qua cÃ¡c hÃ nh Ä‘á»™ng giáº£ láº­p (simulation actions) trong event thá»±c thi:
-* **Giáº£ láº­p CUR bá»‹ trá»…**: Gá»­i `"action": "simulate-cur-delay"` Ä‘á»ƒ Ã©p tráº¡ng thÃ¡i trá»… CUR vÃ  kÃ­ch hoáº¡t luá»“ng dá»± phÃ²ng Cost Explorer.
-* **Giáº£ láº­p CE bá»‹ throttling**: Gá»­i `"action": "simulate-ce-throttled"` Ä‘á»ƒ kÃ­ch hoáº¡t lá»—i rate limit cho CE. Náº¿u cÃ³ dá»¯ liá»‡u cache trong destination bucket, há»‡ thá»‘ng sáº½ khÃ´i phá»¥c dá»¯ liá»‡u tá»« cache vÃ  Ä‘áº·t cá» cháº¥t lÆ°á»£ng `stale_cost_explorer = true`; náº¿u khÃ´ng sáº½ tráº£ vá» lá»—i `CE_THROTTLED`.
+Không còn cơ chế tự động tạo telemetry dự phòng. `cost_puller` yêu cầu cấu hình lakehouse bucket và CUR source bucket cho luồng thu thập thông thường. Nếu CUR bị trễ và Cost Explorer không trả về bản ghi, hoặc cache telemetry không có sẵn khi CE bị throttling, worker trả về `CUR_DELAY` hoặc `CE_THROTTLED` và workflow phải giữ chế độ dry-run/alert-only.
+
+### Bước 7.2: Xác minh và Giả lập
+Người vận hành có thể xác minh luồng retry/wait và xử lý lỗi của State Machine thông qua các hành động giả lập (simulation actions) trong event thực thi:
+* **Giả lập CUR bị trễ**: Gửi `"action": "simulate-cur-delay"` để ép trạng thái trễ CUR và kích hoạt luồng dự phòng Cost Explorer. Worker vẫn cần bản ghi Cost Explorer thật hoặc telemetry cache để tiếp tục.
+* **Giả lập CE bị throttling**: Gửi `"action": "simulate-ce-throttled"` để kích hoạt lỗi rate limit cho CE. Nếu có dữ liệu cache trong destination bucket, hệ thống sẽ khôi phục dữ liệu từ cache và đặt cờ chất lượng `stale_cost_explorer = true`; nếu không sẽ trả về lỗi `CE_THROTTLED`.
 
 XÃ¡c minh cÃ¡c tá»‡p JSON gzipped Ä‘Æ°á»£c táº¡o ra báº±ng cÃ¡ch kiá»ƒm tra cÃ¡c Ä‘Æ°á»ng dáº«n prefix S3:
 * Cost Telemetry chÃ­nh: `s3://<lakehouse-bucket>/cur/account_id=<id>/year=YYYY/month=MM/day=DD/<run-id>_raw.json.gz`
@@ -260,6 +263,154 @@ XÃ¡c minh cÃ¡c tá»‡p JSON gzipped Ä‘Æ°á»£c táº¡o ra báº±ng
 
 ---
 
-## 8. Báº£o trÃ¬ tÃ i liá»‡u hÆ°á»›ng dáº«n
-TÃ i liá»‡u hÆ°á»›ng dáº«n dÃ nh cho nhÃ  phÃ¡t triá»ƒn nÃ y pháº£i luÃ´n Ä‘Æ°á»£c cáº­p nháº­t. CÃ¡c agent vÃ  ngÆ°á»i Ä‘Ã³ng gÃ³p trong tÆ°Æ¡ng lai pháº£i cáº­p nháº­t cáº£ `docs/GUIDES.md` vÃ  `docs/GUIDES_vi.md` trong cÃ¹ng má»™t thay Ä‘á»•i báº¥t ká»³ khi nÃ o cÃ³ quy trÃ¬nh lÃ m viá»‡c cá»§a developer/operator, chuá»—i lá»‡nh, quy trÃ¬nh xÃ¡c thá»±c (validation path), script, CI job, bÆ°á»›c triá»ƒn khai (deployment step) hoáº·c thá»§ tá»¥c bÃ n giao (handoff procedure) má»›i Ä‘Æ°á»£c thÃªm vÃ o hoáº·c thay Ä‘á»•i.
+## 8. Containment Worker — Phát triển cục bộ & Kiểm thử
 
+`containment_worker` là một Lambda production-grade thực thi các containment action trên
+resource của member account. Vì nó thực hiện các lời gọi AWS thật (EC2, RDS, SageMaker, STS, S3,
+DynamoDB), toàn bộ test suite dùng **moto** để mock tầng AWS — không cần AWS credentials hay
+resource thật để chạy local.
+
+### 8.1 Cài đặt Dev Dependencies
+
+```powershell
+cd lambda_src
+pip install -r requirements-dev.txt
+```
+
+Lệnh này cài `moto[ec2,rds,s3,dynamodb,sts]>=5.0.0` cùng với `pytest` và `boto3`.
+
+### 8.2 Chạy toàn bộ Tests
+
+```powershell
+# Từ thư mục gốc của repo
+Push-Location lambda_src; python -m pytest; Pop-Location
+```
+
+### 8.3 Chạy chỉ Tests của Containment Worker
+
+```powershell
+Push-Location lambda_src
+# Toàn bộ containment suite
+python -m pytest tests/test_containment_worker.py -v
+
+# Chỉ hard-boundary tests (không cần moto — chạy nhanh)
+python -m pytest tests/test_containment_worker.py -v -k "boundary"
+
+# Chỉ audit/S3/DynamoDB tests (yêu cầu moto)
+python -m pytest tests/test_containment_worker.py -v -k "audit"
+
+# Chỉ action-dispatch tests (yêu cầu moto)
+python -m pytest tests/test_containment_worker.py -v -k "actions"
+Pop-Location
+```
+
+### 8.4 Hard Boundaries cần kiểm tra
+
+| Kịch bản | Input | `execution_mode_applied` kỳ vọng | `status` kỳ vọng |
+|---|---|---|---|
+| Môi trường prod + apply | `environment=prod`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Low confidence | `data_confidence=LOW`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Approval denied | `approval_status=denied` | `denied` | `denied` |
+| Sandbox apply (đã duyệt) | `environment=sandbox`, `approval_status=approved` | `apply` | `completed` |
+| Prod tag (được phép) | `environment=prod`, `execution_mode=tag` | `tag` | `completed` |
+
+### 8.5 Xác minh S3 và DynamoDB Audit sau khi chạy thật (Sandbox)
+
+Sau khi invoke Lambda trên môi trường sandbox bằng test events từ
+`containment-lambda/test-events/`:
+
+```bash
+aws lambda invoke \
+  --function-name tf2-finops-sandbox-containment_worker \
+  --payload file://containment-lambda/test-events/01_dry_run_sandbox.json \
+  --cli-binary-format raw-in-base64-out \
+  output.json && cat output.json
+```
+
+**S3 Audit** — phải có hai file (pre-action + post-action):
+```
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}.json
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}_post.json
+```
+
+**DynamoDB Dashboard Cache** — một item cho mỗi anomaly:
+```
+Table : finops-dashboard-cache-{env}
+Key   : anomaly_id = "<anomaly_id từ event>"
+Fields: status, execution_mode_applied, audit_record_s3_uri
+```
+
+**DynamoDB Rollback Cache** — được cache trước khi thực thi action:
+```
+Table : finops-rollback-cache
+Key   : anomaly_id = "<anomaly_id từ event>"
+Fields: boto3_equivalent, ttl_epoch (TTL 90 ngày)
+```
+
+> **Lưu ý (kịch bản Denied):** Khi `approval_status=denied` Lambda trả về ngay lập tức.
+> Không có gì được ghi vào S3 hay DynamoDB — đây là hành vi đúng và mong đợi.
+
+---
+
+## 9. Bảo trì tài liệu hướng dẫn
+Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.
+
+
+---
+
+## 10. Xác Minh Quy Trình Step Functions
+
+Bộ kiểm tra `test_step_function_payload_contract.py` cung cấp **lớp xác minh cục bộ, không cần AWS** chứng minh:
+
+- ASL có đủ mọi state yêu cầu (kiểm tra 44+ state).
+- Không có state polling phát hiện bất thường async lỗi thời, hàng đợi detection, hoặc tham chiếu SQS detection.
+- Mọi state Task/Pass đều có thể giải quyết các tham chiếu JSONPath của mình dựa trên dữ liệu fixture thực tế từ đầu ra của state trước.
+- Hợp đồng telemetry được tôn trọng (mặc định S3_POINTER, CE fallback, cổng chất lượng).
+- Hình dạng lời gọi /v1/detect, /v1/decide, /v1/verify khớp với hợp đồng AI API đang hoạt động.
+- Các chế độ containment prod+destructive bị từ chối; các đường dẫn bắt buộc dry-run bị từ chối.
+- Chỉ có hàng đợi SQS `rollback_status_queue` tồn tại (không có hàng đợi detection).
+- Chuỗi audit fail-closed và CUR-delay-exceeded mang đầy đủ các trường ngữ cảnh yêu cầu.
+
+### 10.1 Chạy Chỉ Kiểm Tra Payload Contract
+
+```powershell
+Push-Location lambda_src
+python -m pytest tests/test_step_function_payload_contract.py -v
+Pop-Location
+```
+
+### 10.2 Chạy Tất Cả Kiểm Tra Xác Minh Step Functions
+
+```powershell
+Push-Location lambda_src
+python -m pytest -q tests/test_step_function_payload_contract.py tests/test_state_machine.py tests/test_step_function_lambda_coverage.py tests/test_vpc_alb_caller.py
+Pop-Location
+```
+
+### 10.3 Chạy Toàn Bộ Suite
+
+```powershell
+Push-Location lambda_src
+python -m pytest
+Pop-Location
+```
+
+Kết quả mong đợi: **tất cả kiểm tra đều vượt qua, không có lỗi**.
+
+### 10.4 Tài Liệu Tham Khảo Fixture
+
+Các fixture xác định có trong [`lambda_src/tests/fixtures/step_function_payloads.py`](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/fixtures/step_function_payloads.py).
+Mỗi fixture là một dict Python thuần túy đại diện cho ngữ cảnh thực thi Step Functions (`$`) tại một ranh giới quy trình cụ thể.
+Thêm một state mới hoặc thay đổi Parameters/ResultPath của một state hiện có yêu cầu cập nhật fixture tương ứng và thêm/cập nhật bài kiểm tra liên quan.
+
+### 10.5 Bộ Giải Quyết JSONPath Nhẹ
+
+Helper `_resolve_path(ctx, path)` trong file kiểm tra giải quyết:
+
+| Biểu Thức | Ý Nghĩa |
+|-----------|---------|
+| `"$"` | Toàn bộ dict context |
+| `"$.a.b.c"` | Duyệt key lồng nhau |
+| `"$.anomalies_list[0].anomaly_id"` | Chỉ số mảng 0, sau đó key |
+
+Điều này đủ cho tất cả `Parameters` (JSONPath `key.$`) và biểu thức biến `Choice` được sử dụng bởi state machine này, không cần runtime ASL đầy đủ.

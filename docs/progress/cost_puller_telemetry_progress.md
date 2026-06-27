@@ -8,7 +8,7 @@ Implement `lambda_src/src/workers/cost_puller` as the raw telemetry acquisition 
 - Added AWS client wrappers in `finops_common` for least-privilege S3, Cost Explorer, CloudWatch, and STS.
 - Implemented telemetry acquisition with CUR freshness detection and fallback to Cost Explorer daily costs when CUR is delayed > 36 hours.
 - Implemented fallback to cached S3 telemetry when Cost Explorer is throttled, returning `READY` with `stale_cost_explorer = true` flag.
-- Integrated best-effort CloudWatch metrics enrichment and priority traffic context routing (ALB, CloudFront, API Gateway, and Synthetic fallback).
+- Integrated best-effort CloudWatch metrics enrichment and contract-valid traffic context routing. Missing traffic metrics now lower telemetry quality instead of generating fallback traffic data.
 - Fixed boto3 import issue in remote session role assumption and avoided swallowing programming errors.
 - Extended IAM module and environments with optional deployable cross-account member telemetry ingestion role and trusted roles.
 - Wired CUR and CE configuration variables into the `compute_lambda` Terraform module and environments.

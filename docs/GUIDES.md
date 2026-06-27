@@ -183,6 +183,7 @@ terraform output
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
 * `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
+* `synchronous_ai_endpoints`: The endpoints `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous operations called via `VpcAlbCallerLambda` and Route 53 private DNS alias. `/v1/status/{id}` is for remediation audit/status only, not for detection polling. There is no detection SQS or polling loop in the default path; SQS is restricted to alert retry and `finops-watch-rollback` audit completion notifications.
 
 
 ### Step 3.1: Dashboard Deployment & Asset Handoff
@@ -211,7 +212,7 @@ terraform -chdir=environments/prod validate
 
 # Verify static security analysis
 trivy config .
-checkov -d modules/orchestration --framework terraform
+checkov -d . --framework terraform
 ```
 
 ---
@@ -248,11 +249,12 @@ The ingestion behavior is controlled by these Terraform variables passed to the 
 * `cur_delay_threshold_hours`: Delay threshold in hours before switching to CE fallback (default: `36`).
 * `ce_lookback_window_days`: Days of CE history retrieved during fallback (default: `30`).
 * `traffic_metric_identifiers`: Identifiers for querying physical traffic metrics (e.g., ALB names).
-* `synthetic_fallback_enabled`: Controls whether local tests/simulations fall back to generated data (default: `true`).
+
+There is no generated telemetry fallback. `cost_puller` requires a configured lakehouse bucket and CUR source bucket for normal ingestion. If CUR is delayed and Cost Explorer returns no records, or if cached telemetry is unavailable during CE throttling, the worker returns `CUR_DELAY` or `CE_THROTTLED` and the workflow must remain dry-run/alert-only.
 
 ### Step 7.2: Verification and Simulation
 Operators can verify the retry/wait and error-handling state machine branches using simulation actions in the execution event:
-* **Simulate CUR Delay**: Send `"action": "simulate-cur-delay"` to force CUR delayed status and trigger the Cost Explorer fallback path.
+* **Simulate CUR Delay**: Send `"action": "simulate-cur-delay"` to force CUR delayed status and trigger the Cost Explorer fallback path. The worker still requires real Cost Explorer records or cached telemetry to continue.
 * **Simulate CE Throttling**: Send `"action": "simulate-ce-throttled"` to throttle CE requests. If cached telemetry exists in the destination bucket, it will recover telemetry and set the `stale_cost_explorer` quality flag; otherwise, it returns `CE_THROTTLED`.
 
 Verify the gzipped JSON raw envelopes outputted by checking S3 key prefixes:
@@ -261,8 +263,153 @@ Verify the gzipped JSON raw envelopes outputted by checking S3 key prefixes:
 
 ---
 
-## 8. Guide Maintenance
+## 8. Containment Worker — Local Development & Testing
+
+The `containment_worker` is a production-grade Lambda that executes containment actions against
+member account resources. Because it makes real AWS API calls (EC2, RDS, SageMaker, STS, S3,
+DynamoDB), all tests use **moto** to mock the AWS layer — no real AWS credentials or resources
+are required to run the suite locally.
+
+### 8.1 Install Dev Dependencies
+
+```powershell
+cd lambda_src
+pip install -r requirements-dev.txt
+```
+
+This installs `moto[ec2,rds,s3,dynamodb,sts]>=5.0.0` alongside `pytest` and `boto3`.
+
+### 8.2 Run All Tests
+
+```powershell
+# From repo root
+Push-Location lambda_src; python -m pytest; Pop-Location
+```
+
+### 8.3 Run Only Containment Worker Tests
+
+```powershell
+Push-Location lambda_src
+# Full containment suite
+python -m pytest tests/test_containment_worker.py -v
+
+# Only hard-boundary tests (no moto needed — fast)
+python -m pytest tests/test_containment_worker.py -v -k "boundary"
+
+# Only audit/S3/DynamoDB tests (requires moto)
+python -m pytest tests/test_containment_worker.py -v -k "audit"
+
+# Only action-dispatch tests (requires moto)
+python -m pytest tests/test_containment_worker.py -v -k "actions"
+Pop-Location
+```
+
+### 8.4 Key Hard Boundaries — What to Verify
+
+| Scenario | Input | Expected `execution_mode_applied` | Expected `status` |
+|---|---|---|---|
+| Prod environment + apply | `environment=prod`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Low confidence | `data_confidence=LOW`, `execution_mode=apply` | `dry-run` | `dry-run` |
+| Approval denied | `approval_status=denied` | `denied` | `denied` |
+| Sandbox apply (approved) | `environment=sandbox`, `approval_status=approved` | `apply` | `completed` |
+| Prod tag (allowed) | `environment=prod`, `execution_mode=tag` | `tag` | `completed` |
+
+### 8.5 Verify S3 and DynamoDB Audit After a Real Run (Sandbox)
+
+After invoking the Lambda against a live sandbox environment using test events from
+`containment-lambda/test-events/`:
+
+```bash
+aws lambda invoke \
+  --function-name tf2-finops-sandbox-containment_worker \
+  --payload file://containment-lambda/test-events/01_dry_run_sandbox.json \
+  --cli-binary-format raw-in-base64-out \
+  output.json && cat output.json
+```
+
+**S3 Audit** — two files must appear (pre-action + post-action):
+```
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}.json
+s3://company-cdo-{account_id}-telemetry/audit/year=YYYY/month=MM/{audit_id}_post.json
+```
+
+**DynamoDB Dashboard Cache** — one item per anomaly:
+```
+Table : finops-dashboard-cache-{env}
+Key   : anomaly_id = "<anomaly_id from event>"
+Fields: status, execution_mode_applied, audit_record_s3_uri
+```
+
+**DynamoDB Rollback Cache** — cached before action execution:
+```
+Table : finops-rollback-cache
+Key   : anomaly_id = "<anomaly_id from event>"
+Fields: boto3_equivalent, ttl_epoch (90-day TTL)
+```
+
+> **Note (Denied scenario):** When `approval_status=denied` the Lambda returns immediately.
+> Nothing is written to S3 or DynamoDB — this is the expected behavior.
+
+---
+
+## 9. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
 
+---
 
+## 10. Step Functions Workflow Verification
 
+The `test_step_function_payload_contract.py` suite provides a **repo-local, no-AWS verification layer** that proves:
+
+- The ASL has every required state (44+ states checked).
+- No stale async-detection polling states, detection queues, or detection SQS references exist.
+- Every Task/Pass state can resolve its JSONPath references against real fixture data from the preceding state's output.
+- The telemetry contract is honoured (S3_POINTER default, CE fallback, quality gates).
+- The /v1/detect, /v1/decide, /v1/verify call shapes match the active AI API contract.
+- Prod+destructive containment modes are denied; dry-run forced paths are denied.
+- Only `rollback_status_queue` SQS queue exists (no detection queue).
+- Fail-closed and CUR-delay-exceeded audit chains carry all required context fields.
+
+### 10.1 Run Payload Contract Tests Only
+
+```powershell
+Push-Location lambda_src
+python -m pytest tests/test_step_function_payload_contract.py -v
+Pop-Location
+```
+
+### 10.2 Run All Step Functions Verification Tests
+
+```powershell
+Push-Location lambda_src
+python -m pytest -q tests/test_step_function_payload_contract.py tests/test_state_machine.py tests/test_step_function_lambda_coverage.py tests/test_vpc_alb_caller.py
+Pop-Location
+```
+
+### 10.3 Run the Full Suite
+
+```powershell
+Push-Location lambda_src
+python -m pytest
+Pop-Location
+```
+
+Expected result: **all tests pass, zero failures**.
+
+### 10.4 Fixture Reference
+
+Deterministic fixtures are in [`lambda_src/tests/fixtures/step_function_payloads.py`](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/fixtures/step_function_payloads.py).
+Each fixture is a plain Python dict representing the Step Functions execution context (`$`) at a specific workflow boundary.
+Adding a new state or changing an existing state's Parameters/ResultPath requires updating the matching fixture and adding/updating the relevant test.
+
+### 10.5 Lightweight JSONPath Resolver
+
+The `_resolve_path(ctx, path)` helper in the test file resolves:
+
+| Expression | Meaning |
+|-----------|---------|
+| `"$"` | Entire context dict |
+| `"$.a.b.c"` | Nested key traversal |
+| `"$.anomalies_list[0].anomaly_id"` | Array index 0, then key |
+
+This is sufficient for all `Parameters` (JSONPath `key.$`) and `Choice` variable expressions used by this state machine, without a full ASL runtime.

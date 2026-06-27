@@ -124,10 +124,27 @@ variable "traffic_metric_identifiers" {
   default     = []
 }
 
-variable "synthetic_fallback_enabled" {
-  type        = bool
-  description = "Flag to enable synthetic fallback logic if real AWS collection fails or environment variables are not set"
-  default     = true
+variable "athena_workgroup_name" {
+  type        = string
+  description = "The name of the Athena workgroup"
+  default     = ""
 }
 
+variable "glue_database_name" {
+  type        = string
+  description = "The name of the Glue Catalog database"
+  default     = ""
+}
+
+variable "cur_data_table_name" {
+  type        = string
+  description = "The name of the Glue Catalog table for curated cost data"
+  default     = ""
+}
+
+variable "athena_results_bucket_name" {
+  type        = string
+  description = "The name of the Athena query results S3 bucket"
+  default     = ""
+}
 

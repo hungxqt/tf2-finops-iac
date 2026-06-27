@@ -33,12 +33,12 @@ CE_SERVICE_TO_CUR_CODE = {
 def get_clients() -> Tuple[Any, Any, Any, Any]:
     global s3_client, ce_client, cw_client, sts_client
     bucket_configured = os.environ.get("LAKEHOUSE_BUCKET_NAME") is not None
-    
+
     local_s3 = s3_client or (finops_common.RealS3() if bucket_configured else None)
     local_ce = ce_client or (finops_common.RealCostExplorer() if bucket_configured else None)
     local_cw = cw_client or (finops_common.RealCloudWatch() if bucket_configured else None)
     local_sts = sts_client or (finops_common.RealSTS() if bucket_configured else None)
-    
+
     return local_s3, local_ce, local_cw, local_sts
 
 def validate_bucket_and_account(account_id: str, bucket_name: str) -> None:
@@ -105,51 +105,54 @@ def compute_usage_density(amount: float, unit: str) -> float:
 def query_cw_utilization(cw_client_inst, resource_ids: list, exec_time: datetime) -> Tuple[list, bool]:
     if not cw_client_inst or not resource_ids:
         return [], True
-    try:
-        # Dummy call to ensure connection / interface works
-        cw_client_inst.get_metric_data(
-            MetricDataQueries=[
-                {
-                    "Id": "dummy",
-                    "MetricStat": {
-                        "Metric": {
-                            "Namespace": "AWS/EC2",
-                            "MetricName": "CPUUtilization"
+
+    metrics = []
+    missing = False
+    for idx, rid in enumerate(resource_ids):
+        if not rid:
+            continue
+        try:
+            response = cw_client_inst.get_metric_data(
+                MetricDataQueries=[
+                    {
+                        "Id": f"cpu{idx}",
+                        "MetricStat": {
+                            "Metric": {
+                                "Namespace": "AWS/EC2",
+                                "MetricName": "CPUUtilization",
+                                "Dimensions": [
+                                    {"Name": "InstanceId", "Value": rid}
+                                ],
+                            },
+                            "Period": 3600,
+                            "Stat": "Average",
                         },
-                        "Period": 3600,
-                        "Stat": "Average"
                     }
-                }
-            ],
-            StartTime=exec_time - timedelta(days=1),
-            EndTime=exec_time
-        )
-        
-        metrics = []
-        for rid in resource_ids:
-            if not rid:
+                ],
+                StartTime=exec_time - timedelta(days=1),
+                EndTime=exec_time,
+            )
+            values = []
+            for result in response.get("MetricDataResults", []):
+                values.extend(result.get("Values", []))
+            if not values:
+                missing = True
                 continue
-            cpu_hourly = [10.0 + (i % 5) for i in range(24)]
             metrics.append({
                 "resource_id": rid,
-                "cpu_percent": sum(cpu_hourly) / 24.0,
-                "cpu_utilization_hourly": cpu_hourly,
-                "network_in_bytes": 1000000.0,
-                "network_out_bytes": 2000000.0,
-                "disk_io_ops": 150.0,
-                "database_connections": 10 if "rds" in rid.lower() else None,
-                "gpu_utilization": 20.0 if "sagemaker" in rid.lower() else None
+                "cpu_percent": sum(values) / len(values),
+                "cpu_utilization_hourly": values,
             })
-        return metrics, False
-    except Exception as e:
-        logger.warning("CloudWatch metric retrieval failed/unsupported for resources: %s", e)
-        return [], True
+        except Exception as e:
+            logger.warning("CloudWatch metric retrieval failed/unsupported for resource %s: %s", rid, e)
+            missing = True
+    return metrics, missing or len(metrics) == 0
 
-def query_traffic_context(cw_client_inst, exec_time: datetime) -> Tuple[float, str]:
+def query_traffic_context(cw_client_inst, exec_time: datetime) -> Tuple[float, str, bool]:
     if not cw_client_inst:
-        return 15000.0, "Synthetic"
+        return 0.0, "ALB", True
     try:
-        cw_client_inst.get_metric_data(
+        response = cw_client_inst.get_metric_data(
             MetricDataQueries=[
                 {
                     "Id": "alb",
@@ -166,9 +169,15 @@ def query_traffic_context(cw_client_inst, exec_time: datetime) -> Tuple[float, s
             StartTime=exec_time - timedelta(days=1),
             EndTime=exec_time
         )
-        return 25000.0, "ALB"
-    except Exception:
-        return 15000.0, "Synthetic"
+        values = []
+        for result in response.get("MetricDataResults", []):
+            values.extend(result.get("Values", []))
+        if not values:
+            return 0.0, "ALB", True
+        return float(sum(values)), "ALB", False
+    except Exception as e:
+        logger.warning("CloudWatch traffic metric retrieval failed: %s", e)
+        return 0.0, "ALB", True
 
 def get_cross_account_session(sts_client_inst, account_id: str, current_account_id: str) -> Optional[Any]:
     if not sts_client_inst or account_id == current_account_id:
@@ -184,7 +193,8 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
         return boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
             aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"]
+            aws_session_token=creds["SessionToken"],
+            region_name=os.environ.get("AWS_REGION", "ap-southeast-1"),
         )
     except Exception as e:
         if isinstance(e, (NameError, TypeError, ValueError, KeyError, AttributeError, ImportError, IndexError, SyntaxError)):
@@ -194,7 +204,7 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
 
 def handle_request(event_data: dict, context: Any) -> dict:
     logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
-    
+
     try:
         event = finops_common.Event.from_dict(event_data)
         finops_common.validate_event(event)
@@ -207,17 +217,18 @@ def handle_request(event_data: dict, context: Any) -> dict:
     except Exception as e:
         logger.error("Invalid execution date: %s", e)
         raise e
-        
+
     exec_date_str = exec_time.strftime("%Y-%m-%d")
-    
+
     # Environment configs
-    telemetry_bucket = os.environ.get("LAKEHOUSE_BUCKET_NAME") or "tf2-finops-lakehouse-bucket"
+    telemetry_bucket = os.environ.get("LAKEHOUSE_BUCKET_NAME")
     cur_source_bucket = os.environ.get("CUR_SOURCE_BUCKET") or ""
     cur_source_prefix = os.environ.get("CUR_SOURCE_PREFIX") or ""
     cur_delay_threshold = int(os.environ.get("CUR_DELAY_THRESHOLD_HOURS") or 36)
     ce_lookback_window = int(os.environ.get("CE_LOOKBACK_WINDOW_DAYS") or 30)
-    synthetic_fallback_enabled = os.environ.get("SYNTHETIC_FALLBACK_ENABLED", "true").lower() == "true"
-    
+    if not telemetry_bucket:
+        raise finops_common.ConfigMissingError("LAKEHOUSE_BUCKET_NAME is required for cost telemetry writes")
+
     # Bucket & Account Security validations
     try:
         validate_bucket_and_account(event.account_id, telemetry_bucket)
@@ -226,12 +237,14 @@ def handle_request(event_data: dict, context: Any) -> dict:
     except finops_common.UnsafeActionError as e:
         logger.error("Security validation failed: %s", e)
         raise e
-        
+
     action = event.action.lower() if event.action else ""
-    
+    if not cur_source_bucket and action not in {"simulate-cur-delay", "simulate-cur-delay-no-fallback"}:
+        raise finops_common.ConfigMissingError("CUR_SOURCE_BUCKET is required for CUR manifest discovery")
+
     # Get Clients
     local_s3, local_ce, local_cw, local_sts = get_clients()
-    
+
     # Check current account identity if real STS client is available
     current_account_id = event.account_id
     if local_sts:
@@ -239,7 +252,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             current_account_id = local_sts.get_caller_identity()["AccountId"]
         except Exception:
             pass
-            
+
     # Handle cross account role assumption if target account_id differs
     remote_session = get_cross_account_session(local_sts, event.account_id, current_account_id)
     if remote_session:
@@ -247,11 +260,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
         local_s3 = remote_session.client("s3")
         local_ce = remote_session.client("ce")
         local_cw = remote_session.client("cloudwatch")
-        
+
     # Check if CUR is delayed
     cur_delayed = False
     cur_last_modified = None
-    
+
     if action == "simulate-cur-delay" or action == "simulate-cur-delay-no-fallback":
         cur_delayed = True
         cur_last_modified = exec_time - timedelta(hours=cur_delay_threshold + 1)
@@ -260,7 +273,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
     else:
         # Default behavior: not delayed if no external config, unless simulated
         cur_delayed = False
-        
+
     # Initialization of signals
     cur_records = []
     ce_records = []
@@ -268,22 +281,22 @@ def handle_request(event_data: dict, context: Any) -> dict:
     missing_resources = []
     current_ce_cost_gap_usd = 0.0
     comparison_window = {}
-    
+
     telemetry_delay_event = False
     stale_cost_explorer = False
     missing_cloudwatch = False
     estimated_billing = False
-    
+
     status = "READY"
-    
+
     if cur_delayed:
         telemetry_delay_event = True
         # Try fall back to Cost Explorer daily Cost telemetry
         logger.info("CUR is delayed. Falling back to Cost Explorer.")
-        
+
         ce_throttled = False
         ce_response = None
-        
+
         if action == "simulate-ce-throttled":
             ce_throttled = True
         elif local_ce:
@@ -307,7 +320,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 else:
                     logger.error("Cost Explorer retrieval error: %s", e)
                     # Non-throttling CE failure: if no fallback exists, return CUR_DELAY
-                    
+
         # Process CE data or fallbacks
         if ce_throttled:
             logger.warning("Cost Explorer is throttled.")
@@ -319,12 +332,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     if decompressed.startswith(b'\x1f\x8b'):
                         decompressed = gzip.decompress(decompressed)
                     cached_envelope = json.loads(decompressed.decode("utf-8"))
-                    
+
                     # Extract cached data
                     cur_records = cached_envelope.get("aws_cur_line_items", [])
                     ce_records = cached_envelope.get("aws_cost_explorer_daily", [])
                     utilization_metrics = cached_envelope.get("resource_utilization_metrics", [])
-                    
+
                     stale_cost_explorer = True
                     estimated_billing = cached_envelope.get("quality", {}).get("estimated_billing", False)
                     missing_cloudwatch = cached_envelope.get("quality", {}).get("missing_cloudwatch", False)
@@ -359,38 +372,20 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     service = keys[1] if len(keys) > 1 else ""
                     region = keys[2] if len(keys) > 2 else ""
                     cost = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0))
-                    
+
                     # Try to map service name back to service code if possible
                     service_code = CE_SERVICE_TO_CUR_CODE.get(service, service.replace("Amazon ", "").replace(" ", ""))
-                    
+
                     ce_records.append({
                         "date": date_str,
                         "linked_account_id": linked_account,
-                        "linked_account_name": "prod-core",
+                        "linked_account_name": event_data.get("account_name") or linked_account or event.account_id,
                         "service": service,
                         "service_code": service_code,
                         "region": region if region else "global",
                         "unblended_cost": cost,
                         "is_estimated": is_est
                     })
-        elif synthetic_fallback_enabled:
-            # Generate synthetic CE records
-            logger.info("Generating synthetic CE records (fallback).")
-            for i in range(ce_lookback_window):
-                date_str = (exec_time - timedelta(days=i)).strftime("%Y-%m-%d")
-                is_est = i < 2
-                if is_est:
-                    estimated_billing = True
-                ce_records.append({
-                    "date": date_str,
-                    "linked_account_id": event.account_id,
-                    "linked_account_name": "prod-core",
-                    "service": "Amazon Elastic Compute Cloud - Compute",
-                    "service_code": "AmazonEC2",
-                    "region": "ap-southeast-1",
-                    "unblended_cost": 150.00,
-                    "is_estimated": is_est
-                })
         else:
             # CUR is delayed, CE has no data / no fallback
             logger.warning("CUR is delayed and CE fallback has no data.")
@@ -400,7 +395,15 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "delayed_cur": True
             })
             return response.to_dict()
-            
+
+        if not ce_records:
+            logger.warning("CUR is delayed and real CE fallback returned no cost records.")
+            response = finops_common.create_response("CUR_DELAY", event.run_id, event.correlation_id, "cost_puller", {
+                "error": "Billing reports (CUR) are delayed and Cost Explorer returned no records.",
+                "delayed_cur": True
+            })
+            return response.to_dict()
+
         # Compute mismatch signals for the current execution date
         comparison_window = {
             "start_date": exec_date_str,
@@ -412,66 +415,62 @@ def handle_request(event_data: dict, context: Any) -> dict:
             if service_code:
                 missing_resources.append(service_code)
                 current_ce_cost_gap_usd += float(r.get("unblended_cost") or 0.0)
-                
-    else:
-        # CUR is ready, collect it
-        logger.info("CUR is available. Collecting CUR telemetry.")
-        
-        if cur_source_bucket and local_s3:
-            # Retrieve real CUR records
-            try:
-                # Real S3 reads / manifest parses (omitted for brevity, returning dummy if empty/unimplemented)
-                # ...
-                pass
-            except Exception as e:
-                logger.error("Failed to read raw CUR files from S3: %s", e)
-                raise e
-        
-        # If empty (such as local execution or test), and synthetic fallback is allowed:
-        if not cur_records and synthetic_fallback_enabled:
-            logger.info("Generating synthetic CUR records.")
-            cur_records = [
-                {
-                    "bill_billing_period_start_date": exec_time.strftime("%Y-%m-01T00:00:00Z"),
-                    "bill_payer_account_id": "112233445566",
-                    "line_item_usage_account_id": event.account_id,
-                    "line_item_usage_account_name": "prod-core",
-                    "line_item_line_item_type": "Usage",
-                    "line_item_usage_start_date": exec_time.strftime("%Y-%m-%dT00:00:00Z"),
-                    "line_item_usage_end_date": exec_time.strftime("%Y-%m-%dT23:59:59Z"),
-                    "line_item_product_code": "AmazonEC2",
-                    "line_item_usage_type": "BoxUsage:m5.2xlarge",
-                    "line_item_operation": "RunInstances",
-                    "line_item_resource_id": "i-1234567890abcdef0",
-                    "line_item_usage_amount": 24.0,
-                    "pricing_unit": "Hrs",
-                    "line_item_unblended_rate": 6.25,
-                    "line_item_unblended_cost": 150.00,
-                    "line_item_currency_code": "USD",
-                    "product_product_name": "Amazon Elastic Compute Cloud",
-                    "product_region_code": "ap-southeast-1",
-                    "product_instance_type": "m5.2xlarge",
-                    "resource_tags_user_environment": event.environment or "prod",
-                    "resource_tags_user_owner": "Engineering",
-                    "resource_tags_user_team": "Engineering",
-                    "resource_tags_user_cost_center": "CC-2001"
-                }
-            ]
-            
-        # Calculate usage density for Hrs pricing unit
-        for rec in cur_records:
-            if rec.get("pricing_unit") == "Hrs":
-                rec["usage_density_24h"] = min(float(rec.get("line_item_usage_amount") or 0.0) / 24.0, 1.0)
-            else:
-                rec["usage_density_24h"] = 0.0
 
-    # Fetch CloudWatch Utilization Metrics
-    resource_ids = list(set([r["line_item_resource_id"] for r in cur_records if r.get("line_item_resource_id")]))
+    manifest_uri = ""
+    assembly_id = ""
+    report_keys = []
+
+    if not cur_delayed:
+        # CUR is ready, collect manifest metadata
+        logger.info("CUR is available. Discovering CUR manifest.")
+
+        discovered_key = None
+        if local_s3 and cur_source_bucket:
+            try:
+                res = local_s3.list_objects_v2(cur_source_bucket, cur_source_prefix)
+                for obj in res.get("Contents", []):
+                    k = obj["Key"]
+                    if k.endswith("manifest.json") or k.endswith("-Manifest.json"):
+                        discovered_key = k
+                        break
+            except Exception as e:
+                logger.warning("Error listing objects for manifest discovery: %s", e)
+
+        if discovered_key:
+            manifest_uri = f"s3://{cur_source_bucket}/{discovered_key}"
+            try:
+                manifest_data = local_s3.get_object(cur_source_bucket, discovered_key)
+                if isinstance(manifest_data, dict) and "Body" in manifest_data:
+                    manifest_bytes = manifest_data["Body"].read()
+                else:
+                    manifest_bytes = manifest_data
+                manifest_json = json.loads(manifest_bytes.decode("utf-8"))
+                # Validation
+                if not isinstance(manifest_json, dict) or "assemblyId" not in manifest_json:
+                    raise ValueError("Invalid manifest schema: missing assemblyId")
+                assembly_id = manifest_json.get("assemblyId", "")
+                report_keys = manifest_json.get("reportKeys", [])
+            except Exception as e:
+                logger.error("Manifest validation failed for %s: %s", manifest_uri, e)
+                raise finops_common.InvalidInputError(f"CUR manifest validation failed: {e}")
+        else:
+            logger.warning("CUR manifest was not found in the configured source bucket.")
+            response = finops_common.create_response("CUR_DELAY", event.run_id, event.correlation_id, "cost_puller", {
+                "error": "Billing reports (CUR) manifest was not found in the configured source bucket.",
+                "delayed_cur": True
+            })
+            return response.to_dict()
+
+    # Fetch CloudWatch Utilization Metrics (resource_ids is empty for CUR ready since normalizer will query Athena later)
+    resource_ids = []
+    if cur_delayed and ce_records:
+        resource_ids = list(set([r.get("resource_id") for r in ce_records if r.get("resource_id")]))
     utilization_metrics, missing_cloudwatch = query_cw_utilization(local_cw, resource_ids, exec_time)
-    
+
     # Query Traffic context (Business context)
-    traffic_volume, traffic_source = query_traffic_context(local_cw, exec_time)
-    
+    traffic_volume, traffic_source, missing_traffic = query_traffic_context(local_cw, exec_time)
+    missing_cloudwatch = missing_cloudwatch or missing_traffic
+
     # Calculate quality / completeness score
     completeness_score = 1.0
     if cur_delayed:
@@ -481,92 +480,168 @@ def handle_request(event_data: dict, context: Any) -> dict:
     if stale_cost_explorer:
         completeness_score *= 0.8
 
-    # Build raw envelope
-    raw_envelope = {
-        "schema_version": "3.2.0",
-        "tenant_id": event.tenant_id or "tenant-default",
-        "account_id": event.account_id,
-        "correlation_id": event.correlation_id,
-        "idempotency_key": event_data.get("idempotency_key") or finops_common.idempotency_key(event.account_id, event.cost_period, event.execution_date),
-        "request_timestamp": datetime.utcnow().isoformat() + "Z",
-        "aws_cur_line_items": cur_records,
-        "aws_cost_explorer_daily": ce_records,
-        "resource_utilization_metrics": utilization_metrics,
-        "business_context": [
-            {
-                "linked_account_id": event.account_id,
-                "traffic_volume": traffic_volume,
-                "traffic_source": traffic_source,
-                "campaign_flag": False,
-                "load_test_flag": False,
-                "migration_flag": False
+    raw_data_uri = ""
+    s3_object_checksum = ""
+
+    if cur_delayed:
+        # Build raw envelope for CE fallback
+        raw_envelope = {
+            "schema_version": "3.2.0",
+            "tenant_id": event.tenant_id or "tenant-default",
+            "account_id": event.account_id,
+            "correlation_id": event.correlation_id,
+            "idempotency_key": event_data.get("idempotency_key") or finops_common.idempotency_key(event.account_id, event.cost_period, event.execution_date),
+            "request_timestamp": datetime.utcnow().isoformat() + "Z",
+            "aws_cur_line_items": [],
+            "aws_cost_explorer_daily": ce_records,
+            "resource_utilization_metrics": utilization_metrics,
+            "business_context": [
+                {
+                    "linked_account_id": event.account_id,
+                    "traffic_volume": traffic_volume,
+                    "traffic_source": traffic_source,
+                    "campaign_flag": False,
+                    "load_test_flag": False,
+                    "migration_flag": False
+                }
+            ],
+            "quality": {
+                "completeness_score": completeness_score,
+                "delayed_cur": cur_delayed,
+                "stale_cost_explorer": stale_cost_explorer,
+                "missing_cloudwatch": missing_cloudwatch,
+                "estimated_billing": estimated_billing
             }
-        ],
-        "quality": {
-            "completeness_score": completeness_score,
-            "delayed_cur": cur_delayed,
-            "stale_cost_explorer": stale_cost_explorer,
-            "missing_cloudwatch": missing_cloudwatch,
-            "estimated_billing": estimated_billing
         }
-    }
-    
-    # Serialize and compress envelope
-    envelope_json = json.dumps(raw_envelope).encode("utf-8")
-    gzipped_bytes = gzip.compress(envelope_json)
-    s3_object_checksum = hashlib.sha256(gzipped_bytes).hexdigest()
-    
-    # Partition path and key
-    cur_key = f"cur/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_raw.json.gz"
-    raw_data_uri = f"s3://{telemetry_bucket}/{cur_key}"
-    
-    # Check for path traversal/unsafe chars in raw_key
-    if ".." in cur_key:
-        raise finops_common.UnsafeActionError("Unsafe raw data key path traversal detected")
-        
-    if local_s3:
-        try:
-            logger.info("Writing gzipped raw cost data to S3: %s", raw_data_uri)
-            local_s3.put_object(telemetry_bucket, cur_key, gzipped_bytes)
-            
-            # Split features from the cost envelope and write under features/ prefix
-            features_envelope = {
-                "resource_utilization_metrics": utilization_metrics,
-                "business_context": raw_envelope["business_context"]
-            }
-            features_json = json.dumps(features_envelope).encode("utf-8")
-            gzipped_features = gzip.compress(features_json)
-            features_key = f"features/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_features.json.gz"
-            
-            logger.info("Writing gzipped features data to S3: s3://%s/%s", telemetry_bucket, features_key)
-            local_s3.put_object(telemetry_bucket, features_key, gzipped_features)
-        except Exception as e:
-            logger.error("Failed to write raw data to S3: %s", e)
-            raise e
+
+        # Serialize and compress envelope
+        envelope_json = json.dumps(raw_envelope).encode("utf-8")
+        gzipped_bytes = gzip.compress(envelope_json)
+        s3_object_checksum = hashlib.sha256(gzipped_bytes).hexdigest()
+
+        # Partition path and key
+        cur_key = f"cur/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_raw.json.gz"
+        raw_data_uri = f"s3://{telemetry_bucket}/{cur_key}"
+
+        # Check for path traversal/unsafe chars in raw_key
+        if ".." in cur_key:
+            raise finops_common.UnsafeActionError("Unsafe raw data key path traversal detected")
+
+        if local_s3:
+            try:
+                logger.info("Writing gzipped raw cost data to S3: %s", raw_data_uri)
+                local_s3.put_object(telemetry_bucket, cur_key, gzipped_bytes)
+
+                # Split features from the cost envelope and write under features/ prefix
+                features_envelope = {
+                    "resource_utilization_metrics": utilization_metrics,
+                    "business_context": raw_envelope["business_context"]
+                }
+                features_json = json.dumps(features_envelope).encode("utf-8")
+                gzipped_features = gzip.compress(features_json)
+                features_key = f"features/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_features.json.gz"
+
+                logger.info("Writing gzipped features data to S3: s3://%s/%s", telemetry_bucket, features_key)
+                local_s3.put_object(telemetry_bucket, features_key, gzipped_features)
+            except Exception as e:
+                logger.error("Failed to write raw data to S3: %s", e)
+                raise e
     else:
-        logger.info("S3 Client not configured, skipping S3 writes")
-        
-    details = {
-        "status": status,
-        "raw_data_uri": raw_data_uri,
-        "data_source_type": "S3_POINTER",
-        "s3_object_checksum": s3_object_checksum,
-        "telemetry_delay_event": cur_delayed,
-        "missing_resources": missing_resources,
-        "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
-        "comparison_window": comparison_window,
-        "delayed_cur": cur_delayed,
-        "missing_cloudwatch": missing_cloudwatch,
-        "stale_cost_explorer": stale_cost_explorer,
-        "estimated_billing": estimated_billing,
-        "completeness_score": completeness_score
-    }
-    
+        # CUR ready - write features only to S3
+        if local_s3:
+            try:
+                features_envelope = {
+                    "resource_utilization_metrics": utilization_metrics,
+                    "business_context": [
+                        {
+                            "linked_account_id": event.account_id,
+                            "traffic_volume": traffic_volume,
+                            "traffic_source": traffic_source,
+                            "campaign_flag": False,
+                            "load_test_flag": False,
+                            "migration_flag": False
+                        }
+                    ]
+                }
+                features_json = json.dumps(features_envelope).encode("utf-8")
+                gzipped_features = gzip.compress(features_json)
+                features_key = f"features/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_features.json.gz"
+
+                logger.info("Writing gzipped features data to S3: s3://%s/%s", telemetry_bucket, features_key)
+                local_s3.put_object(telemetry_bucket, features_key, gzipped_features)
+            except Exception as e:
+                logger.error("Failed to write features data to S3: %s", e)
+                raise e
+
+    if cur_delayed:
+        details = {
+            "status": status,
+            "raw_data_uri": raw_data_uri,
+            "data_source_type": "S3_POINTER",
+            "s3_object_checksum": s3_object_checksum,
+            "telemetry_delay_event": True,
+            "missing_resources": missing_resources,
+            "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
+            "comparison_window": comparison_window,
+            "delayed_cur": True,
+            "missing_cloudwatch": missing_cloudwatch,
+            "stale_cost_explorer": stale_cost_explorer,
+            "estimated_billing": estimated_billing,
+            "completeness_score": completeness_score,
+            "resource_utilization_metrics": utilization_metrics,
+            "business_context": [
+                {
+                    "linked_account_id": event.account_id,
+                    "traffic_volume": traffic_volume,
+                    "traffic_source": traffic_source,
+                    "campaign_flag": False,
+                    "load_test_flag": False,
+                    "migration_flag": False
+                }
+            ]
+        }
+    else:
+        details = {
+            "status": status,
+            "data_source_type": "S3_POINTER",
+            "cur_manifest_uri": manifest_uri,
+            "source_bucket": cur_source_bucket,
+            "source_prefix": cur_source_prefix,
+            "account_id": event.account_id,
+            "run_window": event.cost_period,
+            "freshness_flags": {
+                "delayed_cur": False,
+                "last_modified": cur_last_modified.isoformat() + "Z" if cur_last_modified else (exec_time.isoformat() + "Z")
+            },
+            "quality_flags": {
+                "completeness_score": completeness_score,
+                "stale_cost_explorer": stale_cost_explorer,
+                "missing_cloudwatch": missing_cloudwatch,
+                "estimated_billing": estimated_billing
+            },
+            "resource_utilization_metrics": utilization_metrics,
+            "business_context": [
+                {
+                    "linked_account_id": event.account_id,
+                    "traffic_volume": traffic_volume,
+                    "traffic_source": traffic_source,
+                    "campaign_flag": False,
+                    "load_test_flag": False,
+                    "migration_flag": False
+                }
+            ],
+            "delayed_cur": False,
+            "missing_cloudwatch": missing_cloudwatch,
+            "stale_cost_explorer": stale_cost_explorer,
+            "estimated_billing": estimated_billing,
+            "completeness_score": completeness_score
+        }
+
     response = finops_common.create_response(status, event.run_id, event.correlation_id, "cost_puller", details)
-    response.raw_data_uri = raw_data_uri
+    if raw_data_uri:
+        response.raw_data_uri = raw_data_uri
     response.telemetry_quality = completeness_score
     response.tenant_id = event.tenant_id
-    
+
     logger.info("Response: %s", response.to_dict())
     return response.to_dict()
-

@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  dynamodb_table_suffixes = ["run-state", "anomaly", "routing-state", "containment-audit", "dashboard-views", "account-policy", "ai-results", "rollback-cache"]
+  dynamodb_table_suffixes = ["run-state", "anomaly", "routing-state", "containment-audit", "dashboard-views", "account-policy", "rollback-cache"]
   dynamodb_table_arns = [
     for suffix in local.dynamodb_table_suffixes :
     "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-${var.environment}-${suffix}"
@@ -14,8 +14,41 @@ locals {
     audit           = "${var.project_name}-${var.environment}-containment-audit"
     dashboard_views = "${var.project_name}-${var.environment}-dashboard-views"
     account_policy  = "${var.project_name}-${var.environment}-account-policy"
-    ai_results      = "${var.project_name}-${var.environment}-ai-results"
     rollback_cache  = "${var.project_name}-${var.environment}-rollback-cache"
+  }
+}
+
+
+data "aws_iam_policy_document" "replica_kms_policy" {
+  statement {
+    # checkov:skip=CKV_AWS_109: "KMS key policy must specify resource = * because it is attached directly to the key"
+    # checkov:skip=CKV_AWS_111: "KMS key policy must specify resource = * because it is attached directly to the key"
+    # checkov:skip=CKV_AWS_356: "KMS key policy must specify resource = * because it is attached directly to the key"
+    sid    = "EnableRootAccountAdministration"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "S3 service usage on a directly attached KMS key policy requires resource = *"
+    # checkov:skip=CKV_AWS_356: "S3 service usage on a directly attached KMS key policy requires resource = *"
+    sid    = "AllowS3ReplicaBucketUsage"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey*"
+    ]
+    resources = ["*"]
   }
 }
 
@@ -237,6 +270,7 @@ resource "aws_kms_key" "replica" {
   description             = "KMS key for replica region S3 buckets"
   deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.replica_kms_policy.json
   tags                    = var.tags
 }
 
@@ -443,13 +477,17 @@ module "iam" {
   dynamodb_table_arns                    = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["error_budget"]])
   kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
   containment_apply_enabled              = false
-  queue_arns                             = [module.orchestration.detection_queue_arn, module.orchestration.detection_dlq_arn, module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
+  queue_arns                             = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
   sns_topic_arns                         = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
   telemetry_member_account_ids           = var.telemetry_member_account_ids
   telemetry_member_role_name             = var.telemetry_member_role_name
   cur_source_bucket_arn                  = var.cur_source_bucket_arn
   create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
   trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
+  athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
+  athena_workgroup_arn                   = module.lakehouse.athena_workgroup_arn
+  glue_database_arn                      = module.lakehouse.glue_database_arn
+  cur_data_table_arn                     = module.lakehouse.cur_data_table_arn
   tags                                   = var.tags
 }
 
@@ -463,15 +501,7 @@ module "ai_runtime_lambda" {
   private_subnet_ids       = module.networking.private_subnet_ids
   lambda_security_group_id = module.compute_lambda.lambda_security_group_id
   request_image_uri        = var.request_image_uri
-  worker_image_uri         = var.worker_image_uri
 
-  detect_queue_url   = module.orchestration.detection_queue_url
-  detect_queue_arn   = module.orchestration.detection_queue_arn
-  results_table_name = module.orchestration.dynamodb_table_names["ai_results"]
-  results_table_arn  = module.orchestration.dynamodb_table_arns["ai_results"]
-
-  curated_bucket_name  = module.lakehouse.lakehouse_bucket_name
-  evidence_bucket_name = module.lakehouse.audit_bucket_name
 
   vpc_id                 = module.networking.vpc_id
   vpc_cidr_block         = module.networking.vpc_cidr_block
@@ -513,7 +543,6 @@ module "compute_lambda" {
   cur_delay_threshold_hours  = var.cur_delay_threshold_hours
   ce_lookback_window_days    = var.ce_lookback_window_days
   traffic_metric_identifiers = var.traffic_metric_identifiers
-  synthetic_fallback_enabled = var.synthetic_fallback_enabled
 }
 
 # 7. Orchestration Module
@@ -545,15 +574,12 @@ module "observability" {
   lambda_function_names = concat(
     values(module.compute_lambda.lambda_function_names),
     [
-      module.ai_runtime_lambda.request_lambda_function_name,
-      module.ai_runtime_lambda.worker_lambda_function_name
+      module.ai_runtime_lambda.request_lambda_function_name
     ]
   )
   engineering_topic_arn = module.alerting.engineering_topic_arn
   finance_topic_arn     = module.alerting.finance_topic_arn
   log_retention_days    = 30
-  detection_queue_name  = "${var.project_name}-${var.environment}-detection-queue"
-  detection_dlq_name    = "${var.project_name}-${var.environment}-detection-dlq"
   tags                  = var.tags
 }
 

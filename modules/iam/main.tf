@@ -16,7 +16,8 @@ data "aws_iam_policy_document" "boundary" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
     ]
     resources = concat(
       [
@@ -28,6 +29,10 @@ data "aws_iam_policy_document" "boundary" {
       var.cur_source_bucket_arn != "" ? [
         var.cur_source_bucket_arn,
         "${var.cur_source_bucket_arn}/*"
+      ] : [],
+      var.athena_results_bucket_arn != "" ? [
+        var.athena_results_bucket_arn,
+        "${var.athena_results_bucket_arn}/*"
       ] : []
     )
   }
@@ -48,9 +53,38 @@ data "aws_iam_policy_document" "boundary" {
     effect = "Allow"
     actions = [
       "kms:Decrypt",
-      "kms:GenerateDataKey"
+      "kms:GenerateDataKey",
+      "kms:Encrypt"
     ]
     resources = var.kms_key_arns
+  }
+
+  statement {
+    sid    = "AllowAthenaActions"
+    effect = "Allow"
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = var.athena_workgroup_arn != "" ? [var.athena_workgroup_arn] : ["*"]
+  }
+
+  statement {
+    sid    = "AllowGlueActions"
+    effect = "Allow"
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = compact([
+      var.glue_database_arn != "" ? var.glue_database_arn : "",
+      var.cur_data_table_arn != "" ? var.cur_data_table_arn : "",
+      "arn:aws:glue:*:*:catalog"
+    ])
   }
 
   statement {
@@ -339,13 +373,40 @@ resource "aws_iam_role_policy" "normalizer" {
 
 data "aws_iam_policy_document" "normalizer" {
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${var.lakehouse_bucket_arn}/*"]
+    actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [
+      var.lakehouse_bucket_arn,
+      "${var.lakehouse_bucket_arn}/*",
+      var.athena_results_bucket_arn,
+      "${var.athena_results_bucket_arn}/*"
+    ]
+  }
+  statement {
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = [var.athena_workgroup_arn]
+  }
+  statement {
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = [
+      var.glue_database_arn,
+      var.cur_data_table_arn,
+      "arn:aws:glue:*:*:catalog"
+    ]
   }
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
-      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:Encrypt"]
       resources = var.kms_key_arns
     }
   }
@@ -443,6 +504,53 @@ data "aws_iam_policy_document" "containment_worker" {
         variable = "aws:ResourceTag/Environment"
         values   = [var.environment]
       }
+    }
+  }
+
+  # Cross-account AssumeRole into member accounts for containment execution
+  statement {
+    # checkov:skip=CKV_AWS_111: "sts:AssumeRole for cross-account containment requires member account role ARNs"
+    sid     = "AssumeContainmentRoleInMembers"
+    actions = ["sts:AssumeRole"]
+    resources = length(var.telemetry_member_account_ids) > 0 ? [
+      for acc in var.telemetry_member_account_ids :
+      "arn:aws:iam::${acc}:role/FinOpsContainmentWorkerRole"
+    ] : ["arn:aws:iam::*:role/FinOpsContainmentWorkerRole"]
+  }
+
+  # Write pre-action and post-action audit records to S3 Object Lock
+  statement {
+    sid       = "AuditBucketWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.audit_bucket_arn}/audit/*"]
+  }
+
+  # Update DynamoDB Dashboard Cache (best-effort)
+  statement {
+    sid       = "DashboardCacheWrite"
+    actions   = ["dynamodb:PutItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Cache and read rollback payload (finops-rollback-cache)
+  statement {
+    sid       = "RollbackCacheReadWrite"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Read external_id from Secrets Manager
+  statement {
+    sid       = "SecretsManagerContainmentExternalId"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:*:*:secret:finops/containment/*"]
+  }
+
+  dynamic "statement" {
+    for_each = length(var.kms_key_arns) > 0 ? [1] : []
+    content {
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      resources = var.kms_key_arns
     }
   }
 }

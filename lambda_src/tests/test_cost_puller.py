@@ -7,6 +7,17 @@ from datetime import datetime
 from workers.cost_puller import handler
 import finops_common
 
+
+def _fake_sts_for_account(account_id="112233"):
+    return finops_common.FakeSTS(
+        get_caller_identity_func=lambda: {"AccountId": account_id}
+    )
+
+
+def _fake_manifest_bytes():
+    return b'{"assemblyId": "cur-assembly-20260624", "reportKeys": ["cost_and_usage_reports-1.csv.gz"]}'
+
+
 def test_cost_puller_cur_ready_path():
     # 1. CUR-ready path writes gzipped S3 telemetry and returns READY.
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
@@ -30,13 +41,18 @@ def test_cost_puller_cur_ready_path():
                 }
             ]
         }
+
+    def fake_get_object(bucket, key):
+        return _fake_manifest_bytes()
         
     handler.s3_client = finops_common.FakeS3(
         put_object_func=fake_put_object,
+        get_object_func=fake_get_object,
         list_objects_func=fake_list_objects
     )
     handler.ce_client = finops_common.FakeCostExplorer()
     handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-ready",
@@ -48,26 +64,27 @@ def test_cost_puller_cur_ready_path():
     
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "READY"
-    assert resp["raw_data_uri"].startswith("s3://company-cdo-112233-telemetry/cur/account_id=112233/")
+    assert "raw_data_uri" not in resp or not resp.get("raw_data_uri")
     assert resp["details"]["data_source_type"] == "S3_POINTER"
-    assert resp["details"]["telemetry_delay_event"] is False
+    assert resp["details"]["delayed_cur"] is False
+    assert resp["details"]["cur_manifest_uri"] == "s3://company-cdo-112233-telemetry/cur/manifest.json"
     
-    assert len(put_called) == 2 # cur raw AND features
+    assert len(put_called) == 1 # features only
     
-    # Verify CUR file content
-    cur_bytes = put_called[0]["body"]
-    decompressed = gzip.decompress(cur_bytes)
+    # Verify features file content
+    feat_bytes = put_called[0]["body"]
+    decompressed = gzip.decompress(feat_bytes)
     envelope = json.loads(decompressed.decode("utf-8"))
     
-    assert envelope["schema_version"] == "3.2.0"
-    assert len(envelope["aws_cur_line_items"]) == 1
-    assert envelope["aws_cur_line_items"][0]["line_item_usage_account_id"] == "112233"
-    assert envelope["aws_cur_line_items"][0]["usage_density_24h"] == 1.0 # 24.0 / 24.0
+    assert "resource_utilization_metrics" in envelope
+    assert "business_context" in envelope
+    assert envelope["business_context"][0]["linked_account_id"] == "112233"
     
     # Cleanup
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
+    handler.sts_client = None
 
 def test_cost_puller_cur_delayed_ce_fallback():
     # 2. CUR delayed over 36 hours with CE fallback returns READY plus delay and mismatch metadata.
@@ -114,6 +131,7 @@ def test_cost_puller_cur_delayed_ce_fallback():
         get_cost_and_usage_func=fake_get_cost_and_usage
     )
     handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-delayed",
@@ -137,6 +155,7 @@ def test_cost_puller_cur_delayed_ce_fallback():
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
     handler.ce_client = None
+    handler.sts_client = None
 
 def test_cost_puller_cur_delayed_no_fallback():
     # 3. CUR delayed without fallback returns CUR_DELAY.
@@ -145,12 +164,10 @@ def test_cost_puller_cur_delayed_no_fallback():
     
     def fake_list_objects(bucket, prefix):
         return {"Contents": []} # No files, so delayed
-        
-    # Real CE call fails or fallback is disabled
-    os.environ["SYNTHETIC_FALLBACK_ENABLED"] = "false"
     
     handler.s3_client = finops_common.FakeS3(list_objects_func=fake_list_objects)
-    handler.ce_client = finops_common.FakeCostExplorer() # returns empty dict, fallback disabled
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-no-fallback",
@@ -167,9 +184,9 @@ def test_cost_puller_cur_delayed_no_fallback():
     # Cleanup
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
-    del os.environ["SYNTHETIC_FALLBACK_ENABLED"]
     handler.s3_client = None
     handler.ce_client = None
+    handler.sts_client = None
 
 def test_cost_puller_ce_throttled_no_cache():
     # 4. CE throttled without cache returns CE_THROTTLED.
@@ -196,6 +213,7 @@ def test_cost_puller_ce_throttled_no_cache():
         
     handler.s3_client = finops_common.FakeS3(list_objects_func=fake_list_objects)
     handler.ce_client = finops_common.FakeCostExplorer(get_cost_and_usage_func=fake_get_cost_and_usage)
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-throttled",
@@ -214,6 +232,7 @@ def test_cost_puller_ce_throttled_no_cache():
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
     handler.ce_client = None
+    handler.sts_client = None
 
 def test_cost_puller_ce_throttled_with_cache():
     # 5. CE throttled with cached fallback returns READY with stale flag.
@@ -260,6 +279,7 @@ def test_cost_puller_ce_throttled_with_cache():
         get_object_func=fake_get_object
     )
     handler.ce_client = finops_common.FakeCostExplorer(get_cost_and_usage_func=fake_get_cost_and_usage)
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-throttled-cache",
@@ -279,6 +299,7 @@ def test_cost_puller_ce_throttled_with_cache():
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
     handler.ce_client = None
+    handler.sts_client = None
 
 def test_cost_puller_missing_cloudwatch():
     # 6. Missing CloudWatch metrics returns READY with missing_cloudwatch=true.
@@ -287,12 +308,19 @@ def test_cost_puller_missing_cloudwatch():
     
     def fake_list_objects(bucket, prefix):
         return {"Contents": [{"Key": "cur/manifest.json", "LastModified": datetime.utcnow()}]}
+
+    def fake_get_object(bucket, key):
+        return _fake_manifest_bytes()
         
     def fake_get_metric_data(**kwargs):
         raise Exception("CloudWatch is down")
         
-    handler.s3_client = finops_common.FakeS3(list_objects_func=fake_list_objects)
+    handler.s3_client = finops_common.FakeS3(
+        list_objects_func=fake_list_objects,
+        get_object_func=fake_get_object,
+    )
     handler.cw_client = finops_common.FakeCloudWatch(get_metric_data_func=fake_get_metric_data)
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-missing-cw",
@@ -312,20 +340,28 @@ def test_cost_puller_missing_cloudwatch():
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
     handler.cw_client = None
+    handler.sts_client = None
 
 def test_cost_puller_traffic_fallback():
-    # 7. Traffic fallback returns traffic_source=Synthetic.
+    # 7. Missing traffic metrics mark CloudWatch as missing without synthetic traffic.
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
     os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-112233-telemetry"
     
     def fake_list_objects(bucket, prefix):
         return {"Contents": [{"Key": "cur/manifest.json", "LastModified": datetime.utcnow()}]}
+
+    def fake_get_object(bucket, key):
+        return _fake_manifest_bytes()
         
     def fake_get_metric_data(**kwargs):
         raise Exception("CloudWatch returns empty or fails for traffic")
         
-    handler.s3_client = finops_common.FakeS3(list_objects_func=fake_list_objects)
+    handler.s3_client = finops_common.FakeS3(
+        list_objects_func=fake_list_objects,
+        get_object_func=fake_get_object,
+    )
     handler.cw_client = finops_common.FakeCloudWatch(get_metric_data_func=fake_get_metric_data)
+    handler.sts_client = _fake_sts_for_account()
     
     event_data = {
         "run_id": "run-traffic",
@@ -337,12 +373,17 @@ def test_cost_puller_traffic_fallback():
     
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "READY"
+    context = resp["details"]["business_context"][0]
+    assert context["traffic_source"] == "ALB"
+    assert context["traffic_volume"] == 0.0
+    assert resp["details"]["missing_cloudwatch"] is True
     
     # Cleanup
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
     handler.s3_client = None
     handler.cw_client = None
+    handler.sts_client = None
 
 def test_cost_puller_unsafe_cross_tenant_paths():
     # 8. Bucket/account validation rejects unsafe or cross-tenant source paths.
@@ -381,7 +422,15 @@ def test_cost_puller_unsafe_cross_tenant_paths():
 
 def test_get_cross_account_session_success():
     from unittest.mock import patch, MagicMock
-    fake_sts = finops_common.FakeSTS()
+    fake_sts = finops_common.FakeSTS(
+        assume_role_func=lambda **kwargs: {
+            "Credentials": {
+                "AccessKeyId": "fixture-access-key",
+                "SecretAccessKey": "fixture-secret-key",
+                "SessionToken": "fixture-session-token",
+            }
+        }
+    )
     with patch("workers.cost_puller.handler.boto3.Session") as mock_session_class:
         mock_session = MagicMock()
         mock_session_class.return_value = mock_session
@@ -390,9 +439,10 @@ def test_get_cross_account_session_success():
         
         assert session == mock_session
         mock_session_class.assert_called_once_with(
-            aws_access_key_id="fake-access-key",
-            aws_secret_access_key="fake-secret-key",
-            aws_session_token="fake-session-token"
+            aws_access_key_id="fixture-access-key",
+            aws_secret_access_key="fixture-secret-key",
+            aws_session_token="fixture-session-token",
+            region_name="ap-southeast-1",
         )
 
 def test_get_cross_account_session_same_account():
@@ -420,19 +470,19 @@ def test_handle_request_remote_session_override():
     from unittest.mock import patch, MagicMock
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-999999999999-telemetry"
     os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-999999999999-telemetry"
-    
+
     def fake_get_caller_identity():
         return {"AccountId": "112233445566"}
-    
+
     fake_sts = finops_common.FakeSTS(
         get_caller_identity_func=fake_get_caller_identity
     )
-    
+
     mock_session = MagicMock()
     mock_s3 = MagicMock()
     mock_ce = MagicMock()
     mock_cw = MagicMock()
-    
+
     mock_s3.list_objects_v2.return_value = {
         "Contents": [
             {
@@ -441,7 +491,8 @@ def test_handle_request_remote_session_override():
             }
         ]
     }
-    
+    mock_s3.get_object.return_value = _fake_manifest_bytes()
+
     def mock_client(service_name):
         if service_name == "s3":
             return mock_s3
@@ -450,9 +501,9 @@ def test_handle_request_remote_session_override():
         elif service_name == "cloudwatch":
             return mock_cw
         return None
-        
+
     mock_session.client.side_effect = mock_client
-    
+
     event_data = {
         "run_id": "run-remote-override",
         "correlation_id": "corr-remote-override",
@@ -460,17 +511,24 @@ def test_handle_request_remote_session_override():
         "cost_period": "2026-06",
         "execution_date": "2026-06-24",
     }
-    
+
+    # Set all global clients to prevent Real* classes (which need boto3) from being created
+    handler.s3_client = finops_common.FakeS3()
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = fake_sts
-    
+
     with patch("workers.cost_puller.handler.get_cross_account_session", return_value=mock_session):
         resp = handler.handle_request(event_data, None)
-        
+
     assert resp["status"] == "READY"
     mock_s3.list_objects_v2.assert_called_with("company-cdo-999999999999-telemetry", "")
     mock_s3.put_object.assert_called()
     mock_cw.get_metric_data.assert_called()
-    
+
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
+    handler.s3_client = None
+    handler.ce_client = None
+    handler.cw_client = None
     handler.sts_client = None

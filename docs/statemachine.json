@@ -373,7 +373,12 @@
       "Parameters": {
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
         "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
         "action": "fail-closed-cur-delay",
         "error.$": "$.error"
       },
@@ -455,7 +460,7 @@
           "Next": "SetTelemetryForceDryRun"
         }
       ],
-      "Default": "BuildDetectRequest"
+      "Default": "VerifyS3Pointer"
     },
     "SetTelemetryForceDryRun": {
       "Type": "Pass",
@@ -480,30 +485,53 @@
         "force_dry_run": true
       },
       "ResultPath": "$",
-      "Next": "BuildDetectRequest"
+      "Next": "VerifyS3Pointer"
     },
-    "BuildDetectRequest": {
+    "VerifyS3Pointer": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.normalized.details.s3_bucket_uri",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.normalized.details.s3_bucket_uri",
+              "StringMatches": "s3://*.json.gz"
+            }
+          ],
+          "Next": "BuildDetectRequestS3Pointer"
+        }
+      ],
+      "Default": "SetS3PointerMissingError"
+    },
+    "SetS3PointerMissingError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "S3PointerMissing",
+        "Cause": "No valid gzipped S3 pointer was produced for AI detection."
+      },
+      "ResultPath": "$.error",
+      "Next": "FailClosed"
+    },
+    "BuildDetectRequestS3Pointer": {
       "Type": "Pass",
       "Parameters": {
         "path": "/v1/detect",
         "method": "POST",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "$.correlation_id",
+        "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
         "ai_contract_version.$": "$.ai_contract_version",
+        "dry_run_mode.$": "$.force_dry_run",
         "body": {
-          "data_source_type": "RAW_JSON",
+          "data_source_type": "S3_POINTER",
           "is_ad_hoc.$": "$.is_ad_hoc",
-          "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
-          "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items",
-          "business_context": {
-            "linked_account_id.$": "$.account_id",
-            "traffic_volume": 100000,
-            "traffic_source": "Mixed",
-            "campaign_flag": false,
-            "load_test_flag": false,
-            "migration_flag": false
-          }
+          "telemetry_delay_event.$": "$.normalized.details.telemetry_delay_event",
+          "s3_bucket_uri.$": "$.normalized.details.s3_bucket_uri",
+          "business_context.$": "$.normalized.details.business_context",
+          "resource_utilization_metrics.$": "$.normalized.details.resource_utilization_metrics"
         }
       },
       "ResultPath": "$.ai_detect_request",
@@ -520,7 +548,8 @@
         "correlation_id.$": "$.ai_detect_request.correlation_id",
         "idempotency_key.$": "$.ai_detect_request.idempotency_key",
         "ai_contract_version.$": "$.ai_detect_request.ai_contract_version",
-        "body.$": "$.ai_detect_request.body"
+        "body.$": "$.ai_detect_request.body",
+        "dry_run_mode.$": "$.ai_detect_request.dry_run_mode"
       },
       "ResultPath": "$.ai_detect_response",
       "Next": "EvaluateDetectResponse",
@@ -553,12 +582,12 @@
         {
           "Variable": "$.ai_detect_response.success",
           "BooleanEquals": false,
-          "Next": "FailClosed"
+          "Next": "SetAIFailClosedError"
         },
         {
           "Variable": "$.ai_detect_response.data_confidence",
           "StringEquals": "LOW",
-          "Next": "FailClosed"
+          "Next": "SetAIFailClosedError"
         },
         {
           "And": [
@@ -579,6 +608,15 @@
         }
       ],
       "Default": "MarkRunComplete"
+    },
+    "SetAIFailClosedError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AIEngineFailClosed",
+        "Cause": "AI Engine returned an unsuccessful or low-confidence detection response."
+      },
+      "ResultPath": "$.error",
+      "Next": "FailClosed"
     },
     "InvokeDecide": {
       "Type": "Task",
@@ -1185,7 +1223,12 @@
       "Parameters": {
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
         "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
         "action": "fail-closed",
         "error.$": "$.error"
       },

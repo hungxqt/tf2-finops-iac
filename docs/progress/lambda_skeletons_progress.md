@@ -6,7 +6,7 @@ Completed
 ## Scope
 Implementation and unit testing of all Go Lambda worker skeletons as described in the state machine specification `docs/statemachine.json`:
 - **State Worker (`state`)**: Checks run state and handles run completeness mapping, generating standard run details and idempotency key. Updated to support explicit operations (`check`, `complete`, `failed`).
-- **Cost Puller (`cost_puller`)**: Pulls synthetic raw cost billing reports. Simulates `CUR_DELAY` and `CE_THROTTLED` modes to test Step Functions retry/wait paths.
+- **Cost Puller (`cost_puller`)**: Pulls raw cost billing reports from configured CUR/CE inputs. Simulates `CUR_DELAY` and `CE_THROTTLED` control-flow modes to test Step Functions retry/wait paths without generating cost records.
 - **Normalizer (`normalizer`)**: Formats cost windows to curated parquet format.
 - **AI Client (`ai_client`)**: Validates AI Engine endpoints, secrets, and contract versions. Simulates timeouts, contract mismatches, unavailable states, and unsafe actions (e.g. prod containment attempts).
 - **Router (`router`)**: Directs alerting routes to Engineering/Finance channels depending on anomaly severity and checks action requirements.
@@ -45,4 +45,3 @@ None
 
 ## Next Step
 Implement networking and S3 lakehouse storage modules under `modules/` and populate `environments/sandbox` composition.
-

@@ -175,45 +175,7 @@ resource "aws_cloudwatch_metric_alarm" "stale_telemetry" {
   tags = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "queue_depth" {
-  count               = var.detection_queue_name != "" ? 1 : 0
-  alarm_name          = "${var.project_name}-${var.environment}-sqs-queue-depth"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "ApproximateNumberOfMessagesVisible"
-  namespace           = "AWS/SQS"
-  period              = 300
-  statistic           = "Maximum"
-  threshold           = 1000
-  alarm_description   = "Triggered when SQS primary queue depth exceeds 1000 messages"
-  alarm_actions       = [var.engineering_topic_arn]
 
-  dimensions = {
-    QueueName = var.detection_queue_name
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "dlq_depth" {
-  count               = var.detection_dlq_name != "" ? 1 : 0
-  alarm_name          = "${var.project_name}-${var.environment}-sqs-dlq-depth"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "ApproximateNumberOfMessagesVisible"
-  namespace           = "AWS/SQS"
-  period              = 300
-  statistic           = "Maximum"
-  threshold           = 0
-  alarm_description   = "Triggered when there are messages in the SQS DLQ"
-  alarm_actions       = [var.engineering_topic_arn]
-
-  dimensions = {
-    QueueName = var.detection_dlq_name
-  }
-
-  tags = var.tags
-}
 
 resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
   for_each            = toset(var.lambda_function_names)

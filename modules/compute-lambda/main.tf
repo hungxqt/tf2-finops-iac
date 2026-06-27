@@ -23,14 +23,18 @@ locals {
         CUR_DELAY_THRESHOLD_HOURS  = tostring(var.cur_delay_threshold_hours)
         CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
         TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
-        SYNTHETIC_FALLBACK_ENABLED = tostring(var.synthetic_fallback_enabled)
       }
     }
     normalizer = {
       timeout     = 120
       memory_size = 512
       env = {
-        LAKEHOUSE_BUCKET_NAME = var.lakehouse_bucket_name
+        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
+        RUN_STATE_TABLE_NAME       = lookup(var.dynamodb_table_names, "run_state", "")
+        ATHENA_WORKGROUP_NAME      = var.athena_workgroup_name
+        GLUE_DATABASE_NAME         = var.glue_database_name
+        GLUE_TABLE_NAME            = var.cur_data_table_name
+        ATHENA_RESULTS_BUCKET_NAME = var.athena_results_bucket_name
       }
     }
     router = {
@@ -49,10 +53,13 @@ locals {
       }
     }
     containment_worker = {
-      timeout     = 60
+      timeout     = 120
       memory_size = 256
       env = {
         CONTAINMENT_APPLY_ENABLED = tostring(var.containment_apply_enabled)
+        ROLLBACK_CACHE_TABLE      = lookup(var.dynamodb_table_names, "rollback_cache", "")
+        DASHBOARD_CACHE_TABLE     = lookup(var.dynamodb_table_names, "dashboard_views", "")
+        AUDIT_BUCKET_NAME         = var.audit_bucket_name
       }
     }
     vpc_alb_caller = {
