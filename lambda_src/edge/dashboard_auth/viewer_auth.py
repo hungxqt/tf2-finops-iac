@@ -21,6 +21,9 @@ except ImportError:
     COGNITO_CLIENT_ID_PARAM = ""
 
 CLIENT_ID = None
+AUTH_COOKIE_MAX_AGE_SECONDS = 3600
+PKCE_COOKIE_MAX_AGE_SECONDS = 300
+CSRF_COOKIE_MAX_AGE_SECONDS = 300
 
 def get_client_id():
     global CLIENT_ID
@@ -62,6 +65,29 @@ def parse_jwt(token):
     except Exception:
         return None
 
+def base64url_encode(payload):
+    return base64.urlsafe_b64encode(payload).decode('utf-8').rstrip('=')
+
+def encode_state(redirect_path, nonce):
+    payload = {
+        'redirect': redirect_path if redirect_path.startswith('/') and not redirect_path.startswith('//') else '/',
+        'nonce': nonce
+    }
+    return base64url_encode(json.dumps(payload, separators=(',', ':')).encode('utf-8'))
+
+def decode_state(state):
+    try:
+        payload = json.loads(base64url_decode(state))
+        redirect = payload.get('redirect', '/')
+        if not redirect.startswith('/') or redirect.startswith('//'):
+            redirect = '/'
+        return {
+            'redirect': redirect,
+            'nonce': payload.get('nonce')
+        }
+    except Exception:
+        return {'redirect': '/', 'nonce': None}
+
 def validate_claims(payload, client_id, user_pool_id, region):
     if not payload or not client_id:
         return False
@@ -93,11 +119,25 @@ def make_redirect(location, cookies_to_set=None, cookies_to_clear=None):
     }
     cookie_headers = []
     if cookies_to_set:
-        for k, v in cookies_to_set.items():
-            cookie_headers.append({'key': 'Set-Cookie', 'value': f"{k}={v}; Path=/; Secure; SameSite=Lax"})
+        for k, cookie in cookies_to_set.items():
+            if isinstance(cookie, dict):
+                value = cookie['value']
+                max_age = cookie.get('max_age', AUTH_COOKIE_MAX_AGE_SECONDS)
+                same_site = cookie.get('same_site', 'Strict')
+            else:
+                value = cookie
+                max_age = AUTH_COOKIE_MAX_AGE_SECONDS
+                same_site = 'Strict'
+            cookie_headers.append({
+                'key': 'Set-Cookie',
+                'value': f"{k}={value}; Path=/; Secure; HttpOnly; SameSite={same_site}; Max-Age={max_age}"
+            })
     if cookies_to_clear:
         for k in cookies_to_clear:
-            cookie_headers.append({'key': 'Set-Cookie', 'value': f"{k}=; Path=/; Secure; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"})
+            cookie_headers.append({
+                'key': 'Set-Cookie',
+                'value': f"{k}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+            })
     if cookie_headers:
         headers['set-cookie'] = cookie_headers
     return {
@@ -128,18 +168,23 @@ def handler(event, context):
     # 1. Handle Logout
     if uri == '/logout':
         cognito_logout_url = f"https://{COGNITO_DOMAIN}/logout?client_id={client_id}&logout_uri=https://{host}"
-        return make_redirect(cognito_logout_url, cookies_to_clear=['Cognito-Access-Token', 'Cognito-Id-Token'])
+        return make_redirect(
+            cognito_logout_url,
+            cookies_to_clear=['Cognito-Access-Token', 'Cognito-Id-Token', 'Cognito-PKCE-Verifier', 'Cognito-CSRF-Nonce']
+        )
         
     # 2. Handle Cognito Callback
     if uri == '/oauth2/callback':
         params = urllib.parse.parse_qs(request.get('querystring', ''))
         code = params.get('code', [None])[0]
-        state = params.get('state', [None])[0] or '/'
+        state = params.get('state', [None])[0]
         
         cookies = parse_cookies(headers)
         verifier = cookies.get('Cognito-PKCE-Verifier')
+        csrf_nonce = cookies.get('Cognito-CSRF-Nonce')
+        decoded_state = decode_state(state) if state else {'redirect': '/', 'nonce': None}
         
-        if not code or not verifier:
+        if not code or not verifier or not csrf_nonce or decoded_state.get('nonce') != csrf_nonce:
             return make_redirect('/')
             
         token_url = f"https://{COGNITO_DOMAIN}/oauth2/token"
@@ -162,10 +207,14 @@ def handler(event, context):
                 
                 if access_token and id_token:
                     cookies_to_set = {
-                        'Cognito-Access-Token': access_token,
-                        'Cognito-Id-Token': id_token
+                        'Cognito-Access-Token': {'value': access_token, 'max_age': AUTH_COOKIE_MAX_AGE_SECONDS},
+                        'Cognito-Id-Token': {'value': id_token, 'max_age': AUTH_COOKIE_MAX_AGE_SECONDS}
                     }
-                    return make_redirect(state, cookies_to_set=cookies_to_set, cookies_to_clear=['Cognito-PKCE-Verifier'])
+                    return make_redirect(
+                        decoded_state['redirect'],
+                        cookies_to_set=cookies_to_set,
+                        cookies_to_clear=['Cognito-PKCE-Verifier', 'Cognito-CSRF-Nonce']
+                    )
         except Exception as e:
             return {
                 'status': '500',
@@ -185,12 +234,14 @@ def handler(event, context):
                 
     # 4. Initiate PKCE Flow
     verifier = secrets.token_urlsafe(64)
+    csrf_nonce = secrets.token_urlsafe(32)
     sha256_hash = hashlib.sha256(verifier.encode('utf-8')).digest()
     challenge = base64.urlsafe_b64encode(sha256_hash).decode('utf-8').rstrip('=')
     
-    state = request.get('uri', '/')
+    redirect_path = request.get('uri', '/')
     if request.get('querystring'):
-        state += f"?{request['querystring']}"
+        redirect_path += f"?{request['querystring']}"
+    state = encode_state(redirect_path, csrf_nonce)
         
     cognito_auth_url = (
         f"https://{COGNITO_DOMAIN}/login?"
@@ -202,4 +253,10 @@ def handler(event, context):
         f"code_challenge_method=S256"
     )
     
-    return make_redirect(cognito_auth_url, cookies_to_set={'Cognito-PKCE-Verifier': verifier})
+    return make_redirect(
+        cognito_auth_url,
+        cookies_to_set={
+            'Cognito-PKCE-Verifier': {'value': verifier, 'max_age': PKCE_COOKIE_MAX_AGE_SECONDS, 'same_site': 'Lax'},
+            'Cognito-CSRF-Nonce': {'value': csrf_nonce, 'max_age': CSRF_COOKIE_MAX_AGE_SECONDS, 'same_site': 'Lax'}
+        }
+    )

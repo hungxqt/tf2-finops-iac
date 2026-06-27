@@ -1,6 +1,12 @@
-# Dashboard Module
+﻿# Dashboard Module
 
 This module provisions an AWS-native, secure dashboard hosting and data access foundation. It enforces CloudFront as the authenticated front door for static assets, dashboard JSON summaries, and `/v1/*` API actions using Cognito Authorization Code + PKCE authentication at the edge.
+
+## Frontend Asset Handoff
+
+Terraform does not publish frontend UI files to the dashboard asset bucket. Build and upload the static UI shell independently to the asset bucket output (`asset_bucket_name` / handoff name `dashboard_asset_bucket_name`).
+
+Terraform continues to emit only the non-secret `dashboard_runtime_config.json` object so the external frontend can discover Cognito, CloudFront, and dashboard data prefix settings at runtime.
 
 ## Authenticated Front-Door Architecture
 
@@ -32,3 +38,5 @@ module "dashboard" {
   destroyable                         = true
 }
 ```
+
+

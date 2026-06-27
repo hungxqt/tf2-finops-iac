@@ -109,6 +109,7 @@ EOF
   }
 }
 
+
 resource "aws_athena_named_query" "queries" {
   for_each    = local.queries
   name        = "${var.project_name}-${var.environment}-${replace(each.key, "_", "-")}"
@@ -867,6 +868,7 @@ resource "aws_s3_object" "runtime_config" {
   })
 }
 
+
 # 6. Optional QuickSight Data Source (disabled by default)
 resource "aws_quicksight_data_source" "athena" {
   count          = var.enable_quicksight ? 1 : 0
@@ -1080,4 +1082,5 @@ resource "terraform_data" "destroy_guard" {
     prevent_destroy = true
   }
 }
+
 

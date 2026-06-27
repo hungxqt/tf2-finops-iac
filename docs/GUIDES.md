@@ -1,4 +1,4 @@
-# TF2 FinOps IaC Developer Guide
+﻿# TF2 FinOps IaC Developer Guide
 
 This guide outlines the step-by-step workflow for developers and operators working with the **Task Force 2 - FinOps Watch** Infrastructure as Code (IaC) repository.
 
@@ -190,7 +190,7 @@ Once the Terraform plan is applied, the dashboard infrastructure is ready. The h
 1. **Terraform Roles**: Terraform provisions the underlying AWS assets, S3 buckets, CloudFront distribution with VPC Origin and Lambda@Edge associations, Cognito Identity & User Pools, Athena named queries, and IAM roles.
 2. **Authenticated Front Door**: All static assets and JSON summaries (under `/${dashboard_data_prefix}*`) are served via CloudFront and protected by the viewer-request Lambda@Edge function using Cognito PKCE auth.
 3. **API Routing via VPC Origin**: Requests to `/v1/*` are signed by the origin-request Lambda@Edge using AWS SigV4 before being routed to the private internal ALB, stripping any Cognito cookies.
-4. **Asset Upload**: Static frontend assets must be uploaded separately to the static asset S3 bucket (configured in the output `dashboard_asset_bucket_name`).
+4. **Asset Upload**: Static frontend assets for the UI shell must be built and uploaded independently to the static asset S3 bucket (configured in the output `dashboard_asset_bucket_name`). Terraform only provisions the private bucket, CloudFront front door, Cognito access control, and the non-secret `dashboard_runtime_config.json` object; it does not publish UI files automatically.
 5. **Cognito Groups**: Users should be added to the created Cognito groups (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) to control authorization.
 6. **Data Generation**: Cost-data writers must publish JSON summaries to the configured prefix (e.g., `summaries/`) inside the dashboard data S3 bucket (configured in the output `dashboard_data_bucket_name`).
 
@@ -263,5 +263,6 @@ Verify the gzipped JSON raw envelopes outputted by checking S3 key prefixes:
 
 ## 8. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
+
 
 

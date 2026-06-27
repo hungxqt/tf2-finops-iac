@@ -1,0 +1,225 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TF2 FinOps Watch Dashboard</title>
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">TF2 FinOps Watch</p>
+          <h1>Cost Anomalies</h1>
+        </div>
+        <div class="topbar-meta">
+          <span id="environmentBadge">environment</span>
+          <span id="lastUpdated">waiting for summary</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="toolbar" aria-label="Dashboard filters">
+          <label>
+            Account
+            <select id="accountFilter"></select>
+          </label>
+          <label>
+            Service
+            <select id="serviceFilter"></select>
+          </label>
+          <label>
+            Squad
+            <select id="squadFilter"></select>
+          </label>
+          <label>
+            Range
+            <select id="rangeFilter">
+              <option value="90">90 days</option>
+              <option value="30">30 days</option>
+              <option value="14">14 days</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="summary-grid" aria-label="Financial impact summary">
+          <article class="metric">
+            <span>90D Spend</span>
+            <strong id="totalSpend">$0</strong>
+            <small id="spendDelta">Actual vs baseline</small>
+          </article>
+          <article class="metric">
+            <span>Open Anomalies</span>
+            <strong id="openAnomalies">0</strong>
+            <small id="criticalAnomalies">0 critical</small>
+          </article>
+          <article class="metric">
+            <span>Waste Impact</span>
+            <strong id="wasteImpact">$0/day</strong>
+            <small id="dataConfidence">Data confidence</small>
+          </article>
+          <article class="metric">
+            <span>Error Budget</span>
+            <strong id="errorBudget">100%</strong>
+            <small id="lockState">Containment available</small>
+          </article>
+        </section>
+
+        <section id="lockBanner" class="lock-banner hidden" aria-live="polite"></section>
+
+        <section class="workbench">
+          <article class="panel trend-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Spend Trend</h2>
+                <p>Daily actual spend with expected baseline and anomaly markers.</p>
+              </div>
+              <div class="legend">
+                <span class="legend-item actual">Actual</span>
+                <span class="legend-item baseline">Baseline</span>
+                <span class="legend-item anomaly">Anomaly</span>
+              </div>
+            </div>
+            <div class="chart-frame">
+              <canvas id="spendCanvas" width="1040" height="360" aria-label="Daily AWS spend trend chart"></canvas>
+            </div>
+          </article>
+
+          <aside class="panel detail-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Anomaly Detail</h2>
+                <p id="selectedAnomalyId">No active anomaly selected</p>
+              </div>
+              <span id="severityPill" class="pill neutral">None</span>
+            </div>
+            <div class="confidence-block">
+              <div>
+                <span>Model confidence</span>
+                <strong id="confidenceText">0%</strong>
+              </div>
+              <div class="confidence-track"><span id="confidenceFill"></span></div>
+            </div>
+            <dl class="detail-list">
+              <div>
+                <dt>Data confidence</dt>
+                <dd id="detailDataConfidence">-</dd>
+              </div>
+              <div>
+                <dt>Evidence window</dt>
+                <dd id="evidenceWindow">-</dd>
+              </div>
+              <div>
+                <dt>Cost delta</dt>
+                <dd id="costDelta">-</dd>
+              </div>
+              <div>
+                <dt>Explanation</dt>
+                <dd id="explanation">-</dd>
+              </div>
+            </dl>
+          </aside>
+        </section>
+
+        <section class="two-column">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Top Impacted</h2>
+                <p>Accounts, services, squads, and owner-tag health.</p>
+              </div>
+            </div>
+            <div id="impactList" class="impact-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Anomaly Queue</h2>
+                <p>Finance-readable event ranking.</p>
+              </div>
+            </div>
+            <div id="anomalyList" class="anomaly-list"></div>
+          </article>
+        </section>
+
+        <section class="panel containment-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Containment Status</h2>
+              <p>Dry-run, approval, verification, rollback state, and audit links.</p>
+            </div>
+            <span id="viewerRole" class="pill neutral">finance read-only</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Audit ID</th>
+                  <th>Resource</th>
+                  <th>Owner</th>
+                  <th>Mode</th>
+                  <th>Status</th>
+                  <th>Error Budget</th>
+                  <th>Audit</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="containmentTable"></tbody>
+            </table>
+          </div>
+          <div id="actionStatus" class="action-status" aria-live="polite"></div>
+        </section>
+        <section class="two-column operations-grid">
+          <article class="panel approval-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Manual Approval</h2>
+                <p>Human review for non-production apply-mode actions.</p>
+              </div>
+              <span id="approvalGuard" class="pill neutral">guarded</span>
+            </div>
+            <div id="approvalList" class="approval-list"></div>
+          </article>
+
+          <article class="panel alert-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Alert Routing</h2>
+                <p>Finance and Engineering notification previews.</p>
+              </div>
+            </div>
+            <div id="alertPreviewList" class="alert-preview-list"></div>
+          </article>
+        </section>
+
+        <section class="two-column operations-grid">
+          <article class="panel audit-diff-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Audit Diff</h2>
+                <p>Before and after state without raw JSON or command payloads.</p>
+              </div>
+            </div>
+            <div id="auditDiffList" class="audit-diff-list"></div>
+          </article>
+
+          <article class="panel admin-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Access Settings</h2>
+                <p>Cognito groups, synthetic data visibility, and operator controls.</p>
+              </div>
+              <span id="adminGuard" class="pill neutral">restricted</span>
+            </div>
+            <div id="adminSettingsList" class="admin-settings-list"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="assets/app.js" defer></script>
+  </body>
+</html>
+
