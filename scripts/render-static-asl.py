@@ -23,7 +23,8 @@ def main():
         "${rollback_status_queue_url}": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
         "${ai_engine_contract_version}": "v1",
         "${ai_poll_max_attempts}": "6",
-        "${ai_poll_interval_seconds}": "10"
+        "${ai_poll_interval_seconds}": "10",
+        "${cur_retry_interval_seconds}": "3600"
     }
 
     for k, v in replacements.items():

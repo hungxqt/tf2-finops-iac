@@ -44,6 +44,7 @@ def check_asl_file(asl_path, is_template=True):
         "BuildDetectRequest",
         "InvokeDetect",
         "EvaluateDetectResponse",
+        "SetAIFailClosedError",
         "InvokeDecide",
         "CacheRollbackPayload",
         "FormatDecideResult",
@@ -92,9 +93,30 @@ def check_asl_file(asl_path, is_template=True):
     assert states["SendCURDelayAlert"]["Next"] == "WriteCURDelayAudit"
     assert states["WriteCURDelayAudit"]["Next"] == "MarkRunFailed"
     
+    assert "SetAIFailClosedError" in states
+    assert states["SetAIFailClosedError"]["Type"] == "Pass"
+    assert states["SetAIFailClosedError"]["ResultPath"] == "$.error"
+    assert states["SetAIFailClosedError"]["Next"] == "FailClosed"
+
     assert "FailClosed" in states
     assert states["FailClosed"]["Next"] == "SendFailClosedAlert"
     assert states["SendFailClosedAlert"]["Next"] == "MarkRunFailed"
+
+    required_audit_context = [
+        "run_id.$",
+        "correlation_id.$",
+        "account_id.$",
+        "cost_period.$",
+        "execution_date.$",
+        "tenant_id.$",
+        "environment.$",
+        "account_policy.$",
+        "error.$",
+    ]
+    for state_name in ["WriteCURDelayAudit", "FailClosed"]:
+        params = states[state_name]["Parameters"]
+        for key in required_audit_context:
+            assert key in params, f"{state_name} must pass {key} to audit_writer"
     
     # Assert telemetry quality dry-run gate
     assert "CheckTelemetryQuality" in states
@@ -122,10 +144,10 @@ def check_asl_file(asl_path, is_template=True):
     
     for choice in detect_choices:
         if choice.get("Variable") == "$.ai_detect_response.success" and choice.get("BooleanEquals") is False:
-            assert choice["Next"] == "FailClosed"
+            assert choice["Next"] == "SetAIFailClosedError"
             found_success_fail = True
         if choice.get("Variable") == "$.ai_detect_response.data_confidence" and choice.get("StringEquals") == "LOW":
-            assert choice["Next"] == "FailClosed"
+            assert choice["Next"] == "SetAIFailClosedError"
             found_confidence_fail = True
         if "And" in choice:
             conds = choice["And"]

@@ -92,6 +92,177 @@ def test_audit_writer_sandbox_applied():
     resp = handler.handle_request(event_data, None)
     assert resp["details"]["applied_after_state"] == "containment_applied"
 
+def test_audit_writer_fail_closed_payload_records_workflow_failure():
+    handler.s3_client = None
+    handler.ddb_client = None
+
+    event_data = {
+        "run_id": "run-fail-closed",
+        "correlation_id": "corr-fail-closed",
+        "account_id": "123456789012",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-26",
+        "tenant_id": "tenant-123",
+        "environment": "sandbox",
+        "action": "fail-closed",
+        "error": {
+            "Error": "AIEngineFailClosed",
+            "Cause": "AI Engine returned an unsuccessful or low-confidence detection response."
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    details = resp["details"]
+    assert resp["status"] == "AUDIT_WRITTEN"
+    assert details["audit_type"] == "WORKFLOW_FAILURE"
+    assert details["idempotency_key"] == "123456789012:2026-06:2026-06-26"
+    assert details["account_id"] == "123456789012"
+    assert details["execution_mode"] == "dry-run"
+    assert details["proposed_after_state"] == "workflow_failed_closed"
+    assert details["error_details"]["Error"] == "AIEngineFailClosed"
+
+def test_audit_writer_workflow_denies_prod_unsafe_action():
+    handler.s3_client = None
+    handler.ddb_client = None
+
+    event_data = {
+        "run_id": "run-prod-denied",
+        "correlation_id": "corr-prod-denied",
+        "account_id": "123456789012",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-26",
+        "tenant_id": "tenant-123",
+        "environment": "prod",
+        "account_policy": {
+            "account_id": "123456789012",
+            "environment": "prod"
+        },
+        "approval_status": "approved",
+        "force_dry_run": False,
+        "ai": {
+            "status": "AI_DECISION_READY",
+            "run_id": "run-prod-denied",
+            "correlation_id": "corr-prod-denied",
+            "worker": "vpc_alb_caller",
+            "recommended_containment_mode": "auto-shutdown",
+            "anomaly_id": "ANM-2026-0626A",
+            "confidence_score": 0.91
+        },
+        "ai_detect_response": {
+            "success": True,
+            "anomalies_detected": True,
+            "data_confidence": "HIGH",
+            "anomalies_list": [
+                {
+                    "anomaly_id": "ANM-2026-0626A",
+                    "resource_id": "i-produnsafe",
+                    "resource_owner": "team-payments",
+                    "severity": "HIGH",
+                    "confidence_score": 0.91
+                }
+            ]
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    details = resp["details"]
+    assert details["audit_type"] == "DENIED"
+    assert details["execution_mode"] == "denied"
+    assert details["requested_action"] == "auto-shutdown"
+    assert details["denial_reason"] == "prod_unsafe_action"
+    assert details["proposed_after_state"] == "containment_denied"
+    assert details["resource_id"] == "i-produnsafe"
+    assert details["target_owner"] == "team-payments"
+    assert details["tenant_id"] == "tenant-123"
+
+def test_audit_writer_workflow_denies_forced_dry_run_unsafe_action():
+    handler.s3_client = None
+    handler.ddb_client = None
+
+    event_data = {
+        "run_id": "run-quality-denied",
+        "correlation_id": "corr-quality-denied",
+        "account_id": "123456789012",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-26",
+        "tenant_id": "tenant-123",
+        "environment": "sandbox",
+        "account_policy": {
+            "account_id": "123456789012",
+            "environment": "sandbox"
+        },
+        "approval_status": "approved",
+        "force_dry_run": True,
+        "ai": {
+            "status": "AI_DECISION_READY",
+            "run_id": "run-quality-denied",
+            "correlation_id": "corr-quality-denied",
+            "worker": "vpc_alb_caller",
+            "recommended_containment_mode": "auto-shutdown",
+            "anomaly_id": "ANM-2026-0626B",
+            "confidence_score": 0.88
+        },
+        "ai_detect_response": {
+            "success": True,
+            "anomalies_detected": True,
+            "data_confidence": "HIGH",
+            "anomalies_list": [
+                {
+                    "anomaly_id": "ANM-2026-0626B",
+                    "resource_id": "i-lowquality",
+                    "resource_owner": "team-ml",
+                    "severity": "HIGH",
+                    "confidence_score": 0.88
+                }
+            ]
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    details = resp["details"]
+    assert details["audit_type"] == "DENIED"
+    assert details["execution_mode"] == "dry-run"
+    assert details["denial_reason"] == "forced_dry_run"
+    assert details["force_dry_run"] is True
+    assert details["requested_action"] == "auto-shutdown"
+
+def test_audit_writer_post_action_reads_containment_output_status():
+    handler.s3_client = None
+    handler.ddb_client = None
+
+    event_data = {
+        "run_id": "run-post",
+        "correlation_id": "corr-post",
+        "account_id": "123456789012",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-26",
+        "tenant_id": "tenant-123",
+        "environment": "sandbox",
+        "approval_status": "approved",
+        "ai": {
+            "status": "AI_DECISION_READY",
+            "run_id": "run-post",
+            "correlation_id": "corr-post",
+            "worker": "vpc_alb_caller",
+            "recommended_containment_mode": "tag-for-review",
+            "anomaly_id": "ANM-2026-0626C",
+            "confidence_score": 0.9
+        },
+        "containment": {
+            "run_id": "run-post",
+            "anomaly_id": "ANM-2026-0626C",
+            "correlation_id": "corr-post",
+            "status": "completed",
+            "execution_mode_applied": "tag"
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    details = resp["details"]
+    assert details["audit_type"] == "POST_ACTION"
+    assert details["execution_mode"] == "tag"
+    assert details["applied_after_state"] == "completed"
+
 def test_audit_writer_audit_type_inference():
     handler.s3_client = None
     handler.ddb_client = None

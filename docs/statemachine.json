@@ -373,7 +373,12 @@
       "Parameters": {
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
         "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
         "action": "fail-closed-cur-delay",
         "error.$": "$.error"
       },
@@ -553,12 +558,12 @@
         {
           "Variable": "$.ai_detect_response.success",
           "BooleanEquals": false,
-          "Next": "FailClosed"
+          "Next": "SetAIFailClosedError"
         },
         {
           "Variable": "$.ai_detect_response.data_confidence",
           "StringEquals": "LOW",
-          "Next": "FailClosed"
+          "Next": "SetAIFailClosedError"
         },
         {
           "And": [
@@ -579,6 +584,15 @@
         }
       ],
       "Default": "MarkRunComplete"
+    },
+    "SetAIFailClosedError": {
+      "Type": "Pass",
+      "Result": {
+        "Error": "AIEngineFailClosed",
+        "Cause": "AI Engine returned an unsuccessful or low-confidence detection response."
+      },
+      "ResultPath": "$.error",
+      "Next": "FailClosed"
     },
     "InvokeDecide": {
       "Type": "Task",
@@ -1185,7 +1199,12 @@
       "Parameters": {
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
         "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
         "action": "fail-closed",
         "error.$": "$.error"
       },
