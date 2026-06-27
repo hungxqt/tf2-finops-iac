@@ -114,3 +114,15 @@ variable "destroyable" {
   type        = bool
   description = "Set to true to make ECR repository destroyable (Sandbox exceptions)"
 }
+
+variable "ai_request_s3_pointer_bucket_arn" {
+  type        = string
+  description = "ARN of the S3 bucket containing AI input pointers (e.g. lakehouse bucket). Leave empty to grant no additional S3 access."
+  default     = ""
+}
+
+variable "ai_request_s3_pointer_prefixes" {
+  type        = list(string)
+  description = "S3 key prefixes under ai_request_s3_pointer_bucket_arn that the AI Request Lambda may read. Defaults to ai-input/*."
+  default     = ["ai-input/*"]
+}

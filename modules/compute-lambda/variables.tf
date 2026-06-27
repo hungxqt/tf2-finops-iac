@@ -153,3 +153,9 @@ variable "raw_json_inline_max_bytes" {
   description = "Maximum byte size for a RAW_JSON CE-fallback detect payload to be carried inline in Step Functions state. Payloads exceeding this fall back to S3_POINTER. Default 200000 (200 KB) keeps execution state safely below Step Functions limits even though the AI API contract allows up to 10 MB."
   default     = 200000
 }
+
+variable "telemetry_member_role_name" {
+  type        = string
+  description = "IAM role name in member accounts for CDO telemetry ingestion (cross-account STS assume)."
+  default     = "cdo-telemetry-ingestion-role"
+}

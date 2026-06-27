@@ -183,7 +183,30 @@ resource "aws_iam_policy" "request" {
           ]
           Resource = var.kms_key_arns
         }
-    ] : [])
+      ] : [],
+      var.ai_request_s3_pointer_bucket_arn != "" ? [
+        {
+          # checkov:skip=CKV_AWS_356: "s3:ListBucket with prefix condition is appropriately scoped"
+          Sid      = "AIRequestS3PointerList"
+          Effect   = "Allow"
+          Action   = ["s3:ListBucket"]
+          Resource = [var.ai_request_s3_pointer_bucket_arn]
+          Condition = {
+            StringLike = {
+              "s3:prefix" = var.ai_request_s3_pointer_prefixes
+            }
+          }
+        }
+      ] : [],
+      var.ai_request_s3_pointer_bucket_arn != "" ? [
+        {
+          Sid      = "AIRequestS3PointerGet"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject"]
+          Resource = [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"]
+        }
+      ] : []
+    )
   })
 }
 
@@ -355,7 +378,7 @@ resource "aws_wafv2_web_acl" "alb" {
   }
 
   rule {
-    name     = "RateLimit"
+    name     = "BlockMissingTenantId"
     priority = 1
 
     action {
@@ -363,15 +386,92 @@ resource "aws_wafv2_web_acl" "alb" {
     }
 
     statement {
-      rate_based_statement {
-        limit              = 1000
-        aggregate_key_type = "IP"
+      and_statement {
+        statement {
+          byte_match_statement {
+            search_string         = "/v1/"
+            positional_constraint = "STARTS_WITH"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+          }
+        }
+        statement {
+          not_statement {
+            statement {
+              size_constraint_statement {
+                comparison_operator = "GT"
+                size                = 0
+                field_to_match {
+                  single_header {
+                    name = "x-tenant-id"
+                  }
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "NONE"
+                }
+              }
+            }
+          }
+        }
       }
     }
 
     visibility_config {
       cloudwatch_metrics_enabled = true
-      metric_name                = "AIRateLimitMetric"
+      metric_name                = "AIMissingTenantIdMetric"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "TenantRateLimit"
+    priority = 2
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit                 = 100
+        aggregate_key_type    = "CUSTOM_KEYS"
+        evaluation_window_sec = 60
+
+        scope_down_statement {
+          byte_match_statement {
+            search_string         = "/v1/"
+            positional_constraint = "STARTS_WITH"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+          }
+        }
+
+        custom_key {
+          header {
+            name = "x-tenant-id"
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AITenantRateLimitMetric"
       sampled_requests_enabled   = true
     }
   }

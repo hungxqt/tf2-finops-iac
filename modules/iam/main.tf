@@ -223,9 +223,12 @@ data "aws_iam_policy_document" "boundary" {
   dynamic "statement" {
     for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
     content {
-      sid       = "AllowSTSAssumeRole"
-      effect    = "Allow"
-      actions   = ["sts:AssumeRole"]
+      sid    = "AllowSTSAssumeAndTagSession"
+      effect = "Allow"
+      actions = [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
       resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
     }
   }
@@ -333,8 +336,11 @@ data "aws_iam_policy_document" "cost_puller" {
   dynamic "statement" {
     for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
     content {
-      sid       = "AllowAssumeRoleInMembers"
-      actions   = ["sts:AssumeRole"]
+      sid = "AllowAssumeRoleInMembers"
+      actions = [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
       resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
     }
   }
@@ -570,6 +576,30 @@ data "aws_iam_policy_document" "member_containment" {
   }
 }
 
+# 7. VpcAlbCaller – dedicated idempotency table policy (least-privilege)
+# Only created when ai_payload_idempotency_table_arn is provided.
+# This scopes vpc_alb_caller to ONLY the idempotency table, not all DynamoDB tables.
+resource "aws_iam_role_policy" "vpc_alb_caller_idempotency" {
+  count  = var.ai_payload_idempotency_table_arn != "" ? 1 : 0
+  name   = "vpc_alb_caller-idempotency-policy"
+  role   = aws_iam_role.workers["vpc_alb_caller"].id
+  policy = data.aws_iam_policy_document.vpc_alb_caller_idempotency[0].json
+}
+
+data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {
+  count = var.ai_payload_idempotency_table_arn != "" ? 1 : 0
+
+  statement {
+    sid = "VpcAlbCallerIdempotencyTableAccess"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem"
+    ]
+    resources = [var.ai_payload_idempotency_table_arn]
+  }
+}
+
 resource "aws_iam_role_policy" "workers_xray" {
   for_each = toset(local.worker_names)
   name     = "xray-policy"
@@ -616,10 +646,23 @@ data "aws_iam_policy_document" "workers_sqs" {
 data "aws_iam_policy_document" "member_telemetry_assume_role" {
   count = var.create_member_telemetry_ingestion_role ? 1 : 0
   statement {
-    actions = ["sts:AssumeRole"]
+    actions = [
+      "sts:AssumeRole",
+      "sts:TagSession"
+    ]
     principals {
       type        = "AWS"
       identifiers = var.trusted_cost_puller_role_arns
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "sts:ExternalId"
+      values   = var.trusted_tenant_ids
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/tenant_id"
+      values   = var.trusted_tenant_ids
     }
   }
 }

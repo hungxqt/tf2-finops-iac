@@ -10,7 +10,8 @@ locals {
       timeout     = 30
       memory_size = 256
       env = {
-        RUN_STATE_TABLE_NAME = lookup(var.dynamodb_table_names, "run_state", "")
+        RUN_STATE_TABLE_NAME    = lookup(var.dynamodb_table_names, "run_state", "")
+        ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")
       }
     }
     cost_puller = {
@@ -23,6 +24,7 @@ locals {
         CUR_DELAY_THRESHOLD_HOURS  = tostring(var.cur_delay_threshold_hours)
         CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
         TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
+        TELEMETRY_MEMBER_ROLE_NAME = var.telemetry_member_role_name
       }
     }
     normalizer = {
@@ -66,11 +68,11 @@ locals {
       timeout     = 90
       memory_size = 256
       env = {
-        ALB_BASE_URL               = var.alb_base_url
-        SIGV4_SERVICE_NAME         = var.sigv4_service_name
-        REQUEST_TIMEOUT_SECONDS    = "60"
-        IDEMPOTENCY_TABLE_NAME     = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
-        RAW_JSON_INLINE_MAX_BYTES  = tostring(var.raw_json_inline_max_bytes)
+        ALB_BASE_URL              = var.alb_base_url
+        SIGV4_SERVICE_NAME        = var.sigv4_service_name
+        REQUEST_TIMEOUT_SECONDS   = "60"
+        IDEMPOTENCY_TABLE_NAME    = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
+        RAW_JSON_INLINE_MAX_BYTES = tostring(var.raw_json_inline_max_bytes)
       }
     }
   }

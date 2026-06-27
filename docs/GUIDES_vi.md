@@ -1,4 +1,4 @@
-﻿# HÆ°á»›ng dáº«n dÃ nh cho NhÃ  phÃ¡t triá»ƒn TF2 FinOps IaC
+# HÆ°á»›ng dáº«n dÃ nh cho NhÃ  phÃ¡t triá»ƒn TF2 FinOps IaC
 
 TÃ i liá»‡u nÃ y trÃ¬nh bÃ y chi tiáº¿t quy trÃ¬nh lÃ m viá»‡c tá»«ng bÆ°á»›c dÃ nh cho cÃ¡c nhÃ  phÃ¡t triá»ƒn vÃ  váº­n hÃ nh há»‡ thá»‘ng lÃ m viá»‡c vá»›i kho lÆ°u trá»¯ Infrastructure as Code (IaC) **Task Force 2 - FinOps Watch**.
 
@@ -414,3 +414,59 @@ Helper `_resolve_path(ctx, path)` trong file kiểm tra giải quyết:
 | `"$.anomalies_list[0].anomaly_id"` | Chỉ số mảng 0, sau đó key |
 
 Điều này đủ cho tất cả `Parameters` (JSONPath `key.$`) và biểu thức biến `Choice` được sử dụng bởi state machine này, không cần runtime ASL đầy đủ.
+
+---
+
+## 11. Cổng Kiểm Tra Tính Toàn Vẹn Yêu Cầu AI
+
+Script `scripts/test-ai-request-integrity.ps1` là một **cổng triển khai sau khi apply** xác nhận tính toàn vẹn yêu cầu của đường dẫn `VpcAlbCallerLambda` → ALB nội bộ riêng tư → AI Request Lambda trước khi thăng cấp container image sang môi trường tiếp theo.
+
+### 11.1 Khi Nào Cần Chạy
+
+Chạy cổng này **sau mỗi lần `terraform apply`** thay đổi bất kỳ điều nào sau đây:
+- `modules/compute-lambda` (mã hàm vpc_alb_caller hoặc biến môi trường)
+- `modules/ai-runtime-lambda` (image AI Request Lambda hoặc cấu hình ALB)
+- `modules/iam` (vai trò thực thi vpc_alb_caller hoặc chính sách idempotency)
+- Thăng cấp container image AI Engine từ sandbox → staging → prod
+
+### 11.2 Cách Chạy
+
+```powershell
+# Sau khi apply sandbox (cổng tối thiểu trước khi thăng cấp lên staging)
+.\scripts\test-ai-request-integrity.ps1 -Environment sandbox
+
+# Sau khi apply staging (bắt buộc trước khi thăng cấp prod)
+.\scripts\test-ai-request-integrity.ps1 -Environment staging
+
+# Với tên hàm tùy chỉnh
+.\scripts\test-ai-request-integrity.ps1 -Environment sandbox -LambdaFunctionName my-vpc-alb-caller
+```
+
+> [!IMPORTANT]
+> Script yêu cầu AWS CLI được cấu hình với thông tin xác thực có thể gọi hàm Lambda mục tiêu.
+
+### 11.3 Các Loại Probe và Tiêu Chí Chấp Nhận
+
+Cổng chạy bốn probe. **Tất cả phải pass** để môi trường được coi là tuân thủ:
+
+| # | Probe | Loại | Tiêu Chí Chấp Nhận |
+|---|-------|------|---------------------|
+| 1 | `POSITIVE_DETECT` | Dương tính | Lệnh gọi `/v1/detect` có ký phải thành công (không FunctionError, không 5xx) |
+| 2 | `REPLAY_STALE_TS` | Âm tính | `X-Request-Timestamp` cũ phải fail closed (FunctionError hoặc 400 `ERR_REPLAY_DETECTED`) |
+| 3 | `MISSING_AUTH` | Âm tính | Thiếu thông tin xác thực phải raise `ConfigMissingError` / `ERR_AUTH_FAILED` (fail-closed) |
+| 4 | `HASH_MISMATCH` | Âm tính | `X-Payload-SHA256` không khớp phải fail closed (FunctionError hoặc 4xx `ERR_PAYLOAD_HASH`) |
+
+> [!NOTE]
+> **Ranh Giới ALB/SigV4**: ALB nội bộ riêng tư không tự thực thi SigV4 ở cấp listener. Tính toàn vẹn yêu cầu được thực thi ở cấp AI Request Lambda/container. Probe 2, 3 và 4 kiểm tra rằng AI Lambda từ chối đúng các yêu cầu không hợp lệ. Nếu image AI Engine không thể vượt qua các probe này, hãy chặn thăng cấp và ghi lại runtime là không tuân thủ.
+
+### 11.4 Xử Lý Không Tuân Thủ
+
+Nếu bất kỳ probe nào thất bại, script thoát với mã 1 và ghi kết quả JSON vào `docs/progress/request_integrity_gate_results_{environment}.json`.
+
+**Không tuyên bố tuân thủ section-3 cho đến khi tất cả bốn probe pass.**
+
+Khi image AI Engine không thể vượt qua các probe âm tính (vì container không thực thi xác thực replay/auth/hash), hãy ghi lại khoảng cách trong `docs/progress/request_integrity_progress.md` và thêm ghi chú ngoại lệ capstone rõ ràng. Không bỏ qua hoặc tắt cổng.
+
+### 11.5 Tài Liệu Tham Khảo Kết Quả Cổng
+
+Kết quả được ghi vào `docs/progress/request_integrity_gate_results_{environment}.json` sau mỗi lần chạy. File này bị git-ignore và chỉ dùng cho tham khảo vận hành cục bộ. Bước CI `terraform-apply.yml` nên gọi script này và thất bại job nếu mã thoát khác không.

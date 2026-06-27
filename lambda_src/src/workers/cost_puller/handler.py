@@ -179,16 +179,22 @@ def query_traffic_context(cw_client_inst, exec_time: datetime) -> Tuple[float, s
         logger.warning("CloudWatch traffic metric retrieval failed: %s", e)
         return 0.0, "ALB", True
 
-def get_cross_account_session(sts_client_inst, account_id: str, current_account_id: str) -> Optional[Any]:
+def get_cross_account_session(sts_client_inst, account_id: str, current_account_id: str, tenant_id: str = "") -> Optional[Any]:
     if not sts_client_inst or account_id == current_account_id:
         return None
-    role_arn = f"arn:aws:iam::{account_id}:role/cdo-telemetry-ingestion-role"
+    role_name = os.environ.get("TELEMETRY_MEMBER_ROLE_NAME", "cdo-telemetry-ingestion-role")
+    role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
     try:
         logger.info("Assuming role for account %s: %s", account_id, role_arn)
-        res = sts_client_inst.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName="FinOpsWatchTelemetryPull"
-        )
+        assume_kwargs = {
+            "RoleArn": role_arn,
+            "RoleSessionName": "FinOpsWatchTelemetryPull",
+        }
+        if tenant_id:
+            assume_kwargs["ExternalId"] = tenant_id
+            assume_kwargs["Tags"] = [{"Key": "tenant_id", "Value": tenant_id}]
+            assume_kwargs["TransitiveTagKeys"] = ["tenant_id"]
+        res = sts_client_inst.assume_role(**assume_kwargs)
         creds = res["Credentials"]
         return boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
@@ -254,7 +260,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
             pass
 
     # Handle cross account role assumption if target account_id differs
-    remote_session = get_cross_account_session(local_sts, event.account_id, current_account_id)
+    tenant_id_for_sts = getattr(event, "tenant_id", "") or event_data.get("tenant_id", "")
+    remote_session = get_cross_account_session(local_sts, event.account_id, current_account_id, tenant_id=tenant_id_for_sts)
     if remote_session:
         # Override clients with assumed session
         local_s3 = remote_session.client("s3")

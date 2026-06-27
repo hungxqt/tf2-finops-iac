@@ -148,32 +148,58 @@ def handle_request(event_data: dict, context: Any) -> dict:
         locked = False
         tenant_id = event_data.get("tenant_id") or _default_tenant_id(event.account_id)
         client = get_ddb_client()
-        
+
+        # Contract §3.3: environment-based lock thresholds
+        # prod / prod-* → 1%;  staging → 10%;  sandbox/dev → no automatic lock
+        env = os.environ.get("ENVIRONMENT", "").lower()
+        if env == "prod" or env.startswith("prod-"):
+            lock_threshold_pct = 1.0
+        elif env == "staging":
+            lock_threshold_pct = 10.0
+        else:
+            # sandbox / dev – automatic lock disabled; threshold is informational only
+            lock_threshold_pct = None
+
+        rollback_rate_30d_pct = 0.0
+        containment_status = "OK"
+
         if client and budget_table:
             try:
                 item = client.get_item(budget_table, {"tenant_id": tenant_id})
                 if item:
+                    # Accept both a pre-computed locked flag and a raw rollback rate
                     locked = item.get("locked") is True or item.get("status") == "LOCKED"
+                    rollback_rate_30d_pct = float(item.get("rollback_rate_30d_pct", 0.0))
+                    containment_status = item.get("containment_status", "OK")
+                    # Apply threshold-based lock when the table does not set locked directly
+                    if not locked and lock_threshold_pct is not None:
+                        locked = rollback_rate_30d_pct >= lock_threshold_pct
             except Exception as e:
                 logger.error("DynamoDB error budget check failed: %s", e)
                 raise e
         else:
+            # Simulation fallback for unit tests
             locked = bool(event_data.get("simulate_error_budget_locked", False))
-            
+            rollback_rate_30d_pct = float(event_data.get("simulate_rollback_rate_30d_pct", 0.0))
+            containment_status = "LOCKED" if locked else "OK"
+
         status = "LOCKED" if locked else "OK"
         force_dry_run = locked or bool(event_data.get("force_dry_run", False))
-        
+
         response = finops_common.create_response(status, event.run_id, event.correlation_id, "state", {"locked": locked})
         response.tenant_id = tenant_id
         response.is_ad_hoc = event_data.get("is_ad_hoc") or False
         response.force_dry_run = force_dry_run
-        
+
         resp_dict = response.to_dict()
         resp_dict.update({
             "tenant_id": tenant_id,
             "is_ad_hoc": response.is_ad_hoc,
             "force_dry_run": force_dry_run,
-            "locked": locked
+            "locked": locked,
+            "containment_status": containment_status,
+            "rollback_rate_30d_pct": rollback_rate_30d_pct,
+            "lock_threshold_pct": lock_threshold_pct,
         })
         logger.info("Response: %s", resp_dict)
         return resp_dict

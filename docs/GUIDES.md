@@ -1,4 +1,4 @@
-﻿# TF2 FinOps IaC Developer Guide
+# TF2 FinOps IaC Developer Guide
 
 This guide outlines the step-by-step workflow for developers and operators working with the **Task Force 2 - FinOps Watch** Infrastructure as Code (IaC) repository.
 
@@ -413,3 +413,74 @@ The `_resolve_path(ctx, path)` helper in the test file resolves:
 | `"$.anomalies_list[0].anomaly_id"` | Array index 0, then key |
 
 This is sufficient for all `Parameters` (JSONPath `key.$`) and `Choice` variable expressions used by this state machine, without a full ASL runtime.
+
+---
+
+## 11. AI Request Integrity Deployment Gate
+
+The `scripts/test-ai-request-integrity.ps1` script is a **post-apply deployment gate** that validates request integrity of the deployed `VpcAlbCallerLambda` → private internal ALB → AI Request Lambda path before promoting a container image to the next environment.
+
+### 11.1 When to Run
+
+Run this gate **after every `terraform apply`** that changes any of the following:
+- `modules/compute-lambda` (vpc_alb_caller function code or environment variables)
+- `modules/ai-runtime-lambda` (AI Request Lambda image or ALB configuration)
+- `modules/iam` (vpc_alb_caller execution role or idempotency policy)
+- AI Engine container image promotion from sandbox → staging → prod
+
+### 11.2 How to Run
+
+```powershell
+# After sandbox apply (minimum gate before promoting to staging)
+.\scripts\test-ai-request-integrity.ps1 -Environment sandbox
+
+# After staging apply (required before prod promotion)
+.\scripts\test-ai-request-integrity.ps1 -Environment staging
+
+# With an explicit function name (if the naming convention was overridden)
+.\scripts\test-ai-request-integrity.ps1 -Environment sandbox -LambdaFunctionName my-vpc-alb-caller
+```
+
+> [!IMPORTANT]
+> The script requires AWS CLI to be configured with credentials that can invoke the target Lambda function.
+
+### 11.3 Probe Types and Acceptance Criteria
+
+The gate runs four probes. **All must pass** for the environment to be considered compliant:
+
+| # | Probe | Type | Acceptance Criteria |
+|---|-------|------|---------------------|
+| 1 | `POSITIVE_DETECT` | Positive | Signed `/v1/detect` call succeeds (no FunctionError, no 5xx) |
+| 2 | `REPLAY_STALE_TS` | Negative | Stale `X-Request-Timestamp` must fail closed (FunctionError or 400 `ERR_REPLAY_DETECTED`) |
+| 3 | `MISSING_AUTH` | Negative | Missing credentials must raise `ConfigMissingError` / `ERR_AUTH_FAILED` (fail-closed) |
+| 4 | `HASH_MISMATCH` | Negative | Mismatched `X-Payload-SHA256` must fail closed (FunctionError or 4xx `ERR_PAYLOAD_HASH`) |
+
+> [!NOTE]
+> **ALB/SigV4 Boundary**: The private internal ALB does not itself enforce SigV4 at the listener level. Request integrity is enforced at the AI Request Lambda/container level. Probe 2, 3, and 4 test that the AI Lambda correctly rejects invalid requests. If the AI Engine image cannot pass these probes, block promotion and record the runtime as non-compliant.
+
+### 11.4 Non-Compliance Handling
+
+If any probe fails, the script exits with code 1 and writes a results JSON to `docs/progress/request_integrity_gate_results_{environment}.json`.
+
+**Do not claim section-3 compliance until all four probes pass.**
+
+When the AI Engine image cannot pass the negative probes (because the container does not enforce replay/auth/hash validation), record the gap in `docs/progress/request_integrity_progress.md` and add an explicit capstone exception note. Do not suppress or bypass the gate.
+
+### 11.5 Gate Results Reference
+
+Results are written to `docs/progress/request_integrity_gate_results_{environment}.json` after each run. This file is git-ignored and is for local operator reference only. The CI `terraform-apply.yml` workflow step should call this script and fail the job if the exit code is non-zero.
+
+```json
+{
+  "timestamp": "2026-06-27T14:30:00Z",
+  "environment": "sandbox",
+  "lambda": "tf2-finops-sandbox-vpc_alb_caller",
+  "compliance_status": "COMPLIANT",
+  "probes": [
+    {"name": "POSITIVE_DETECT", "passed": true},
+    {"name": "REPLAY_STALE_TS", "passed": true},
+    {"name": "MISSING_AUTH",    "passed": true},
+    {"name": "HASH_MISMATCH",   "passed": true}
+  ]
+}
+```

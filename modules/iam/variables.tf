@@ -113,3 +113,15 @@ variable "cur_data_table_arn" {
   description = "The ARN of the Glue Catalog table for curated cost data"
   default     = ""
 }
+
+variable "ai_payload_idempotency_table_arn" {
+  type        = string
+  description = "ARN of the DynamoDB ai_payload_idempotency table. Used to grant vpc_alb_caller a least-privilege inline policy scoped to only this table."
+  default     = ""
+}
+
+variable "trusted_tenant_ids" {
+  type        = list(string)
+  description = "Allowed tenant IDs used as sts:ExternalId and aws:RequestTag/tenant_id conditions on the member telemetry ingestion role trust policy. Required when create_member_telemetry_ingestion_role = true."
+  default     = []
+}

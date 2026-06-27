@@ -47,7 +47,7 @@ AI_IDEMPOTENCY_KEY_PATTERN = re.compile(
 # TTL for idempotency records: 24 hours in seconds
 _IDEMPOTENCY_TTL_SECONDS = 24 * 3600
 
-# Sentinel string that marks IN_PROGRESS entries where response_cache is not yet set.
+# Sentinel string that marks IN_PROGRESS entries where response_body is not yet set.
 # Must not be valid JSON so it can never collide with a real API response.
 _NO_CACHE = "__NO_CACHE__"
 
@@ -181,7 +181,7 @@ def _idempotency_check_or_claim(
                 "payload_sha256": {"S": payload_sha256},
                 "created_at": {"S": created_at},
                 "ttl_expiry": {"N": str(ttl_expiry)},
-                "response_cache": {"S": _NO_CACHE},
+                "response_body": {"S": _NO_CACHE},
             },
             ConditionExpression="attribute_not_exists(idempotency_key)",
         )
@@ -205,7 +205,12 @@ def _idempotency_check_or_claim(
 
     existing_hash = item.get("payload_sha256", {}).get("S", "")
     existing_status = item.get("status", {}).get("S", "")
-    response_cache_raw = item.get("response_cache", {}).get("S", _NO_CACHE)
+    # Read response_body first (new attribute name); fall back to legacy response_cache
+    # for records written by older Lambda deployments within their 24-hour TTL window.
+    response_body_raw = (
+        item.get("response_body", {}).get("S")
+        or item.get("response_cache", {}).get("S", _NO_CACHE)
+    )
 
     if existing_hash and existing_hash != payload_sha256:
         logger.error(
@@ -224,10 +229,10 @@ def _idempotency_check_or_claim(
             "Concurrent call rejected to preserve idempotency."
         )
 
-    if existing_status == "COMPLETED" and response_cache_raw and response_cache_raw != _NO_CACHE:
+    if existing_status == "COMPLETED" and response_body_raw and response_body_raw != _NO_CACHE:
         logger.info("Returning cached COMPLETED response for key=%s", idempotency_key)
         try:
-            return json.loads(response_cache_raw)
+            return json.loads(response_body_raw)
         except json.JSONDecodeError:
             logger.warning("Cached response for key=%s is not valid JSON; re-executing.", idempotency_key)
             return None
@@ -248,7 +253,7 @@ def _idempotency_mark_completed(
         ddb.update_item(
             TableName=table_name,
             Key={"idempotency_key": {"S": idempotency_key}},
-            UpdateExpression="SET #s = :s, response_cache = :r",
+            UpdateExpression="SET #s = :s, response_body = :r",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":s": {"S": "COMPLETED"},
@@ -268,7 +273,7 @@ def _idempotency_mark_error(
         ddb.update_item(
             TableName=table_name,
             Key={"idempotency_key": {"S": idempotency_key}},
-            UpdateExpression="SET #s = :s, response_cache = :r",
+            UpdateExpression="SET #s = :s, response_body = :r",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":s": {"S": "ERROR"},
@@ -390,7 +395,21 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
         signer.add_auth(aws_request)
         signed_headers = dict(aws_request.headers.items())
     else:
-        logger.warning("AWS Credentials not found. Skipping SigV4 signing (local/testing fallback).")
+        # Fail closed: missing credentials on AI payload paths is a security violation.
+        # Only allow unsigned requests when ALLOW_UNSIGNED_AI_REQUESTS=true is explicitly set
+        # (e.g. unit tests / local stubs – never set this in Terraform environment variables).
+        allow_unsigned = os.environ.get("ALLOW_UNSIGNED_AI_REQUESTS", "false").lower() == "true"
+        if validated_path in AI_PAYLOAD_PATHS and not allow_unsigned:
+            raise ConfigMissingError(
+                "AWS credentials not available for SigV4 signing and ALLOW_UNSIGNED_AI_REQUESTS is not set. "
+                "Fail-closed: refusing to send unsigned request to AI Engine path "
+                f"'{validated_path}'. Check Lambda execution role and VPC endpoint configuration."
+            )
+        logger.warning(
+            "AWS credentials not found. Proceeding without SigV4 signing "
+            "(ALLOW_UNSIGNED_AI_REQUESTS=true or non-AI-payload path)."
+        )
+
 
     # 7. Execute the HTTP request using urllib
     req = urllib.request.Request(

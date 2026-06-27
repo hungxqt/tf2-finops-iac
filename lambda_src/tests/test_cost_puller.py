@@ -532,3 +532,116 @@ def test_handle_request_remote_session_override():
     handler.ce_client = None
     handler.cw_client = None
     handler.sts_client = None
+
+
+# ---------------------------------------------------------------------------
+# STS Cross-Account Tenant Binding Tests (Blocker 4)
+# ---------------------------------------------------------------------------
+
+def test_cost_puller_assume_role_passes_external_id_and_tags():
+    """get_cross_account_session must pass ExternalId, Tags, and TransitiveTagKeys to assume_role."""
+    assume_calls = []
+
+    def fake_assume_role(**kwargs):
+        assume_calls.append(kwargs)
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKID",
+                "SecretAccessKey": "SECRET",
+                "SessionToken": "TOKEN",
+            }
+        }
+
+    fake_sts = finops_common.FakeSTS(
+        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        assume_role_func=fake_assume_role,
+    )
+
+    session = handler.get_cross_account_session(
+        fake_sts,
+        account_id="999999999999",
+        current_account_id="111111111111",
+        tenant_id="abc-tenant-id",
+    )
+
+    assert len(assume_calls) == 1, "assume_role should be called exactly once"
+    call_kwargs = assume_calls[0]
+    assert call_kwargs["ExternalId"] == "abc-tenant-id", "ExternalId must be tenant_id"
+    assert {"Key": "tenant_id", "Value": "abc-tenant-id"} in call_kwargs["Tags"], (
+        "Tags must contain {Key='tenant_id', Value=tenant_id}"
+    )
+    assert "tenant_id" in call_kwargs["TransitiveTagKeys"], (
+        "TransitiveTagKeys must include 'tenant_id'"
+    )
+
+
+def test_cost_puller_assume_role_no_extra_params_when_tenant_id_empty():
+    """get_cross_account_session must not send ExternalId/Tags when tenant_id is empty."""
+    assume_calls = []
+
+    def fake_assume_role(**kwargs):
+        assume_calls.append(kwargs)
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKID",
+                "SecretAccessKey": "SECRET",
+                "SessionToken": "TOKEN",
+            }
+        }
+
+    fake_sts = finops_common.FakeSTS(
+        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        assume_role_func=fake_assume_role,
+    )
+
+    handler.get_cross_account_session(
+        fake_sts,
+        account_id="999999999999",
+        current_account_id="111111111111",
+        tenant_id="",  # empty tenant_id
+    )
+
+    assert len(assume_calls) == 1
+    call_kwargs = assume_calls[0]
+    assert "ExternalId" not in call_kwargs, "ExternalId must not be sent when tenant_id is empty"
+    assert "Tags" not in call_kwargs, "Tags must not be sent when tenant_id is empty"
+    assert "TransitiveTagKeys" not in call_kwargs, "TransitiveTagKeys must not be sent when tenant_id is empty"
+
+
+def test_cost_puller_assume_role_uses_telemetry_member_role_name_env():
+    """get_cross_account_session must use TELEMETRY_MEMBER_ROLE_NAME env var, not hardcoded role."""
+    os.environ["TELEMETRY_MEMBER_ROLE_NAME"] = "custom-telemetry-role"
+    assume_calls = []
+
+    def fake_assume_role(**kwargs):
+        assume_calls.append(kwargs)
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKID",
+                "SecretAccessKey": "SECRET",
+                "SessionToken": "TOKEN",
+            }
+        }
+
+    fake_sts = finops_common.FakeSTS(
+        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        assume_role_func=fake_assume_role,
+    )
+
+    handler.get_cross_account_session(
+        fake_sts,
+        account_id="999999999999",
+        current_account_id="111111111111",
+        tenant_id="t-123",
+    )
+
+    assert len(assume_calls) == 1
+    role_arn = assume_calls[0]["RoleArn"]
+    assert "custom-telemetry-role" in role_arn, (
+        f"RoleArn must use TELEMETRY_MEMBER_ROLE_NAME; got: {role_arn}"
+    )
+    assert "cdo-telemetry-ingestion-role" not in role_arn, (
+        "RoleArn must not use the hardcoded default role name"
+    )
+
+    del os.environ["TELEMETRY_MEMBER_ROLE_NAME"]
