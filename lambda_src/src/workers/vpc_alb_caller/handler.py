@@ -25,6 +25,42 @@ from finops_common.utils import (
     TimeoutError
 )
 
+# AI HTTP error code mapping — maps HTTP status to contract error_code
+# These are returned as normalized envelopes so ASL can branch without raising.
+_AI_HTTP_ERROR_CODES = {
+    400: "ERR_INVALID_SCHEMA",        # also ERR_IDEMPOTENCY_MISMATCH / ERR_REPLAY_DETECTED by body
+    401: "ERR_AUTH_FAILED",
+    403: "ERR_CROSS_TENANT_DENIED",
+    404: "ERR_ANOMALY_NOT_FOUND",
+    409: "ERR_DUP_IDEMPOTENCY",
+    422: "ERR_CONTAINMENT_NOT_SUPPORTED",
+    429: "ERR_RATE_LIMITED",
+    500: "ERR_LLM_TIMEOUT",
+    503: "ERR_SERVICE_DOWN",
+}
+
+# Error codes that are non-retryable — must not trigger containment
+_NON_RETRYABLE_ERROR_CODES = {
+    "ERR_INVALID_SCHEMA",
+    "ERR_IDEMPOTENCY_MISMATCH",
+    "ERR_CROSS_TENANT_DENIED",
+    "ERR_ANOMALY_NOT_FOUND",
+    "ERR_CONTAINMENT_NOT_SUPPORTED",
+}
+
+# Error codes that can be retried once/bounded
+_RETRYABLE_ERROR_CODES = {
+    "ERR_REPLAY_DETECTED",
+    "ERR_AUTH_FAILED",
+    "ERR_RATE_LIMITED",
+}
+
+# Error codes signaling AI unavailability — static fallback, no containment
+_UNAVAILABLE_ERROR_CODES = {
+    "ERR_LLM_TIMEOUT",
+    "ERR_SERVICE_DOWN",
+}
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -442,14 +478,49 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     except urllib.error.HTTPError as he:
         status_code = he.code
-        error_body = he.read().decode("utf-8")
+        try:
+            error_body = he.read().decode("utf-8")
+        except Exception:
+            error_body = ""
         logger.error("HTTP error from ALB: status_code=%d, body=%s", status_code, error_body)
 
         error_msg = f"status={status_code}"
         if idempotency_active:
             _idempotency_mark_error(ddb, idempotency_table, idempotency_key, error_msg)
 
-        # Classify and map errors to enforce fail-closed status in Step Functions
+        # For AI-path errors, return a normalized envelope so Step Functions
+        # can branch by error_code without catching an exception.
+        # Non-AI-path errors (security config) continue to raise.
+        if validated_path in AI_PAYLOAD_PATHS or validated_path.startswith("/v1/"):
+            # Try to extract error_code from response body if present
+            error_code = _AI_HTTP_ERROR_CODES.get(status_code, f"ERR_HTTP_{status_code}")
+            try:
+                body_obj = json.loads(error_body)
+                if isinstance(body_obj, dict) and "error_code" in body_obj:
+                    error_code = body_obj["error_code"]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            retryable = error_code in _RETRYABLE_ERROR_CODES
+            unavailable = error_code in _UNAVAILABLE_ERROR_CODES
+            non_retryable = error_code in _NON_RETRYABLE_ERROR_CODES
+
+            logger.warning(
+                "AI HTTP error normalized to envelope: path=%s, status=%d, error_code=%s, retryable=%s",
+                validated_path, status_code, error_code, retryable,
+            )
+            return {
+                "ai_error": True,
+                "http_status": status_code,
+                "error_code": error_code,
+                "retryable": retryable,
+                "unavailable": unavailable,
+                "non_retryable": non_retryable,
+                "message": error_body[:500] if error_body else f"AI Engine returned HTTP {status_code}",
+                "path": validated_path,
+            }
+
+        # Non-AI paths — keep raising
         if status_code == 429:
             raise ServiceUnavailableError(f"AI Engine rate limit exceeded (429): {error_body}")
         elif status_code in [502, 503, 504]:
@@ -466,9 +537,124 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
             logger.error("Request timed out: %s", ue)
             if idempotency_active:
                 _idempotency_mark_error(ddb, idempotency_table, idempotency_key, "timeout")
+            # Timeout on AI path: return normalized unavailable envelope so ASL can fail closed
+            if validated_path in AI_PAYLOAD_PATHS or validated_path.startswith("/v1/"):
+                return {
+                    "ai_error": True,
+                    "http_status": 0,
+                    "error_code": "ERR_LLM_TIMEOUT",
+                    "retryable": False,
+                    "unavailable": True,
+                    "non_retryable": False,
+                    "message": f"Connection to AI Engine timed out: {ue}",
+                    "path": validated_path,
+                }
             raise TimeoutError(f"Connection to AI Engine timed out: {ue}")
 
         logger.error("Network connection error: %s", ue)
         if idempotency_active:
             _idempotency_mark_error(ddb, idempotency_table, idempotency_key, str(ue)[:200])
+        # Network error on AI path: return normalized unavailable envelope
+        if validated_path in AI_PAYLOAD_PATHS or validated_path.startswith("/v1/"):
+            return {
+                "ai_error": True,
+                "http_status": 0,
+                "error_code": "ERR_SERVICE_DOWN",
+                "retryable": False,
+                "unavailable": True,
+                "non_retryable": False,
+                "message": f"Unable to connect to AI Engine: {ue}",
+                "path": validated_path,
+            }
         raise ServiceUnavailableError(f"Unable to connect to AI Engine: {ue}")
+
+
+def execute_rollback_from_cache(
+    rollback_cache_table: str,
+    anomaly_id: str,
+    correlation_id: str,
+    region: str = "us-east-1",
+) -> Dict[str, Any]:
+    """
+    Execute CDO-owned rollback directly from finops-rollback-cache DynamoDB table.
+
+    This is the independent rollback path — does not depend on AI Engine availability.
+    Called when /v1/verify returns next_action=ROLLBACK.
+
+    Returns:
+        dict with rollback_status (SUCCESS|FAILED), boto3_result, and anomaly_id.
+    """
+    import boto3
+    ddb = boto3.client("dynamodb", region_name=region)
+    try:
+        resp = ddb.get_item(
+            TableName=rollback_cache_table,
+            Key={"anomaly_id": {"S": anomaly_id}},
+            ConsistentRead=True,
+        )
+        item = resp.get("Item")
+        if not item:
+            logger.error("Rollback cache miss for anomaly_id=%s", anomaly_id)
+            return {
+                "rollback_status": "FAILED",
+                "anomaly_id": anomaly_id,
+                "error": "Cache miss — rollback_payload not found in finops-rollback-cache",
+                "boto3_result": None,
+            }
+
+        # boto3_equivalent is stored as a DynamoDB Map attribute
+        boto3_equiv_raw = item.get("boto3_equivalent", {})
+        # boto3_equiv may be a plain dict (from resource API) or DDB typed map
+        if isinstance(boto3_equiv_raw, dict) and "M" in boto3_equiv_raw:
+            # DDB low-level typed
+            import boto3.dynamodb.types as ddbt
+            deserializer = ddbt.TypeDeserializer()
+            boto3_equiv = deserializer.deserialize({"M": boto3_equiv_raw["M"]})
+        elif isinstance(boto3_equiv_raw, dict) and boto3_equiv_raw.get("S"):
+            # Stored as JSON string
+            boto3_equiv = json.loads(boto3_equiv_raw["S"])
+        else:
+            boto3_equiv = boto3_equiv_raw
+
+        service = boto3_equiv.get("service", "")
+        method = boto3_equiv.get("method", "")
+        parameters = boto3_equiv.get("parameters", {})
+
+        if not service or not method:
+            return {
+                "rollback_status": "FAILED",
+                "anomaly_id": anomaly_id,
+                "error": "Invalid boto3_equivalent in rollback cache: missing service or method",
+                "boto3_result": None,
+            }
+
+        client = boto3.client(service, region_name=region)
+        method_fn = getattr(client, method, None)
+        if method_fn is None:
+            return {
+                "rollback_status": "FAILED",
+                "anomaly_id": anomaly_id,
+                "error": f"boto3 {service}.{method} not found",
+                "boto3_result": None,
+            }
+
+        result = method_fn(**parameters)
+        http_code = result.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        logger.info(
+            "Rollback executed successfully: anomaly_id=%s, service=%s, method=%s, status=%d",
+            anomaly_id, service, method, http_code,
+        )
+        return {
+            "rollback_status": "SUCCESS",
+            "anomaly_id": anomaly_id,
+            "boto3_result": {"ResponseMetadata": {"HTTPStatusCode": http_code}},
+        }
+
+    except Exception as exc:
+        logger.error("Rollback execution failed: anomaly_id=%s, error=%s", anomaly_id, exc)
+        return {
+            "rollback_status": "FAILED",
+            "anomaly_id": anomaly_id,
+            "error": str(exc)[:500],
+            "boto3_result": None,
+        }

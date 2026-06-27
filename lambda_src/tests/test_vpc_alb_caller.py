@@ -168,14 +168,19 @@ def test_vpc_alb_caller_health_check_happy_path(mock_urlopen):
 
 @patch("urllib.request.urlopen")
 def test_vpc_alb_caller_timeout(mock_urlopen):
+    """Timeout on AI path (/v1/detect) must return a normalized ERR_LLM_TIMEOUT envelope."""
     mock_urlopen.side_effect = socket.timeout("Connection timed out")
     event_data = valid_ai_event()
-    with pytest.raises(TimeoutError, match="Connection to AI Engine timed out"):
-        handler.handle_request(event_data, None)
+    result = handler.handle_request(event_data, None)
+    assert result.get("ai_error") is True, "Timeout must return normalized AI error envelope"
+    assert result["error_code"] == "ERR_LLM_TIMEOUT"
+    assert result["unavailable"] is True
+    assert result["retryable"] is False
 
 
 @patch("urllib.request.urlopen")
 def test_vpc_alb_caller_http_429(mock_urlopen):
+    """HTTP 429 on AI path must return normalized ERR_RATE_LIMITED envelope (not raise)."""
     fp = MagicMock()
     fp.read.return_value = b"Rate limit exceeded"
     mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -183,12 +188,16 @@ def test_vpc_alb_caller_http_429(mock_urlopen):
         429, "Too Many Requests", {}, fp
     )
     event_data = valid_ai_event()
-    with pytest.raises(ServiceUnavailableError, match="AI Engine rate limit exceeded"):
-        handler.handle_request(event_data, None)
+    result = handler.handle_request(event_data, None)
+    assert result.get("ai_error") is True
+    assert result["http_status"] == 429
+    assert result["error_code"] == "ERR_RATE_LIMITED"
+    assert result["retryable"] is True
 
 
 @patch("urllib.request.urlopen")
 def test_vpc_alb_caller_http_503(mock_urlopen):
+    """HTTP 503 on AI path must return normalized ERR_SERVICE_DOWN envelope (not raise)."""
     fp = MagicMock()
     fp.read.return_value = b"Service Unavailable"
     mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -196,12 +205,16 @@ def test_vpc_alb_caller_http_503(mock_urlopen):
         503, "Service Unavailable", {}, fp
     )
     event_data = valid_ai_event()
-    with pytest.raises(ServiceUnavailableError, match="AI Engine gateway/service unavailable"):
-        handler.handle_request(event_data, None)
+    result = handler.handle_request(event_data, None)
+    assert result.get("ai_error") is True
+    assert result["http_status"] == 503
+    assert result["error_code"] == "ERR_SERVICE_DOWN"
+    assert result["unavailable"] is True
 
 
 @patch("urllib.request.urlopen")
 def test_vpc_alb_caller_http_401(mock_urlopen):
+    """HTTP 401 on AI path must return normalized ERR_AUTH_FAILED envelope (not raise)."""
     fp = MagicMock()
     fp.read.return_value = b"Auth failed"
     mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -209,8 +222,12 @@ def test_vpc_alb_caller_http_401(mock_urlopen):
         401, "Unauthorized", {}, fp
     )
     event_data = valid_ai_event()
-    with pytest.raises(ContractMismatchError, match="AI Engine authentication/authorization failure"):
-        handler.handle_request(event_data, None)
+    result = handler.handle_request(event_data, None)
+    assert result.get("ai_error") is True
+    assert result["http_status"] == 401
+    assert result["error_code"] == "ERR_AUTH_FAILED"
+    assert result["retryable"] is True  # auth failure is retryable (credentials may be refreshed)
+    assert result["non_retryable"] is False
 
 
 @patch("urllib.request.urlopen")
@@ -647,7 +664,9 @@ class TestIdempotencyHotPath:
 
     @patch("urllib.request.urlopen")
     def test_idempotency_http_error_marks_error_state(self, mock_urlopen, monkeypatch):
-        """AI Engine HTTP error must mark idempotency record ERROR without DeleteItem."""
+        """AI Engine HTTP error must mark idempotency record ERROR without DeleteItem.
+        The handler now returns a normalized envelope for AI-path HTTP errors (not raises),
+        but idempotency state must still be marked ERROR."""
         fp = MagicMock()
         fp.read.return_value = b"Service Unavailable"
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -659,9 +678,12 @@ class TestIdempotencyHotPath:
         monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
 
         event = valid_ai_event()
-        with pytest.raises(ServiceUnavailableError):
-            handler.handle_request(event, None)
+        # Handler returns normalized envelope (not raises) for AI-path HTTP errors
+        result = handler.handle_request(event, None)
+        assert result.get("ai_error") is True, "Should return normalized AI error envelope"
+        assert result["error_code"] == "ERR_SERVICE_DOWN"
 
+        # Idempotency record must still be marked ERROR
         ddb.update_item.assert_called_once()
         assert not ddb.delete_item.called
         assert "ERROR" in str(ddb.update_item.call_args)

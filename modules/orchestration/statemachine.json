@@ -741,8 +741,14 @@
           "anomaly_id": {
             "S.$": "$.ai_detect_response.anomalies_list[0].anomaly_id"
           },
+          "correlation_id": {
+            "S.$": "$.correlation_id"
+          },
           "rollback_payload": {
             "S.$": "States.JsonToString($.ai_decide_response.rollback_payload)"
+          },
+          "boto3_equivalent": {
+            "S.$": "States.JsonToString($.ai_decide_response.rollback_payload.boto3_equivalent)"
           }
         }
       },
@@ -1133,7 +1139,7 @@
         }
       },
       "ResultPath": "$.verify_result",
-      "Next": "WritePostActionAudit",
+      "Next": "EvaluateVerifyResult",
       "Retry": [
         {
           "ErrorEquals": [
@@ -1153,6 +1159,243 @@
           ],
           "ResultPath": "$.error",
           "Next": "FailClosed"
+        }
+      ]
+    },
+    "EvaluateVerifyResult": {
+      "Type": "Choice",
+      "Comment": "Branch on verify_result.next_action: DONE|RETRY|ROLLBACK|ESCALATE per contract Section 5.",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.verify_result.next_action",
+              "StringEquals": "DONE"
+            },
+            {
+              "Variable": "$.verify_result.success",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "WritePostActionAudit"
+        },
+        {
+          "Variable": "$.verify_result.next_action",
+          "StringEquals": "ROLLBACK",
+          "Next": "ExecuteRollbackFromCache"
+        },
+        {
+          "Variable": "$.verify_result.next_action",
+          "StringEquals": "ESCALATE",
+          "Next": "WriteEscalationAudit"
+        },
+        {
+          "Variable": "$.verify_result.next_action",
+          "StringEquals": "RETRY",
+          "Next": "WritePostActionAudit"
+        }
+      ],
+      "Default": "WritePostActionAudit"
+    },
+    "ExecuteRollbackFromCache": {
+      "Type": "Task",
+      "Comment": "CDO executes rollback independently from finops-rollback-cache using cached boto3_equivalent. Does not depend on AI Engine availability.",
+      "Resource": "${containment_worker_lambda_arn}",
+      "Parameters": {
+        "operation": "execute_rollback",
+        "rollback_cache_table.$": "$.rollback_cache_table_name",
+        "anomaly_id.$": "$.ai.anomaly_id",
+        "correlation_id.$": "$.correlation_id",
+        "run_id.$": "$.run_id"
+      },
+      "ResultPath": "$.rollback_result",
+      "Next": "NotifyAIRollback",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.rollback_error",
+          "Next": "WriteRollbackAudit"
+        }
+      ]
+    },
+    "NotifyAIRollback": {
+      "Type": "Task",
+      "Comment": "Notify AI Engine of rollback completion via /v1/audit/{audit_id}/rollback (audit completion SQS finops-watch-rollback pattern). This is the audit notification, NOT rollback dispatch.",
+      "Resource": "${vpc_alb_caller_lambda_arn}",
+      "Parameters": {
+        "path.$": "States.Format('/v1/audit/{}/rollback', $.ai.anomaly_id)",
+        "method": "POST",
+        "tenant_id.$": "$.tenant_id",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "States.Format('{}:{}:rollback', $.tenant_id, $.execution_date)",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "body": {
+          "correlation_id.$": "$.correlation_id",
+          "anomaly_id.$": "$.ai.anomaly_id",
+          "rollback_status.$": "$.rollback_result.rollback_status",
+          "executed_at.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.rollback_notify_result",
+      "Next": "WriteRollbackAudit",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.rollback_notify_error",
+          "Next": "WriteRollbackAudit"
+        }
+      ]
+    },
+    "WriteRollbackAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
+        "action": "rollback-executed",
+        "anomaly_id.$": "$.ai.anomaly_id"
+      },
+      "ResultPath": "$.rollback_audit",
+      "Next": "SendRolledBackStatusMessage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendRolledBackStatusMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${rollback_status_queue_url}",
+        "MessageBody": {
+          "run_id.$": "$.run_id",
+          "correlation_id.$": "$.correlation_id",
+          "tenant_id.$": "$.tenant_id",
+          "status": "ROLLED_BACK",
+          "action.$": "$.ai.recommended_containment_mode",
+          "timestamp.$": "$.execution_date"
+        }
+      },
+      "ResultPath": "$.sqs_rollback_result",
+      "Next": "MarkRunComplete"
+    },
+    "WriteEscalationAudit": {
+      "Type": "Task",
+      "Resource": "${audit_writer_lambda_arn}",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "environment.$": "$.environment",
+        "account_policy.$": "$.account_policy",
+        "action": "verify-escalated",
+        "anomaly_id.$": "$.ai.anomaly_id"
+      },
+      "ResultPath": "$.escalation_audit",
+      "Next": "SendEscalationAlert",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SendEscalationAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${engineering_alerts_sns_topic_arn}",
+        "Subject": "FinOps Watch Verify Escalation Alert",
+        "Message.$": "States.Format('Containment verification requires escalation. Run ID: {}, Anomaly: {}, Correlation: {}', $.run_id, $.ai.anomaly_id, $.correlation_id)"
+      },
+      "ResultPath": "$.escalation_alert_result",
+      "Next": "SendPendingStatusMessage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.escalation_alert_error",
+          "Next": "SendPendingStatusMessage"
         }
       ]
     },

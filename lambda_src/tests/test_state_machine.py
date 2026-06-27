@@ -52,6 +52,13 @@ def check_asl_file(asl_path, is_template=True):
         "FormatDecideResult",
         "EvaluateContainmentPolicy",
         "ReportVerifyResult",
+        "EvaluateVerifyResult",
+        "ExecuteRollbackFromCache",
+        "NotifyAIRollback",
+        "WriteRollbackAudit",
+        "SendRolledBackStatusMessage",
+        "WriteEscalationAudit",
+        "SendEscalationAlert",
         "SendAppliedStatusMessage",
         "SendDeniedStatusMessage",
         "SendPendingStatusMessage",
@@ -234,6 +241,47 @@ def check_asl_file(asl_path, is_template=True):
     assert states["InvokeDecide"]["Parameters"]["body"]["idempotency_key.$"] == "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)"
     assert states["ReportVerifyResult"]["Parameters"]["idempotency_key.$"] == "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)"
     assert states["ReportVerifyResult"]["Parameters"]["body"]["idempotency_key.$"] == "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)"
+
+    # Assert /v1/verify response branches on next_action: DONE|RETRY|ROLLBACK|ESCALATE (contract Section 5)
+    assert states["ReportVerifyResult"]["Next"] == "EvaluateVerifyResult", \
+        "ReportVerifyResult must route to EvaluateVerifyResult choice state"
+    assert states["EvaluateVerifyResult"]["Type"] == "Choice"
+    verify_choices = states["EvaluateVerifyResult"]["Choices"]
+    found_done = found_rollback = found_escalate = found_retry = False
+    for vc in verify_choices:
+        if vc.get("Next") == "WritePostActionAudit":
+            # DONE branch (either via Or with next_action=DONE or success=true)
+            if "Or" in vc or vc.get("Variable") == "$.verify_result.next_action":
+                found_done = True
+        if vc.get("Variable") == "$.verify_result.next_action" and vc.get("StringEquals") == "ROLLBACK" and vc.get("Next") == "ExecuteRollbackFromCache":
+            found_rollback = True
+        if vc.get("Variable") == "$.verify_result.next_action" and vc.get("StringEquals") == "ESCALATE" and vc.get("Next") == "WriteEscalationAudit":
+            found_escalate = True
+        if vc.get("Variable") == "$.verify_result.next_action" and vc.get("StringEquals") == "RETRY" and vc.get("Next") == "WritePostActionAudit":
+            found_retry = True
+    assert found_done, "EvaluateVerifyResult must have a DONE branch to WritePostActionAudit"
+    assert found_rollback, "EvaluateVerifyResult must have ROLLBACK branch to ExecuteRollbackFromCache"
+    assert found_escalate, "EvaluateVerifyResult must have ESCALATE branch to WriteEscalationAudit"
+    assert found_retry, "EvaluateVerifyResult must have RETRY branch to WritePostActionAudit"
+
+    # Assert rollback path: ExecuteRollbackFromCache → NotifyAIRollback → WriteRollbackAudit → SendRolledBackStatusMessage
+    assert states["ExecuteRollbackFromCache"]["Next"] == "NotifyAIRollback", \
+        "ExecuteRollbackFromCache must route to NotifyAIRollback"
+    assert states["NotifyAIRollback"]["Next"] == "WriteRollbackAudit", \
+        "NotifyAIRollback must route to WriteRollbackAudit"
+    assert states["WriteRollbackAudit"]["Next"] == "SendRolledBackStatusMessage"
+    assert states["SendRolledBackStatusMessage"]["Parameters"]["MessageBody"]["status"] == "ROLLED_BACK"
+
+    # Assert escalation path: WriteEscalationAudit → SendEscalationAlert → SendPendingStatusMessage
+    assert states["WriteEscalationAudit"]["Next"] == "SendEscalationAlert"
+    assert states["SendEscalationAlert"]["Next"] == "SendPendingStatusMessage"
+
+    # Assert CacheRollbackPayload item includes correlation_id and boto3_equivalent
+    cache_item = states["CacheRollbackPayload"]["Parameters"]["Item"]
+    assert "anomaly_id" in cache_item, "CacheRollbackPayload item must include anomaly_id"
+    assert "correlation_id" in cache_item, "CacheRollbackPayload item must include correlation_id"
+    assert "boto3_equivalent" in cache_item, "CacheRollbackPayload item must include boto3_equivalent"
+    assert "rollback_payload" in cache_item, "CacheRollbackPayload item must include rollback_payload"
 
 def test_state_machine_asl_contract():
     asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")

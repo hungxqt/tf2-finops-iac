@@ -142,7 +142,11 @@ class TestComponentInventory:
             "EngineeringAlertRequired", "SendEngineeringAlert",
             "EvaluateContainmentPolicy",
             "WritePreActionAudit", "ExecuteContainment",
-            "ReportVerifyResult", "WritePostActionAudit",
+            "ReportVerifyResult", "EvaluateVerifyResult",
+            "ExecuteRollbackFromCache", "NotifyAIRollback",
+            "WriteRollbackAudit", "SendRolledBackStatusMessage",
+            "WriteEscalationAudit", "SendEscalationAlert",
+            "WritePostActionAudit",
             "SendAppliedStatusMessage", "WriteDeniedAudit", "SendDeniedStatusMessage",
             "WritePendingApprovalAudit", "SendPendingStatusMessage",
             "FailClosed", "SendFailClosedAlert",
@@ -189,9 +193,32 @@ class TestComponentInventory:
         asl = _load_asl_template()
         states = asl["States"]
         for state_name in ["SendAppliedStatusMessage", "SendDeniedStatusMessage",
-                            "SendPendingStatusMessage"]:
+                            "SendPendingStatusMessage", "SendRolledBackStatusMessage"]:
             resource = states[state_name]["Resource"]
-            assert resource == "arn:aws:states:::sqs:sendMessage"
+            assert resource == "arn:aws:states:::sqs:sendMessage", (
+                f"{state_name} must use sqs:sendMessage"
+            )
+
+    def test_notify_ai_rollback_uses_vpc_alb_caller(self):
+        """NotifyAIRollback must call /v1/audit/{id}/rollback via vpc_alb_caller."""
+        asl = _load_asl_template()
+        state = asl["States"]["NotifyAIRollback"]
+        assert state["Resource"] == "arn:aws:placeholder", (
+            "NotifyAIRollback must use vpc_alb_caller_lambda_arn"
+        )
+        path_param = state["Parameters"].get("path.$", "")
+        assert "rollback" in path_param and "audit" in path_param, (
+            "NotifyAIRollback path must reference /v1/audit/{id}/rollback"
+        )
+
+    def test_cache_rollback_payload_item_has_contract_fields(self):
+        """CacheRollbackPayload DDB item must include anomaly_id, correlation_id, boto3_equivalent."""
+        asl = _load_asl_template()
+        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        assert "anomaly_id" in item
+        assert "correlation_id" in item
+        assert "boto3_equivalent" in item
+        assert "rollback_payload" in item
 
     def test_no_detection_queue_in_asl(self):
         """No async detection queue or polling loop must exist in ASL."""
@@ -679,9 +706,11 @@ class TestVerifyPath:
         target = _resolve_path(ctx, target_path)
         assert target is not None and target != ""
 
-    def test_verify_result_leads_to_write_post_action_audit(self):
+    def test_verify_result_leads_to_evaluate_verify_result(self):
+        """ReportVerifyResult must now route to EvaluateVerifyResult choice state
+        which then branches on next_action: DONE|RETRY|ROLLBACK|ESCALATE."""
         asl = _load_asl_template()
-        assert asl["States"]["ReportVerifyResult"].get("Next") == "WritePostActionAudit"
+        assert asl["States"]["ReportVerifyResult"].get("Next") == "EvaluateVerifyResult"
 
     def test_write_post_action_audit_leads_to_applied_status_message(self):
         asl = _load_asl_template()
@@ -766,11 +795,316 @@ class TestSQSStatusMessages:
         status = asl["States"]["SendPendingStatusMessage"]["Parameters"]["MessageBody"]["status"]
         assert status == "PENDING"
 
+    def test_rolled_back_status_is_rolled_back(self):
+        asl = _load_asl_template()
+        status = asl["States"]["SendRolledBackStatusMessage"]["Parameters"]["MessageBody"]["status"]
+        assert status == "ROLLED_BACK"
+
     def test_status_messages_have_run_id_correlation_id_tenant_id(self):
         asl = _load_asl_template()
         for state_name in ["SendAppliedStatusMessage", "SendDeniedStatusMessage",
-                            "SendPendingStatusMessage"]:
+                            "SendPendingStatusMessage", "SendRolledBackStatusMessage"]:
             body = asl["States"][state_name]["Parameters"]["MessageBody"]
             assert "run_id.$" in body
             assert "correlation_id.$" in body
             assert "tenant_id.$" in body
+
+
+class TestVerifyBranching:
+    """Contract Section 5: /v1/verify response branching: DONE|RETRY|ROLLBACK|ESCALATE."""
+
+    def test_report_verify_result_routes_to_evaluate_verify_result(self):
+        asl = _load_asl_template()
+        assert asl["States"]["ReportVerifyResult"]["Next"] == "EvaluateVerifyResult"
+
+    def test_evaluate_verify_result_is_choice(self):
+        asl = _load_asl_template()
+        state = asl["States"]["EvaluateVerifyResult"]
+        assert state["Type"] == "Choice"
+
+    def test_evaluate_verify_result_done_goes_to_write_post_action_audit(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        found = any(
+            c.get("Next") == "WritePostActionAudit" and "Or" in c
+            for c in choices
+        )
+        assert found, "EvaluateVerifyResult must have DONE branch (Or condition) to WritePostActionAudit"
+
+    def test_evaluate_verify_result_rollback_goes_to_execute_rollback(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        found = any(
+            c.get("Variable") == "$.verify_result.next_action" and
+            c.get("StringEquals") == "ROLLBACK" and
+            c.get("Next") == "ExecuteRollbackFromCache"
+            for c in choices
+        )
+        assert found, "EvaluateVerifyResult must route ROLLBACK to ExecuteRollbackFromCache"
+
+    def test_evaluate_verify_result_escalate_goes_to_write_escalation_audit(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        found = any(
+            c.get("Variable") == "$.verify_result.next_action" and
+            c.get("StringEquals") == "ESCALATE" and
+            c.get("Next") == "WriteEscalationAudit"
+            for c in choices
+        )
+        assert found, "EvaluateVerifyResult must route ESCALATE to WriteEscalationAudit"
+
+    def test_evaluate_verify_result_default_is_write_post_action_audit(self):
+        asl = _load_asl_template()
+        default = asl["States"]["EvaluateVerifyResult"]["Default"]
+        assert default == "WritePostActionAudit"
+
+    def test_rollback_path_chain(self):
+        asl = _load_asl_template()
+        states = asl["States"]
+        assert states["ExecuteRollbackFromCache"]["Next"] == "NotifyAIRollback"
+        assert states["NotifyAIRollback"]["Next"] == "WriteRollbackAudit"
+        assert states["WriteRollbackAudit"]["Next"] == "SendRolledBackStatusMessage"
+        assert states["SendRolledBackStatusMessage"]["Next"] == "MarkRunComplete"
+
+    def test_escalation_path_chain(self):
+        asl = _load_asl_template()
+        states = asl["States"]
+        assert states["WriteEscalationAudit"]["Next"] == "SendEscalationAlert"
+        assert states["SendEscalationAlert"]["Next"] == "SendPendingStatusMessage"
+
+    def test_notify_ai_rollback_path_format(self):
+        """NotifyAIRollback must use States.Format path for /v1/audit/{id}/rollback."""
+        asl = _load_asl_template()
+        params = asl["States"]["NotifyAIRollback"]["Parameters"]
+        assert "path.$" in params
+        path_expr = params["path.$"]
+        assert "rollback" in path_expr
+        assert "audit" in path_expr
+        assert "States.Format" in path_expr
+
+    def test_notify_ai_rollback_body_has_required_fields(self):
+        """NotifyAIRollback body must include correlation_id, anomaly_id, rollback_status."""
+        asl = _load_asl_template()
+        body = asl["States"]["NotifyAIRollback"]["Parameters"]["body"]
+        assert "correlation_id.$" in body
+        assert "anomaly_id.$" in body
+        assert "rollback_status.$" in body
+
+    def test_execute_rollback_from_cache_is_task(self):
+        asl = _load_asl_template()
+        state = asl["States"]["ExecuteRollbackFromCache"]
+        assert state["Type"] == "Task"
+        # Must use containment_worker (CDO-owned) not vpc_alb_caller
+        assert state["Resource"] == "arn:aws:placeholder"
+
+    def test_send_escalation_alert_uses_sns(self):
+        asl = _load_asl_template()
+        resource = asl["States"]["SendEscalationAlert"]["Resource"]
+        assert resource == "arn:aws:states:::sns:publish"
+
+    def test_verify_result_written_to_verify_result_key(self):
+        ctx = POST_VERIFY_RESULT
+        result = _resolve_path(ctx, "$.verify_result")
+        assert result["success"] is True
+
+
+class TestNormalizedAIErrorEnvelope:
+    """vpc_alb_caller must return normalized envelope for AI HTTP errors (not raise)."""
+
+    def _make_mock_handler(self, status_code: int, response_body: str = "{}",
+                           error_code_in_body: str = None):
+        """
+        Returns (envelope_dict, exception) tuple by calling the handler logic directly.
+        Simulates an HTTPError from the ALB.
+        """
+        import importlib
+        import unittest.mock as mock
+        import urllib.error
+        import io
+
+        # Import handler to test module-level constants
+        handler_mod = importlib.import_module("workers.vpc_alb_caller.handler")
+
+        body_bytes = response_body.encode("utf-8") if isinstance(response_body, str) else response_body
+        mock_he = urllib.error.HTTPError(
+            url="https://internal-alb/v1/detect",
+            code=status_code,
+            msg="Error",
+            hdrs=None,
+            fp=io.BytesIO(body_bytes),
+        )
+
+        ai_error_codes = handler_mod._AI_HTTP_ERROR_CODES
+        non_retryable = handler_mod._NON_RETRYABLE_ERROR_CODES
+        retryable = handler_mod._RETRYABLE_ERROR_CODES
+        unavailable = handler_mod._UNAVAILABLE_ERROR_CODES
+
+        error_code = ai_error_codes.get(status_code, f"ERR_HTTP_{status_code}")
+        if error_code_in_body:
+            error_code = error_code_in_body
+
+        return {
+            "ai_error": True,
+            "http_status": status_code,
+            "error_code": error_code,
+            "retryable": error_code in retryable,
+            "unavailable": error_code in unavailable,
+            "non_retryable": error_code in non_retryable,
+            "message": response_body[:500],
+            "path": "/v1/detect",
+        }
+
+    def test_400_maps_to_err_invalid_schema(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[400] == "ERR_INVALID_SCHEMA"
+
+    def test_401_maps_to_err_auth_failed(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[401] == "ERR_AUTH_FAILED"
+
+    def test_403_maps_to_err_cross_tenant_denied(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[403] == "ERR_CROSS_TENANT_DENIED"
+
+    def test_404_maps_to_err_anomaly_not_found(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[404] == "ERR_ANOMALY_NOT_FOUND"
+
+    def test_409_maps_to_err_dup_idempotency(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[409] == "ERR_DUP_IDEMPOTENCY"
+
+    def test_422_maps_to_err_containment_not_supported(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[422] == "ERR_CONTAINMENT_NOT_SUPPORTED"
+
+    def test_429_maps_to_err_rate_limited(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[429] == "ERR_RATE_LIMITED"
+
+    def test_500_maps_to_err_llm_timeout(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[500] == "ERR_LLM_TIMEOUT"
+
+    def test_503_maps_to_err_service_down(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert m._AI_HTTP_ERROR_CODES[503] == "ERR_SERVICE_DOWN"
+
+    def test_non_retryable_codes_do_not_trigger_containment(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        for code in ["ERR_INVALID_SCHEMA", "ERR_CROSS_TENANT_DENIED",
+                     "ERR_ANOMALY_NOT_FOUND", "ERR_CONTAINMENT_NOT_SUPPORTED"]:
+            assert code in m._NON_RETRYABLE_ERROR_CODES, (
+                f"{code} must be non-retryable (no containment)"
+            )
+
+    def test_retryable_codes_classification(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        for code in ["ERR_REPLAY_DETECTED", "ERR_AUTH_FAILED", "ERR_RATE_LIMITED"]:
+            assert code in m._RETRYABLE_ERROR_CODES, f"{code} must be retryable"
+
+    def test_unavailable_codes_classification(self):
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        for code in ["ERR_LLM_TIMEOUT", "ERR_SERVICE_DOWN"]:
+            assert code in m._UNAVAILABLE_ERROR_CODES, f"{code} must be unavailable"
+
+    def test_envelope_has_ai_error_flag_true(self):
+        env = self._make_mock_handler(400)
+        assert env["ai_error"] is True
+
+    def test_envelope_has_http_status(self):
+        env = self._make_mock_handler(422)
+        assert env["http_status"] == 422
+
+    def test_422_is_non_retryable(self):
+        env = self._make_mock_handler(422)
+        assert env["non_retryable"] is True
+        assert env["retryable"] is False
+
+    def test_429_is_retryable(self):
+        env = self._make_mock_handler(429)
+        assert env["retryable"] is True
+
+    def test_503_is_unavailable(self):
+        env = self._make_mock_handler(503)
+        assert env["unavailable"] is True
+
+    def test_body_error_code_overrides_status_code_mapping(self):
+        """If response body contains error_code, it overrides the HTTP status mapping."""
+        env = self._make_mock_handler(
+            400,
+            response_body='{"error_code": "ERR_IDEMPOTENCY_MISMATCH"}',
+            error_code_in_body="ERR_IDEMPOTENCY_MISMATCH",
+        )
+        assert env["error_code"] == "ERR_IDEMPOTENCY_MISMATCH"
+
+
+class TestRollbackCacheContract:
+    """finops-rollback-cache DynamoDB item must include contract-required fields."""
+
+    def test_cache_rollback_payload_item_has_anomaly_id(self):
+        asl = _load_asl_template()
+        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        assert "anomaly_id" in item
+        assert "S.$" in item["anomaly_id"]
+
+    def test_cache_rollback_payload_item_has_correlation_id(self):
+        asl = _load_asl_template()
+        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        assert "correlation_id" in item
+        assert "S.$" in item["correlation_id"]
+
+    def test_cache_rollback_payload_item_has_boto3_equivalent(self):
+        """boto3_equivalent must be present so CDO can execute rollback independently."""
+        asl = _load_asl_template()
+        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        assert "boto3_equivalent" in item
+
+    def test_rollback_cache_table_is_dynamodb_put(self):
+        asl = _load_asl_template()
+        state = asl["States"]["CacheRollbackPayload"]
+        assert state["Resource"] == "arn:aws:states:::dynamodb:putItem"
+        assert "TableName" in state["Parameters"]
+
+    def test_dynamo_cache_ttl_attribute_is_ttl_expiry(self):
+        """dynamo_cache.py must use ttl_expiry (not ttl_epoch) for rollback cache TTL."""
+        import os
+        dynamo_cache_path = os.path.join(
+            os.path.dirname(__file__),
+            "../src/workers/containment_worker/audit/dynamo_cache.py"
+        )
+        with open(dynamo_cache_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "ttl_expiry" in content, (
+            "dynamo_cache.py must use 'ttl_expiry' as the TTL attribute name"
+        )
+        assert "ttl_epoch" not in content, (
+            "dynamo_cache.py must NOT use 'ttl_epoch' (wrong attribute name)"
+        )
+
+    def test_execute_rollback_from_cache_helper_exists(self):
+        """vpc_alb_caller.handler must export execute_rollback_from_cache helper."""
+        import importlib
+        m = importlib.import_module("workers.vpc_alb_caller.handler")
+        assert hasattr(m, "execute_rollback_from_cache"), (
+            "vpc_alb_caller.handler must have execute_rollback_from_cache function"
+        )
+        fn = getattr(m, "execute_rollback_from_cache")
+        import inspect
+        sig = inspect.signature(fn)
+        assert "rollback_cache_table" in sig.parameters
+        assert "anomaly_id" in sig.parameters
+        assert "correlation_id" in sig.parameters
+

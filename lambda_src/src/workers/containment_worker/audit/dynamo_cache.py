@@ -108,14 +108,14 @@ def cache_rollback_payload(
     dynamodb = session.resource("dynamodb")
     table = dynamodb.Table(rollback_cache_table)
 
-    ttl_epoch = int(time.time()) + (ttl_days * 86400)
+    ttl_expiry = int(time.time()) + (ttl_days * 86400)
 
     item = {
         "anomaly_id": anomaly_id,
         "correlation_id": correlation_id,
         "boto3_equivalent": rollback_payload,
         "cached_at": datetime.now(tz=timezone.utc).isoformat(),
-        "ttl_epoch": ttl_epoch,
+        "ttl_expiry": ttl_expiry,
     }
 
     try:
