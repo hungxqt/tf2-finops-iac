@@ -109,8 +109,8 @@ class Response:
             severity=d.get("severity"),
             # khanh fix: FormatDecideResult trong statemachine gửi key "confidence_score", không phải "confidence"
             confidence=d.get("confidence") or d.get("confidence_score"),
-            execution_mode=d.get("execution_mode"),
-            containment_status=d.get("containment_status"),
+            execution_mode=d.get("execution_mode") or d.get("execution_mode_applied"),
+            containment_status=d.get("containment_status") or d.get("status"),
             audit_id=d.get("audit_id"),
             audit_uri=d.get("audit_uri"),
             route_target=d.get("route_target"),
