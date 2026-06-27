@@ -353,3 +353,63 @@ Fields: boto3_equivalent, ttl_epoch (TTL 90 ngày)
 
 ## 9. Bảo trì tài liệu hướng dẫn
 Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.
+
+
+---
+
+## 10. Xác Minh Quy Trình Step Functions
+
+Bộ kiểm tra `test_step_function_payload_contract.py` cung cấp **lớp xác minh cục bộ, không cần AWS** chứng minh:
+
+- ASL có đủ mọi state yêu cầu (kiểm tra 44+ state).
+- Không có state polling phát hiện bất thường async lỗi thời, hàng đợi detection, hoặc tham chiếu SQS detection.
+- Mọi state Task/Pass đều có thể giải quyết các tham chiếu JSONPath của mình dựa trên dữ liệu fixture thực tế từ đầu ra của state trước.
+- Hợp đồng telemetry được tôn trọng (mặc định S3_POINTER, CE fallback, cổng chất lượng).
+- Hình dạng lời gọi /v1/detect, /v1/decide, /v1/verify khớp với hợp đồng AI API đang hoạt động.
+- Các chế độ containment prod+destructive bị từ chối; các đường dẫn bắt buộc dry-run bị từ chối.
+- Chỉ có hàng đợi SQS `rollback_status_queue` tồn tại (không có hàng đợi detection).
+- Chuỗi audit fail-closed và CUR-delay-exceeded mang đầy đủ các trường ngữ cảnh yêu cầu.
+
+### 10.1 Chạy Chỉ Kiểm Tra Payload Contract
+
+```powershell
+Push-Location lambda_src
+python -m pytest tests/test_step_function_payload_contract.py -v
+Pop-Location
+```
+
+### 10.2 Chạy Tất Cả Kiểm Tra Xác Minh Step Functions
+
+```powershell
+Push-Location lambda_src
+python -m pytest -q tests/test_step_function_payload_contract.py tests/test_state_machine.py tests/test_step_function_lambda_coverage.py tests/test_vpc_alb_caller.py
+Pop-Location
+```
+
+### 10.3 Chạy Toàn Bộ Suite
+
+```powershell
+Push-Location lambda_src
+python -m pytest
+Pop-Location
+```
+
+Kết quả mong đợi: **tất cả kiểm tra đều vượt qua, không có lỗi**.
+
+### 10.4 Tài Liệu Tham Khảo Fixture
+
+Các fixture xác định có trong [`lambda_src/tests/fixtures/step_function_payloads.py`](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/fixtures/step_function_payloads.py).
+Mỗi fixture là một dict Python thuần túy đại diện cho ngữ cảnh thực thi Step Functions (`$`) tại một ranh giới quy trình cụ thể.
+Thêm một state mới hoặc thay đổi Parameters/ResultPath của một state hiện có yêu cầu cập nhật fixture tương ứng và thêm/cập nhật bài kiểm tra liên quan.
+
+### 10.5 Bộ Giải Quyết JSONPath Nhẹ
+
+Helper `_resolve_path(ctx, path)` trong file kiểm tra giải quyết:
+
+| Biểu Thức | Ý Nghĩa |
+|-----------|---------|
+| `"$"` | Toàn bộ dict context |
+| `"$.a.b.c"` | Duyệt key lồng nhau |
+| `"$.anomalies_list[0].anomaly_id"` | Chỉ số mảng 0, sau đó key |
+
+Điều này đủ cho tất cả `Parameters` (JSONPath `key.$`) và biểu thức biến `Choice` được sử dụng bởi state machine này, không cần runtime ASL đầy đủ.

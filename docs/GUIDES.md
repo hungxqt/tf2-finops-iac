@@ -354,4 +354,62 @@ Fields: boto3_equivalent, ttl_epoch (90-day TTL)
 ## 9. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
 
+---
+
+## 10. Step Functions Workflow Verification
+
+The `test_step_function_payload_contract.py` suite provides a **repo-local, no-AWS verification layer** that proves:
+
+- The ASL has every required state (44+ states checked).
+- No stale async-detection polling states, detection queues, or detection SQS references exist.
+- Every Task/Pass state can resolve its JSONPath references against real fixture data from the preceding state's output.
+- The telemetry contract is honoured (S3_POINTER default, CE fallback, quality gates).
+- The /v1/detect, /v1/decide, /v1/verify call shapes match the active AI API contract.
+- Prod+destructive containment modes are denied; dry-run forced paths are denied.
+- Only `rollback_status_queue` SQS queue exists (no detection queue).
+- Fail-closed and CUR-delay-exceeded audit chains carry all required context fields.
+
+### 10.1 Run Payload Contract Tests Only
+
+```powershell
+Push-Location lambda_src
+python -m pytest tests/test_step_function_payload_contract.py -v
+Pop-Location
+```
+
+### 10.2 Run All Step Functions Verification Tests
+
+```powershell
+Push-Location lambda_src
+python -m pytest -q tests/test_step_function_payload_contract.py tests/test_state_machine.py tests/test_step_function_lambda_coverage.py tests/test_vpc_alb_caller.py
+Pop-Location
+```
+
+### 10.3 Run the Full Suite
+
+```powershell
+Push-Location lambda_src
+python -m pytest
+Pop-Location
+```
+
+Expected result: **all tests pass, zero failures**.
+
+### 10.4 Fixture Reference
+
+Deterministic fixtures are in [`lambda_src/tests/fixtures/step_function_payloads.py`](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/fixtures/step_function_payloads.py).
+Each fixture is a plain Python dict representing the Step Functions execution context (`$`) at a specific workflow boundary.
+Adding a new state or changing an existing state's Parameters/ResultPath requires updating the matching fixture and adding/updating the relevant test.
+
+### 10.5 Lightweight JSONPath Resolver
+
+The `_resolve_path(ctx, path)` helper in the test file resolves:
+
+| Expression | Meaning |
+|-----------|---------|
+| `"$"` | Entire context dict |
+| `"$.a.b.c"` | Nested key traversal |
+| `"$.anomalies_list[0].anomaly_id"` | Array index 0, then key |
+
+This is sufficient for all `Parameters` (JSONPath `key.$`) and `Choice` variable expressions used by this state machine, without a full ASL runtime.
 
