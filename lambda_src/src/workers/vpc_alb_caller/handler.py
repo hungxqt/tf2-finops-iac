@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import logging
 import hashlib
 import urllib.request
@@ -42,6 +43,14 @@ AI_PAYLOAD_PATHS = {"/v1/detect", "/v1/decide", "/v1/verify"}
 AI_IDEMPOTENCY_KEY_PATTERN = re.compile(
     r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):(daily|adhoc|decide|verify)$"
 )
+
+# TTL for idempotency records: 24 hours in seconds
+_IDEMPOTENCY_TTL_SECONDS = 24 * 3600
+
+# Sentinel string that marks IN_PROGRESS entries where response_cache is not yet set.
+# Must not be valid JSON so it can never collide with a real API response.
+_NO_CACHE = "__NO_CACHE__"
+
 
 def sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     """Sanitize headers for secure logging (redacts Authorization and Security Tokens)."""
@@ -125,10 +134,156 @@ def validate_ai_context(path: str, tenant_id: str, correlation_id: str, idempote
             if key in body and str(body[key]) != str(expected):
                 raise InvalidInputError(f"body.{key} must match top-level {key}")
 
+
+# ---------------------------------------------------------------------------
+# Idempotency helpers (DynamoDB hot path)
+# ---------------------------------------------------------------------------
+
+def _get_ddb_client():
+    """Return a boto3 DynamoDB client, or None if not configured."""
+    table_name = os.environ.get("IDEMPOTENCY_TABLE_NAME", "")
+    if not table_name:
+        return None, ""
+    try:
+        import boto3
+        client = boto3.client("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+        return client, table_name
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed to initialise DynamoDB client for idempotency: %s", exc)
+        return None, ""
+
+
+def _idempotency_check_or_claim(
+    ddb, table_name: str, idempotency_key: str, payload_sha256: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Attempt to claim an idempotency slot for this (idempotency_key, payload_sha256) pair.
+
+    Returns:
+        None  – slot claimed successfully (caller must execute the AI request).
+        dict  – a cached response dict from a prior completed call with the same hash.
+
+    Raises:
+        ContractMismatchError – hash mismatch on an existing IN_PROGRESS or COMPLETED record.
+        ServiceUnavailableError – concurrent IN_PROGRESS detected for same key.
+    """
+    now = int(time.time())
+    ttl_expiry = now + _IDEMPOTENCY_TTL_SECONDS
+    created_at = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Try conditional PutItem to claim the slot (only if item does not exist).
+    try:
+        ddb.put_item(
+            TableName=table_name,
+            Item={
+                "idempotency_key": {"S": idempotency_key},
+                "status": {"S": "IN_PROGRESS"},
+                "payload_sha256": {"S": payload_sha256},
+                "created_at": {"S": created_at},
+                "ttl_expiry": {"N": str(ttl_expiry)},
+                "response_cache": {"S": _NO_CACHE},
+            },
+            ConditionExpression="attribute_not_exists(idempotency_key)",
+        )
+        logger.info("Idempotency slot claimed for key=%s", idempotency_key)
+        return None  # slot acquired; caller proceeds with HTTP request
+
+    except ddb.exceptions.ConditionalCheckFailedException:
+        pass  # slot already exists – read it
+
+    # Read the existing record.
+    resp = ddb.get_item(
+        TableName=table_name,
+        Key={"idempotency_key": {"S": idempotency_key}},
+        ConsistentRead=True,
+    )
+    item = resp.get("Item")
+    if not item:
+        # Race: item expired between put and get – treat as fresh slot.
+        logger.warning("Idempotency item disappeared after conflict; proceeding as fresh call.")
+        return None
+
+    existing_hash = item.get("payload_sha256", {}).get("S", "")
+    existing_status = item.get("status", {}).get("S", "")
+    response_cache_raw = item.get("response_cache", {}).get("S", _NO_CACHE)
+
+    if existing_hash and existing_hash != payload_sha256:
+        logger.error(
+            "Idempotency hash mismatch for key=%s: stored=%s, incoming=%s",
+            idempotency_key, existing_hash, payload_sha256,
+        )
+        raise ContractMismatchError(
+            f"Idempotency key conflict: payload hash mismatch for key {idempotency_key!r}. "
+            "Fail-closed to prevent cross-payload collision."
+        )
+
+    if existing_status == "IN_PROGRESS":
+        logger.warning("Concurrent IN_PROGRESS detected for key=%s; failing closed.", idempotency_key)
+        raise ServiceUnavailableError(
+            f"Idempotency key {idempotency_key!r} is currently IN_PROGRESS. "
+            "Concurrent call rejected to preserve idempotency."
+        )
+
+    if existing_status == "COMPLETED" and response_cache_raw and response_cache_raw != _NO_CACHE:
+        logger.info("Returning cached COMPLETED response for key=%s", idempotency_key)
+        try:
+            return json.loads(response_cache_raw)
+        except json.JSONDecodeError:
+            logger.warning("Cached response for key=%s is not valid JSON; re-executing.", idempotency_key)
+            return None
+
+    # ERROR or unknown state – re-execute (fail-safe: don't block recovery).
+    logger.info("Idempotency record for key=%s has status=%s; re-executing.", idempotency_key, existing_status)
+    return None
+
+
+def _idempotency_mark_completed(
+    ddb, table_name: str, idempotency_key: str, response: Dict[str, Any]
+) -> None:
+    """Update the idempotency record to COMPLETED with a sanitized response cache."""
+    try:
+        # Sanitize: keep only safe scalar fields from AI response (avoid leaking PII-like data).
+        safe_fields = {k: v for k, v in response.items() if k not in ("data", "raw_payload")}
+        cache_str = json.dumps(safe_fields)
+        ddb.update_item(
+            TableName=table_name,
+            Key={"idempotency_key": {"S": idempotency_key}},
+            UpdateExpression="SET #s = :s, response_cache = :r",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": {"S": "COMPLETED"},
+                ":r": {"S": cache_str},
+            },
+        )
+    except Exception as exc:  # pragma: no cover – best-effort
+        logger.warning("Failed to mark idempotency COMPLETED for key=%s: %s", idempotency_key, exc)
+
+
+def _idempotency_mark_error(
+    ddb, table_name: str, idempotency_key: str, error_msg: str
+) -> None:
+    """Update the idempotency record to ERROR with a sanitized error cache."""
+    try:
+        error_cache = json.dumps({"error": error_msg[:500]})  # bounded, no stack traces
+        ddb.update_item(
+            TableName=table_name,
+            Key={"idempotency_key": {"S": idempotency_key}},
+            UpdateExpression="SET #s = :s, response_cache = :r",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": {"S": "ERROR"},
+                ":r": {"S": error_cache},
+            },
+        )
+    except Exception as exc:  # pragma: no cover – best-effort
+        logger.warning("Failed to mark idempotency ERROR for key=%s: %s", idempotency_key, exc)
+
+
 def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Main handler for VpcAlbCallerLambda.
     Invokes the private internal ALB for AI Engine requests using SigV4 signing.
+    Enforces contract idempotency for /v1/detect, /v1/decide, and /v1/verify.
     """
     # Sanitize and log incoming event metadata, avoiding body logging if sensitive
     sanitized_event = {k: v for k, v in event_data.items() if k != "body"}
@@ -198,7 +353,7 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if not correlation_id:
             raise InvalidInputError("correlation_id parameter is required for AI API requests")
         validate_ai_context(validated_path, tenant_id, correlation_id, idempotency_key, body)
-        
+
         headers.update({
             "X-Tenant-Id": tenant_id,
             "X-Idempotency-Key": idempotency_key,
@@ -208,10 +363,25 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "X-Dry-Run-Mode": dry_run_header,
         })
 
-    # 5. Sign the request using AWS SigV4
+    # 5. Contract idempotency enforcement for AI payload paths
+    ddb, idempotency_table = _get_ddb_client()
+    idempotency_active = (
+        ddb is not None
+        and idempotency_table
+        and validated_path in AI_PAYLOAD_PATHS
+        and idempotency_key
+    )
+
+    if idempotency_active:
+        cached = _idempotency_check_or_claim(ddb, idempotency_table, idempotency_key, payload_hash)
+        if cached is not None:
+            logger.info("Idempotency cache hit for key=%s; returning cached response.", idempotency_key)
+            return cached
+
+    # 6. Sign the request using AWS SigV4
     session = botocore.session.get_session()
     credentials = session.get_credentials()
-    
+
     signed_headers = headers.copy()
     if credentials:
         # Use botocore's internal tools to construct and sign the request
@@ -222,7 +392,7 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     else:
         logger.warning("AWS Credentials not found. Skipping SigV4 signing (local/testing fallback).")
 
-    # 6. Execute the HTTP request using urllib
+    # 7. Execute the HTTP request using urllib
     req = urllib.request.Request(
         url=final_url,
         data=body_bytes if method in ["POST", "PUT", "PATCH"] else None,
@@ -240,16 +410,26 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
             try:
                 resp_json = json.loads(response_body)
-                return resp_json
             except json.JSONDecodeError as jde:
                 logger.error("JSON decode error on response: %s", jde)
+                if idempotency_active:
+                    _idempotency_mark_error(ddb, idempotency_table, idempotency_key, str(jde))
                 raise ContractMismatchError(f"Response is not valid JSON: {jde}")
+
+            if idempotency_active:
+                _idempotency_mark_completed(ddb, idempotency_table, idempotency_key, resp_json)
+
+            return resp_json
 
     except urllib.error.HTTPError as he:
         status_code = he.code
         error_body = he.read().decode("utf-8")
         logger.error("HTTP error from ALB: status_code=%d, body=%s", status_code, error_body)
-        
+
+        error_msg = f"status={status_code}"
+        if idempotency_active:
+            _idempotency_mark_error(ddb, idempotency_table, idempotency_key, error_msg)
+
         # Classify and map errors to enforce fail-closed status in Step Functions
         if status_code == 429:
             raise ServiceUnavailableError(f"AI Engine rate limit exceeded (429): {error_body}")
@@ -265,7 +445,11 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
         reason = getattr(ue, 'reason', None)
         if isinstance(ue, socket.timeout) or (reason and isinstance(reason, socket.timeout)) or "timed out" in str(ue):
             logger.error("Request timed out: %s", ue)
+            if idempotency_active:
+                _idempotency_mark_error(ddb, idempotency_table, idempotency_key, "timeout")
             raise TimeoutError(f"Connection to AI Engine timed out: {ue}")
-        
+
         logger.error("Network connection error: %s", ue)
+        if idempotency_active:
+            _idempotency_mark_error(ddb, idempotency_table, idempotency_key, str(ue)[:200])
         raise ServiceUnavailableError(f"Unable to connect to AI Engine: {ue}")

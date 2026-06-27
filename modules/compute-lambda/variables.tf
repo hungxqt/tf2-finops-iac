@@ -148,3 +148,8 @@ variable "athena_results_bucket_name" {
   default     = ""
 }
 
+variable "raw_json_inline_max_bytes" {
+  type        = number
+  description = "Maximum byte size for a RAW_JSON CE-fallback detect payload to be carried inline in Step Functions state. Payloads exceeding this fall back to S3_POINTER. Default 200000 (200 KB) keeps execution state safely below Step Functions limits even though the AI API contract allows up to 10 MB."
+  default     = 200000
+}

@@ -105,6 +105,27 @@ def normalize_business_context(raw_context: Any, account_id: str) -> dict:
     return {**default_context, **selected}
 
 
+def _select_detect_request_mode(payload_bytes: bytes, max_inline_bytes: int) -> str:
+    """Return 'RAW_JSON' if payload_bytes fits within max_inline_bytes, else 'S3_POINTER'.
+
+    This is a pure helper extracted from the CE-fallback normalizer path so that
+    the boundary decision can be tested in isolation without mocking the full pipeline.
+
+    Args:
+        payload_bytes: Canonical UTF-8 JSON-serialised detect payload bytes.
+        max_inline_bytes: Maximum byte count that may be carried inline in
+            Step Functions execution state (RAW_JSON mode). Callers should read
+            the RAW_JSON_INLINE_MAX_BYTES env var (default 200000).
+
+    Returns:
+        'RAW_JSON' or 'S3_POINTER'.
+    """
+    if len(payload_bytes) <= max_inline_bytes:
+        return "RAW_JSON"
+    return "S3_POINTER"
+
+
+
 def handle_request(event_data: dict, context: Any) -> dict:
     logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
 
@@ -630,6 +651,27 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 logger.error("Failed to write AI detect input to S3: %s", e)
                 raise e
 
+    # Determine detect_request_mode for CE fallback.
+    # RAW_JSON is used only when the canonical JSON payload fits within the
+    # configured inline byte cap (RAW_JSON_INLINE_MAX_BYTES, default 200 KB).
+    # This keeps Step Functions execution state safely below Step Functions limits
+    # even though the AI API contract allows payloads up to 10 MB.
+    raw_json_inline_max_bytes = int(
+        os.environ.get("RAW_JSON_INLINE_MAX_BYTES", "200000")
+    )
+    ce_payload_bytes = json.dumps(detect_payload).encode("utf-8")
+    detect_request_mode = _select_detect_request_mode(ce_payload_bytes, raw_json_inline_max_bytes)
+    if detect_request_mode == "RAW_JSON":
+        logger.info(
+            "CE-fallback payload size %d B <= %d B cap; using RAW_JSON mode.",
+            len(ce_payload_bytes), raw_json_inline_max_bytes,
+        )
+    else:
+        logger.info(
+            "CE-fallback payload size %d B > %d B cap; using S3_POINTER mode.",
+            len(ce_payload_bytes), raw_json_inline_max_bytes,
+        )
+
     details = {
         "curated_data_uri": curated_data_uri,
         "schema_version": "3.2.0",
@@ -646,10 +688,16 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "stale_cost_explorer": stale_cost_explorer,
         "missing_cloudwatch": missing_cloudwatch,
         "estimated_billing": estimated_billing,
-        "detect_request_mode": "S3_POINTER",
+        "detect_request_mode": detect_request_mode,
         "s3_bucket_uri": s3_bucket_uri,
         "s3_object_checksum": s3_object_checksum,
         "business_context": business_context,
+        # resource_utilization_metrics and CUR/CE arrays are always included in the
+        # normalizer output so downstream states can read them if needed.
+        # For RAW_JSON mode the Step Functions ChooseDetectRequestMode state will
+        # build the inline body directly from these fields.
+        # For S3_POINTER mode the large arrays are present but BuildDetectRequestS3Pointer
+        # explicitly omits aws_cur_line_items from the Step Functions body.
         "resource_utilization_metrics": resource_utilization_metrics,
         "aws_cur_line_items": cur_records,
         "aws_cost_explorer_daily": ce_records,

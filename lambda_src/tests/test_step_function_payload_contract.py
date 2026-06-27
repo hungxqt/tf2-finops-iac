@@ -133,7 +133,9 @@ class TestComponentInventory:
             "CheckErrorBudgetLock", "EvaluateErrorBudgetLock",
             "IngestCostData", "IngestionReady",
             "NormalizeCostWindow", "CheckTelemetryQuality", "SetTelemetryForceDryRun",
-            "VerifyS3Pointer", "SetS3PointerMissingError", "BuildDetectRequestS3Pointer", "InvokeDetect", "EvaluateDetectResponse",
+            "VerifyS3Pointer", "SetS3PointerMissingError",
+            "ChooseDetectRequestMode", "BuildDetectRequestRawJson",
+            "BuildDetectRequestS3Pointer", "InvokeDetect", "EvaluateDetectResponse",
             "SetAIFailClosedError", "InvokeDecide", "CacheRollbackPayload",
             "FormatDecideResult", "RouteAlert",
             "FinanceAlertRequired", "SendFinanceAlert",
@@ -427,13 +429,14 @@ class TestDetectPath:
         choices = asl["States"]["VerifyS3Pointer"]["Choices"]
         default = asl["States"]["VerifyS3Pointer"]["Default"]
         assert default == "SetS3PointerMissingError"
-        
+
         rule = choices[0]
         assert rule["And"][0]["Variable"] == "$.normalized.details.s3_bucket_uri"
         assert rule["And"][0]["IsPresent"] is True
         assert rule["And"][1]["Variable"] == "$.normalized.details.s3_bucket_uri"
         assert rule["And"][1]["StringMatches"] == "s3://*.json.gz"
-        assert rule["Next"] == "BuildDetectRequestS3Pointer"
+        # VerifyS3Pointer now routes through ChooseDetectRequestMode (not directly to S3Pointer builder)
+        assert rule["Next"] == "ChooseDetectRequestMode"
 
     def test_set_s3_pointer_missing_error_payload(self):
         asl = _load_asl_template()
@@ -459,6 +462,61 @@ class TestDetectPath:
         assert resolved_fallback["idempotency_key"] == IDEMPOTENCY_KEY
         assert resolved_fallback["dry_run_mode"] is True
         assert isinstance(resolved_fallback["body"], dict)
+
+    def test_choose_detect_request_mode_routes_raw_json_for_small_ce_fallback(self):
+        """ChooseDetectRequestMode must route to BuildDetectRequestRawJson for RAW_JSON+telemetry_delay_event=True."""
+        asl = _load_asl_template()
+        choices = asl["States"]["ChooseDetectRequestMode"]["Choices"]
+        default = asl["States"]["ChooseDetectRequestMode"]["Default"]
+        assert default == "BuildDetectRequestS3Pointer"
+        rule = choices[0]
+        assert rule["Next"] == "BuildDetectRequestRawJson"
+        cond_vars = {c.get("Variable"): c for c in rule["And"]}
+        assert "$.normalized.details.detect_request_mode" in cond_vars
+        assert cond_vars["$.normalized.details.detect_request_mode"]["StringEquals"] == "RAW_JSON"
+        assert "$.normalized.details.telemetry_delay_event" in cond_vars
+        assert cond_vars["$.normalized.details.telemetry_delay_event"]["BooleanEquals"] is True
+
+    def test_build_detect_request_raw_json_body_structure(self):
+        """BuildDetectRequestRawJson must produce a RAW_JSON body with required contract fields."""
+        asl = _load_asl_template()
+        params = asl["States"]["BuildDetectRequestRawJson"]["Parameters"]
+        ctx = POST_BUILD_DETECT_REQUEST_CE_FALLBACK  # small CE-fallback fixture
+        # Manually reconstruct the context as it would be before this state runs
+        ctx_before = {
+            **POST_NORMALIZE_DEGRADED,
+        }
+        resolved = _resolve_parameters(ctx_before, params)
+        body = resolved["body"]
+        assert body["data_source_type"] == "RAW_JSON"
+        assert body["schema_version"] == "3.2.0"
+        assert body["tenant_id"] == TENANT_ID
+        assert body["account_id"] == ACCOUNT_ID
+        assert body["correlation_id"] == CORRELATION_ID
+        assert body["idempotency_key"] == IDEMPOTENCY_KEY
+        assert body["request_timestamp"] == "2026-06-27T00:00:00Z"
+        assert body["telemetry_delay_event"] is True
+        assert "aws_cost_explorer_daily" in body
+        assert "missing_resources" in body
+        assert "current_ce_cost_gap_usd" in body
+        assert "comparison_window" in body
+        assert "business_context" in body
+        assert "quality" in body
+        quality = body["quality"]
+        assert "completeness_score" in quality
+        assert "delayed_cur" in quality
+        # Must NOT include CUR line items in RAW_JSON CE-fallback mode
+        assert "aws_cur_line_items" not in body
+        assert resolved["path"] == "/v1/detect"
+        assert resolved["dry_run_mode"] is False  # force_dry_run in fixture context
+
+    def test_choose_detect_request_mode_s3_pointer_for_cur_ready(self):
+        """ChooseDetectRequestMode default routes CUR-ready (telemetry_delay_event=False) to BuildDetectRequestS3Pointer."""
+        # CUR-ready fixture has detect_request_mode=S3_POINTER and telemetry_delay_event=False.
+        # Neither condition in ChooseDetectRequestMode matches, so default applies.
+        asl = _load_asl_template()
+        default = asl["States"]["ChooseDetectRequestMode"]["Default"]
+        assert default == "BuildDetectRequestS3Pointer"
 
     def test_detect_response_fail_closed_on_success_false(self):
         asl = _load_asl_template()

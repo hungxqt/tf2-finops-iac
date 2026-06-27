@@ -501,7 +501,7 @@
               "StringMatches": "s3://*.json.gz"
             }
           ],
-          "Next": "BuildDetectRequestS3Pointer"
+          "Next": "ChooseDetectRequestMode"
         }
       ],
       "Default": "SetS3PointerMissingError"
@@ -514,6 +514,66 @@
       },
       "ResultPath": "$.error",
       "Next": "FailClosed"
+    },
+    "ChooseDetectRequestMode": {
+      "Type": "Choice",
+      "Comment": "Route to RAW_JSON inline build for small CE-fallback payloads; keep S3_POINTER for CUR-ready and oversized CE payloads.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.normalized.details.detect_request_mode",
+              "StringEquals": "RAW_JSON"
+            },
+            {
+              "Variable": "$.normalized.details.telemetry_delay_event",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "BuildDetectRequestRawJson"
+        }
+      ],
+      "Default": "BuildDetectRequestS3Pointer"
+    },
+    "BuildDetectRequestRawJson": {
+      "Type": "Pass",
+      "Comment": "Inline RAW_JSON body for small CE-fallback payloads. Payload is carried in Step Functions state; VpcAlbCallerLambda sends it directly to the internal ALB.",
+      "Parameters": {
+        "path": "/v1/detect",
+        "method": "POST",
+        "tenant_id.$": "$.tenant_id",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "dry_run_mode.$": "$.force_dry_run",
+        "body": {
+          "schema_version": "3.2.0",
+          "data_source_type": "RAW_JSON",
+          "tenant_id.$": "$.tenant_id",
+          "account_id.$": "$.account_id",
+          "account_name.$": "$.environment",
+          "correlation_id.$": "$.correlation_id",
+          "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+          "request_timestamp.$": "$.normalized.details.request_timestamp",
+          "is_ad_hoc.$": "$.is_ad_hoc",
+          "telemetry_delay_event.$": "$.normalized.details.telemetry_delay_event",
+          "aws_cost_explorer_daily.$": "$.normalized.details.aws_cost_explorer_daily",
+          "missing_resources.$": "$.normalized.details.missing_resources",
+          "current_ce_cost_gap_usd.$": "$.normalized.details.current_ce_cost_gap_usd",
+          "comparison_window.$": "$.normalized.details.comparison_window",
+          "business_context.$": "$.normalized.details.business_context",
+          "resource_utilization_metrics.$": "$.normalized.details.resource_utilization_metrics",
+          "quality": {
+            "completeness_score.$": "$.normalized.details.completeness_score",
+            "delayed_cur.$": "$.normalized.details.delayed_cur",
+            "stale_cost_explorer.$": "$.normalized.details.stale_cost_explorer",
+            "missing_cloudwatch.$": "$.normalized.details.missing_cloudwatch",
+            "estimated_billing.$": "$.normalized.details.estimated_billing"
+          }
+        }
+      },
+      "ResultPath": "$.ai_detect_request",
+      "Next": "InvokeDetect"
     },
     "BuildDetectRequestS3Pointer": {
       "Type": "Pass",

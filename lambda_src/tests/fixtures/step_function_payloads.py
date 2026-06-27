@@ -30,6 +30,9 @@ Fixture inventory
 17. POST_VERIFY_RESULT              - ReportVerifyResult result
 18. AI_FAIL_CLOSED_CONTEXT          - context after SetAIFailClosedError
 19. CUR_DELAY_EXCEEDED_CONTEXT      - context after SetCURDelayExceededError
+20. POST_NORMALIZE_POINTER          - NormalizeCostWindow output - oversized or CUR-ready, S3_POINTER
+21. POST_BUILD_DETECT_REQUEST_S3_POINTER - BuildDetectRequestS3Pointer Pass state output
+22. POST_BUILD_DETECT_REQUEST_CE_FALLBACK - BuildDetectRequestRawJson CE-fallback output (dry_run, RAW_JSON)
 """
 
 # ---------------------------------------------------------------------------
@@ -217,8 +220,8 @@ _NORMALIZED_HEALTHY_DETAILS = {
     "stale_cost_explorer": False,
     "missing_cloudwatch": False,
     "estimated_billing": False,
-    "detect_request_mode": "RAW_JSON",
-    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/cur/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_raw.json.gz",
+    "detect_request_mode": "S3_POINTER",
+    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/ai-input/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_input.json.gz",
     "s3_object_checksum": "c" * 64,
     "business_context": _BUSINESS_CONTEXT_DEFAULT,
     "resource_utilization_metrics": None,
@@ -267,14 +270,22 @@ POST_NORMALIZE_POINTER = {
 _NORMALIZED_DEGRADED_DETAILS = {
     "curated_data_uri": f"s3://tf2-finops-lakehouse-bucket/cost/curated/account_id={ACCOUNT_ID}/year=2026/month=06/{RUN_ID}_curated.parquet",
     "schema": "finops-cost-window-v1",
+    "schema_version": "3.2.0",
+    "tenant_id": TENANT_ID,
+    "account_id": ACCOUNT_ID,
+    "account_name": ENVIRONMENT,
+    "correlation_id": CORRELATION_ID,
+    "idempotency_key": IDEMPOTENCY_KEY,
+    "request_timestamp": "2026-06-27T00:00:00Z",
     "partition_keys": ["account_id", "year", "month"],
     "completeness_score": 0.55,
     "delayed_cur": True,
     "stale_cost_explorer": True,
     "missing_cloudwatch": False,
     "estimated_billing": True,
-    "detect_request_mode": "RAW_JSON_CE_FALLBACK",
-    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/cur/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_raw.json.gz",
+    # RAW_JSON: CE-fallback payload is small enough for inline Step Functions state.
+    "detect_request_mode": "RAW_JSON",
+    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/ai-input/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_input.json.gz",
     "s3_object_checksum": "e" * 64,
     "business_context": _BUSINESS_CONTEXT_DEFAULT,
     "resource_utilization_metrics": None,
@@ -373,12 +384,13 @@ POST_BUILD_DETECT_REQUEST_CE_FALLBACK = {
         "dry_run_mode": True,
         "body": {
             "schema_version": "3.2.0",
+            "data_source_type": "RAW_JSON",
             "tenant_id": TENANT_ID,
             "account_id": ACCOUNT_ID,
             "account_name": ENVIRONMENT,
             "correlation_id": CORRELATION_ID,
             "idempotency_key": IDEMPOTENCY_KEY,
-            "data_source_type": "RAW_JSON",
+            "request_timestamp": "2026-06-27T00:00:00Z",
             "is_ad_hoc": False,
             "telemetry_delay_event": True,
             "aws_cost_explorer_daily": [],
@@ -387,6 +399,13 @@ POST_BUILD_DETECT_REQUEST_CE_FALLBACK = {
             "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
             "business_context": _BUSINESS_CONTEXT_DEFAULT,
             "resource_utilization_metrics": None,
+            "quality": {
+                "completeness_score": 0.55,
+                "delayed_cur": True,
+                "stale_cost_explorer": True,
+                "missing_cloudwatch": False,
+                "estimated_billing": True,
+            },
         },
     },
 }

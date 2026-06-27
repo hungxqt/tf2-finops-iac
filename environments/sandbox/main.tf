@@ -8,13 +8,16 @@ locals {
   ]
 
   dynamodb_table_names = {
-    run_state       = "${var.project_name}-${var.environment}-run-state"
-    anomaly         = "${var.project_name}-${var.environment}-anomaly"
-    routing_state   = "${var.project_name}-${var.environment}-routing-state"
-    audit           = "${var.project_name}-${var.environment}-containment-audit"
-    dashboard_views = "${var.project_name}-${var.environment}-dashboard-views"
-    account_policy  = "${var.project_name}-${var.environment}-account-policy"
-    rollback_cache  = "${var.project_name}-${var.environment}-rollback-cache"
+    run_state              = "${var.project_name}-${var.environment}-run-state"
+    anomaly                = "${var.project_name}-${var.environment}-anomaly"
+    routing_state          = "${var.project_name}-${var.environment}-routing-state"
+    audit                  = "${var.project_name}-${var.environment}-containment-audit"
+    dashboard_views        = "${var.project_name}-${var.environment}-dashboard-views"
+    account_policy         = "${var.project_name}-${var.environment}-account-policy"
+    rollback_cache         = "${var.project_name}-${var.environment}-rollback-cache"
+    # ai_payload_idempotency table name is resolved from orchestration module output.
+    # It is merged into compute_lambda.dynamodb_table_names below so vpc_alb_caller
+    # receives IDEMPOTENCY_TABLE_NAME via its environment block.
   }
 }
 
@@ -474,7 +477,13 @@ module "iam" {
   environment                            = var.environment
   lakehouse_bucket_arn                   = module.lakehouse.lakehouse_bucket_arn
   audit_bucket_arn                       = module.lakehouse.audit_bucket_arn
-  dynamodb_table_arns                    = concat(local.dynamodb_table_arns, [module.orchestration.dynamodb_table_arns["error_budget"]])
+  dynamodb_table_arns                    = concat(
+    local.dynamodb_table_arns,
+    [
+      module.orchestration.dynamodb_table_arns["error_budget"],
+      module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
+    ]
+  )
   kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
   containment_apply_enabled              = true
   queue_arns                             = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
@@ -529,7 +538,13 @@ module "compute_lambda" {
   lambda_role_arns               = module.iam.lambda_role_arns
   lakehouse_bucket_name          = module.lakehouse.lakehouse_bucket_name
   audit_bucket_name              = module.lakehouse.audit_bucket_name
-  dynamodb_table_names           = merge(local.dynamodb_table_names, { error_budget = module.orchestration.dynamodb_table_names["error_budget"] })
+  dynamodb_table_names           = merge(
+    local.dynamodb_table_names,
+    {
+      error_budget           = module.orchestration.dynamodb_table_names["error_budget"]
+      ai_payload_idempotency = module.orchestration.idempotency_table_name
+    }
+  )
   containment_apply_enabled      = true
   cloudwatch_log_kms_key_arn     = module.lakehouse.data_kms_key_arn
   lambda_env_kms_key_arn         = module.lakehouse.data_kms_key_arn

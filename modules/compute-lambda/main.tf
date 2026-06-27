@@ -66,9 +66,11 @@ locals {
       timeout     = 90
       memory_size = 256
       env = {
-        ALB_BASE_URL            = var.alb_base_url
-        SIGV4_SERVICE_NAME      = var.sigv4_service_name
-        REQUEST_TIMEOUT_SECONDS = "60"
+        ALB_BASE_URL               = var.alb_base_url
+        SIGV4_SERVICE_NAME         = var.sigv4_service_name
+        REQUEST_TIMEOUT_SECONDS    = "60"
+        IDEMPOTENCY_TABLE_NAME     = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
+        RAW_JSON_INLINE_MAX_BYTES  = tostring(var.raw_json_inline_max_bytes)
       }
     }
   }

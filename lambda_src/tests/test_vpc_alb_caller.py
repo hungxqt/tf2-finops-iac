@@ -260,3 +260,187 @@ def test_vpc_alb_caller_invalid_json_response(mock_urlopen):
     
     with pytest.raises(ContractMismatchError, match="Response is not valid JSON"):
         handler.handle_request(event_data, None)
+
+
+# ---------------------------------------------------------------------------
+# Idempotency hot-path tests
+# ---------------------------------------------------------------------------
+
+class TestIdempotencyHotPath:
+    """Tests for DynamoDB-backed contract idempotency enforcement."""
+
+    @pytest.fixture(autouse=True)
+    def _set_table_env(self, monkeypatch):
+        monkeypatch.setenv("IDEMPOTENCY_TABLE_NAME", "finops-idempotency-sandbox")
+
+    def _make_ddb_client(self, items=None, raise_conditional_check=False, put_side_effect=None):
+        """Build a minimal mock DynamoDB client."""
+        ddb = MagicMock()
+
+        # Create the ConditionalCheckFailedException class FIRST so it can be reused.
+        ConditionalCheckFailed = type("ConditionalCheckFailedException", (Exception,), {})
+        # Wire exceptions namespace so the handler's 'except ddb.exceptions.ConditionalCheckFailedException' matches.
+        ddb.exceptions.ConditionalCheckFailedException = ConditionalCheckFailed
+
+        if put_side_effect is not None:
+            ddb.put_item.side_effect = put_side_effect
+        elif raise_conditional_check:
+            # Raise an instance of the SAME class registered on exceptions.
+            ddb.put_item.side_effect = ConditionalCheckFailed()
+        else:
+            ddb.put_item.return_value = {}
+
+        if items is not None:
+            ddb.get_item.return_value = {"Item": items}
+        else:
+            ddb.get_item.return_value = {"Item": None}
+        return ddb
+
+    @patch("urllib.request.urlopen")
+    def test_idempotency_slot_claimed_on_first_call(self, mock_urlopen, monkeypatch):
+        """First call: PutItem should claim IN_PROGRESS slot and execute HTTP request."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = b'{"success": true, "anomalies_detected": false}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        ddb = self._make_ddb_client()
+        import boto3
+        monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
+
+        event = valid_ai_event()
+        result = handler.handle_request(event, None)
+        assert result["success"] is True
+        # PutItem was called to claim slot
+        ddb.put_item.assert_called_once()
+        call_kw = ddb.put_item.call_args[1]
+        assert call_kw["ConditionExpression"] == "attribute_not_exists(idempotency_key)"
+        assert call_kw["Item"]["status"]["S"] == "IN_PROGRESS"
+        # UpdateItem was called to mark COMPLETED
+        ddb.update_item.assert_called_once()
+        update_expr = ddb.update_item.call_args[1]["UpdateExpression"]
+        assert "COMPLETED" in str(ddb.update_item.call_args)
+
+    @patch("urllib.request.urlopen")
+    def test_idempotency_cache_hit_returns_without_http_call(self, mock_urlopen, monkeypatch):
+        """Duplicate call with COMPLETED record returns cached response without HTTP."""
+        import json as _json
+        cached = {"success": True, "anomalies_detected": False, "from_cache": True}
+        ddb = self._make_ddb_client(
+            items={
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "COMPLETED"},
+                "payload_sha256": {"S": "some-hash"},  # will be overridden by correct hash
+                "response_cache": {"S": _json.dumps(cached)},
+            },
+            raise_conditional_check=True,
+        )
+        # Compute correct payload sha256 so hash matches
+        import hashlib as _hl
+        event = valid_ai_event()
+        body_bytes = _json.dumps(event["body"]).encode("utf-8")
+        correct_hash = _hl.sha256(body_bytes).hexdigest()
+        ddb.get_item.return_value = {
+            "Item": {
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "COMPLETED"},
+                "payload_sha256": {"S": correct_hash},
+                "response_cache": {"S": _json.dumps(cached)},
+            }
+        }
+        import boto3
+        monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
+
+        result = handler.handle_request(event, None)
+        assert result["from_cache"] is True
+        mock_urlopen.assert_not_called()
+
+    def test_idempotency_hash_mismatch_raises_contract_error(self, monkeypatch):
+        """Hash mismatch on existing record must raise ContractMismatchError (fail-closed)."""
+        import hashlib as _hl, json as _json
+        event = valid_ai_event()
+        body_bytes = _json.dumps(event["body"]).encode("utf-8")
+        correct_hash = _hl.sha256(body_bytes).hexdigest()
+        wrong_hash = "0" * 64
+
+        ddb = self._make_ddb_client(
+            items={
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "COMPLETED"},
+                "payload_sha256": {"S": wrong_hash},  # mismatch
+                "response_cache": {"S": "{}"},
+            },
+            raise_conditional_check=True,
+        )
+        ddb.get_item.return_value = {
+            "Item": {
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "COMPLETED"},
+                "payload_sha256": {"S": wrong_hash},
+                "response_cache": {"S": "{}"},
+            }
+        }
+        import boto3
+        monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
+
+        with pytest.raises(ContractMismatchError, match="hash mismatch"):
+            handler.handle_request(event, None)
+
+    def test_idempotency_concurrent_in_progress_fails_closed(self, monkeypatch):
+        """Concurrent IN_PROGRESS record must raise ServiceUnavailableError (fail-closed)."""
+        import hashlib as _hl, json as _json
+        event = valid_ai_event()
+        body_bytes = _json.dumps(event["body"]).encode("utf-8")
+        correct_hash = _hl.sha256(body_bytes).hexdigest()
+
+        ddb = self._make_ddb_client(
+            items={
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "IN_PROGRESS"},
+                "payload_sha256": {"S": correct_hash},
+                "response_cache": {"S": handler._NO_CACHE},
+            },
+            raise_conditional_check=True,
+        )
+        ddb.get_item.return_value = {
+            "Item": {
+                "idempotency_key": {"S": VALID_IDEMPOTENCY_KEY},
+                "status": {"S": "IN_PROGRESS"},
+                "payload_sha256": {"S": correct_hash},
+                "response_cache": {"S": handler._NO_CACHE},
+            }
+        }
+        import boto3
+        monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
+
+        with pytest.raises(ServiceUnavailableError, match="IN_PROGRESS"):
+            handler.handle_request(event, None)
+
+    @patch("urllib.request.urlopen")
+    def test_idempotency_http_error_marks_error_state(self, mock_urlopen, monkeypatch):
+        """AI Engine HTTP error must mark idempotency record ERROR without DeleteItem."""
+        fp = MagicMock()
+        fp.read.return_value = b"Service Unavailable"
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://internal-ai-alb.us-east-1.elb.amazonaws.com/v1/detect",
+            503, "Service Unavailable", {}, fp
+        )
+        ddb = self._make_ddb_client()
+        import boto3
+        monkeypatch.setattr("boto3.client", lambda *a, **k: ddb)
+
+        event = valid_ai_event()
+        with pytest.raises(ServiceUnavailableError):
+            handler.handle_request(event, None)
+
+        # update_item called to mark ERROR (no delete_item)
+        ddb.update_item.assert_called_once()
+        assert not ddb.delete_item.called
+        update_call = str(ddb.update_item.call_args)
+        assert "ERROR" in update_call
+
+    def test_idempotency_inactive_when_table_not_configured(self, monkeypatch):
+        """If IDEMPOTENCY_TABLE_NAME is empty, idempotency is skipped without error."""
+        monkeypatch.delenv("IDEMPOTENCY_TABLE_NAME", raising=False)
+        ddb, _ = handler._get_ddb_client()
+        assert ddb is None

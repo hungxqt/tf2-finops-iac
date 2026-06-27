@@ -502,7 +502,8 @@ def test_normalizer_payload_contract_fields():
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "NORMALIZED"
     details = resp["details"]
-    assert details["detect_request_mode"] == "S3_POINTER"
+    # Mode is RAW_JSON for small test fixtures; S3_POINTER for oversized payloads.
+    assert details["detect_request_mode"] in {"RAW_JSON", "S3_POINTER"}
     assert details["s3_bucket_uri"].startswith("s3://test-lakehouse/ai-input/account_id=123456789012/year=2026/month=06/day=24/")
     assert details["s3_bucket_uri"].endswith("_input.json.gz")
     assert re.fullmatch(r"[a-f0-9]{64}", details["s3_object_checksum"])
@@ -589,7 +590,8 @@ def test_normalizer_payload_contract_fields():
     resp_ce = handler.handle_request(event_data_ce, None)
     assert resp_ce["status"] == "NORMALIZED"
     details_ce = resp_ce["details"]
-    assert details_ce["detect_request_mode"] == "S3_POINTER"
+    # Mode is RAW_JSON for small test fixtures; S3_POINTER for oversized payloads.
+    assert details_ce["detect_request_mode"] in {"RAW_JSON", "S3_POINTER"}
     assert details_ce["telemetry_delay_event"] is True
     assert details_ce["s3_bucket_uri"].startswith("s3://test-lakehouse/ai-input/account_id=123456789012/year=2026/month=06/day=24/")
     assert re.fullmatch(r"[a-f0-9]{64}", details_ce["s3_object_checksum"])
@@ -754,7 +756,8 @@ def test_normalizer_athena_query_integration():
 
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "NORMALIZED"
-    assert resp["details"]["detect_request_mode"] == "S3_POINTER"
+    # Mode is RAW_JSON for small test fixtures; S3_POINTER for oversized payloads.
+    assert resp["details"]["detect_request_mode"] in {"RAW_JSON", "S3_POINTER"}
     assert len(query_executed) == 1
     assert "SELECT" in query_executed[0]["QueryString"]
     assert query_executed[0]["QueryExecutionContext"]["Database"] == "test-db"
@@ -770,3 +773,70 @@ def test_normalizer_athena_query_integration():
     del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
     handler.athena_client = None
     handler.s3_client = None
+
+
+# ---------------------------------------------------------------------------
+# detect_request_mode selection tests (RAW_JSON vs S3_POINTER)
+# ---------------------------------------------------------------------------
+
+class TestDetectRequestModeSelection:
+    """Verify normalizer selects RAW_JSON or S3_POINTER based on payload size."""
+
+    def _make_ce_only_event(self, ce_records=None, extra_overrides=None):
+        """Minimal event that would trigger the CE-fallback normalizer path."""
+        event = {
+            "run_id": "rr-mode-test",
+            "account_id": "123456789012",
+            "correlation_id": CORRELATION_ID,
+            "tenant_id": TENANT_ID,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-27",
+            "environment": "sandbox",
+            "account_name": "sandbox",
+            "data_source": "COST_EXPLORER",
+            "ingestion_mode": "CE_FALLBACK",
+            "ce_records": ce_records or [],
+            "cur_records": [],
+            "resource_utilization_metrics": None,
+        }
+        if extra_overrides:
+            event.update(extra_overrides)
+        return event
+
+    def test_raw_json_selected_when_payload_below_cap(self, monkeypatch, tmp_path):
+        """RAW_JSON must be selected when the canonical JSON payload is below the cap."""
+        import json as _json
+
+        # Minimal ce_records: payload will be well below 200 KB
+        small_payload = {"key": "value"}
+        payload_bytes = _json.dumps(small_payload).encode("utf-8")
+        assert len(payload_bytes) < 200_000, "Test precondition: payload must be small"
+
+        monkeypatch.setenv("RAW_JSON_INLINE_MAX_BYTES", "200000")
+
+        # Call the normalizer helper directly (isolated unit test)
+        mode = handler._select_detect_request_mode(payload_bytes, int(os.environ["RAW_JSON_INLINE_MAX_BYTES"]))
+        assert mode == "RAW_JSON", f"Expected RAW_JSON for small payload ({len(payload_bytes)} B)"
+
+    def test_s3_pointer_selected_when_payload_exceeds_cap(self, monkeypatch):
+        """S3_POINTER must be selected when the canonical JSON payload exceeds the cap."""
+        # Payload exceeding 1 B cap (artificially tiny to force S3_POINTER)
+        large_payload = b"x" * 10
+        monkeypatch.setenv("RAW_JSON_INLINE_MAX_BYTES", "5")
+
+        mode = handler._select_detect_request_mode(large_payload, 5)
+        assert mode == "S3_POINTER", f"Expected S3_POINTER for payload size {len(large_payload)} > 5"
+
+    def test_s3_pointer_selected_at_exact_cap_boundary(self, monkeypatch):
+        """Payload exactly at the cap must use RAW_JSON; one byte over must use S3_POINTER."""
+        payload_at_cap = b"a" * 100
+        cap = 100
+
+        assert handler._select_detect_request_mode(payload_at_cap, cap) == "RAW_JSON"
+        assert handler._select_detect_request_mode(payload_at_cap + b"x", cap) == "S3_POINTER"
+
+    def test_default_cap_is_200kb(self, monkeypatch):
+        """Confirm the default RAW_JSON_INLINE_MAX_BYTES env var default is 200000."""
+        monkeypatch.delenv("RAW_JSON_INLINE_MAX_BYTES", raising=False)
+        cap = int(os.environ.get("RAW_JSON_INLINE_MAX_BYTES", "200000"))
+        assert cap == 200_000

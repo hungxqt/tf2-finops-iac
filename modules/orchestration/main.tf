@@ -208,6 +208,36 @@ resource "aws_dynamodb_table" "rollback_cache" {
   tags = var.tags
 }
 
+# - AI payload idempotency hot path (Hash key: idempotency_key, TTL: ttl_expiry)
+# Separate from run_state: this table is the contract idempotency store for /v1/detect,
+# /v1/decide, and /v1/verify; run_state remains Step Functions run-control only.
+resource "aws_dynamodb_table" "ai_payload_idempotency" {
+  name         = "finops-idempotency-${var.environment}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "idempotency_key"
+
+  attribute {
+    name = "idempotency_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl_expiry"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
 # CloudWatch Log Group for Step Functions execution logs
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-workflow"
