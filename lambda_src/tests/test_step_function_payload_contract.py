@@ -95,7 +95,8 @@ def _resolve_parameters(ctx: dict, params: dict) -> dict:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from fixtures.step_function_payloads import (
-    ACCOUNT_ID, ANOMALY_ID, CORRELATION_ID, RUN_ID, TENANT_ID, IDEMPOTENCY_KEY, EXECUTION_DATE,
+    ACCOUNT_ID, ANOMALY_ID, CORRELATION_ID, RUN_ID, TENANT_ID, IDEMPOTENCY_KEY,
+    DECIDE_IDEMPOTENCY_KEY, VERIFY_IDEMPOTENCY_KEY, EXECUTION_DATE,
     SCHEDULED_WORKFLOW_INPUT, POST_PREPARE_RUN_CONTEXT,
     POST_INGEST_COST_DATA_S3, POST_INGEST_COST_DATA_CE,
     POST_NORMALIZE_HEALTHY, POST_NORMALIZE_DEGRADED, POST_NORMALIZE_POINTER,
@@ -402,12 +403,22 @@ class TestDetectPath:
         resolved = _resolve_parameters(ctx, params)
         body = resolved["body"]
         assert body["data_source_type"] == "S3_POINTER"
+        assert body["schema_version"] == "3.2.0"
+        assert body["tenant_id"] == TENANT_ID
+        assert body["account_id"] == ACCOUNT_ID
+        assert body["account_name"] == "sandbox"
+        assert body["correlation_id"] == CORRELATION_ID
+        assert body["idempotency_key"] == IDEMPOTENCY_KEY
         assert "s3_bucket_uri" in body
+        assert re.fullmatch(r"[a-f0-9]{64}", body["s3_object_checksum"])
+        assert "aws_cost_explorer_daily" in body
+        assert "missing_resources" in body
+        assert "current_ce_cost_gap_usd" in body
+        assert "comparison_window" in body
         assert "business_context" in body
         assert "telemetry_delay_event" in body
         assert "is_ad_hoc" in body
         assert "aws_cur_line_items" not in body
-        assert "aws_cost_explorer_daily" not in body
         assert resolved["idempotency_key"] == IDEMPOTENCY_KEY
         assert resolved["dry_run_mode"] is False
 
@@ -482,6 +493,14 @@ class TestDecideCachePath:
         asl = _load_asl_template()
         params = asl["States"]["InvokeDecide"]["Parameters"]
         assert params.get("path") == "/v1/decide"
+
+    def test_invoke_decide_uses_contract_idempotency_key(self):
+        asl = _load_asl_template()
+        params = asl["States"]["InvokeDecide"]["Parameters"]
+        resolved = _resolve_parameters(POST_INVOKE_DETECT_ANOMALY, params)
+        assert resolved["idempotency_key"] == DECIDE_IDEMPOTENCY_KEY
+        assert resolved["body"]["idempotency_key"] == DECIDE_IDEMPOTENCY_KEY
+        assert resolved["body"]["correlation_id"] == CORRELATION_ID
 
     def test_invoke_decide_body_uses_anomalies_list_0(self):
         asl = _load_asl_template()
@@ -581,6 +600,14 @@ class TestVerifyPath:
         asl = _load_asl_template()
         params = asl["States"]["ReportVerifyResult"]["Parameters"]
         assert params.get("path") == "/v1/verify"
+
+    def test_report_verify_result_uses_contract_idempotency_key(self):
+        asl = _load_asl_template()
+        params = asl["States"]["ReportVerifyResult"]["Parameters"]
+        resolved = _resolve_parameters(POST_EXECUTE_CONTAINMENT, params)
+        assert resolved["idempotency_key"] == VERIFY_IDEMPOTENCY_KEY
+        assert resolved["body"]["idempotency_key"] == VERIFY_IDEMPOTENCY_KEY
+        assert resolved["body"]["correlation_id"] == CORRELATION_ID
 
     def test_verify_body_action_executed_target_reads_anomalies_list_0(self):
         asl = _load_asl_template()

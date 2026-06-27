@@ -1,7 +1,12 @@
 import pytest
 import os
+import uuid
 from workers.state import handler
 import finops_common
+
+
+def expected_tenant_id(account_id):
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{account_id}"))
 
 def test_state_simulation_check():
     # Simulation mode check without PRIOR state
@@ -108,7 +113,8 @@ def test_state_prepare_run_context():
     
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
-    assert resp["tenant_id"] == "123456"
+    assert resp["tenant_id"] == expected_tenant_id("123456")
+    uuid.UUID(resp["correlation_id"])
     assert resp["is_ad_hoc"] is True
     assert resp["ai_contract_version"] == "v2"
     assert "run_id" in resp
@@ -129,7 +135,7 @@ def test_state_prepare_nested_input():
     }
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
-    assert resp["tenant_id"] == "999888"
+    assert resp["tenant_id"] == expected_tenant_id("999888")
     assert resp["is_ad_hoc"] is True
     assert resp["ai_contract_version"] == "v1.0"
     assert resp["ce_retry"]["max"] == 3
@@ -187,4 +193,3 @@ def test_state_check_error_budget():
     assert resp2["status"] == "OK"
     assert resp2["locked"] is False
     assert resp2["force_dry_run"] is False
-

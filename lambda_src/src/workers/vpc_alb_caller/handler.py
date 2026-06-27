@@ -6,6 +6,7 @@ import hashlib
 import urllib.request
 import urllib.error
 import socket
+import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import Any, Dict, Optional
@@ -36,6 +37,11 @@ ALLOWED_PATH_PATTERNS = [
     r"^/v1/audit/[a-zA-Z0-9_\-]+/rollback$",
     r"^/health$"
 ]
+
+AI_PAYLOAD_PATHS = {"/v1/detect", "/v1/decide", "/v1/verify"}
+AI_IDEMPOTENCY_KEY_PATTERN = re.compile(
+    r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):(daily|adhoc|decide|verify)$"
+)
 
 def sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     """Sanitize headers for secure logging (redacts Authorization and Security Tokens)."""
@@ -76,6 +82,49 @@ def validate_path(path: str) -> str:
 
     return path_only
 
+
+def validate_alb_base_url(alb_base_url: str) -> str:
+    parsed = urlparse(alb_base_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ConfigMissingError("ALB_BASE_URL must be an HTTPS URL with a host")
+    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        raise ConfigMissingError("ALB_BASE_URL must not include a path, query, or fragment")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def validate_uuid(value: str, field_name: str) -> None:
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise InvalidInputError(f"{field_name} must be a UUID") from exc
+
+
+def validate_ai_context(path: str, tenant_id: str, correlation_id: str, idempotency_key: str, body: Any) -> None:
+    if path not in AI_PAYLOAD_PATHS:
+        return
+
+    validate_uuid(tenant_id, "tenant_id")
+    validate_uuid(correlation_id, "correlation_id")
+
+    match = AI_IDEMPOTENCY_KEY_PATTERN.match(idempotency_key)
+    if not match:
+        raise InvalidInputError(
+            "idempotency_key must match tenant_id:YYYY-MM-DD:daily|adhoc|decide|verify"
+        )
+    idempotency_tenant = match.group(1)
+    validate_uuid(idempotency_tenant, "idempotency_key tenant prefix")
+    if idempotency_tenant.lower() != tenant_id.lower():
+        raise InvalidInputError("idempotency_key tenant prefix must match tenant_id")
+
+    if isinstance(body, dict):
+        for key, expected in {
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "idempotency_key": idempotency_key,
+        }.items():
+            if key in body and str(body[key]) != str(expected):
+                raise InvalidInputError(f"body.{key} must match top-level {key}")
+
 def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Main handler for VpcAlbCallerLambda.
@@ -89,6 +138,7 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     alb_base_url = os.environ.get("ALB_BASE_URL", "").rstrip("/")
     if not alb_base_url:
         raise ConfigMissingError("ALB_BASE_URL environment variable is missing")
+    alb_base_url = validate_alb_base_url(alb_base_url)
 
     sigv4_service = os.environ.get("SIGV4_SERVICE_NAME", "ai-engine")
     region = os.environ.get("AWS_REGION", "us-east-1")
@@ -121,9 +171,13 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     payload_hash = hashlib.sha256(body_bytes).hexdigest()
 
     # Determine dry-run mode value for headers
-    dry_run_val = event_data.get("dry_run_mode") or event_data.get("force_dry_run")
+    dry_run_val = event_data.get("dry_run_mode")
+    if dry_run_val is None:
+        dry_run_val = event_data.get("force_dry_run")
     if dry_run_val is None and isinstance(body, dict):
-        dry_run_val = body.get("dry_run_mode") or body.get("dry_run")
+        dry_run_val = body.get("dry_run_mode")
+        if dry_run_val is None:
+            dry_run_val = body.get("dry_run")
     dry_run_header = "true" if (dry_run_val is True or str(dry_run_val).lower() == "true") else "false"
 
     # Timestamp in ISO8601 UTC format (RFC3339 compatible)
@@ -141,6 +195,9 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
             raise InvalidInputError("tenant_id parameter is required for AI API requests")
         if not idempotency_key:
             raise InvalidInputError("idempotency_key parameter is required for AI API requests")
+        if not correlation_id:
+            raise InvalidInputError("correlation_id parameter is required for AI API requests")
+        validate_ai_context(validated_path, tenant_id, correlation_id, idempotency_key, body)
         
         headers.update({
             "X-Tenant-Id": tenant_id,

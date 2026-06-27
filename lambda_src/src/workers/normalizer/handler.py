@@ -5,6 +5,7 @@ import gzip
 import logging
 import hashlib
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 import boto3
@@ -60,6 +61,48 @@ def validate_sql_inputs(account_id: str, start_date: str, end_date: str, databas
         raise ValueError(f"Invalid workgroup name: {workgroup}")
     if results_bucket and (".." in results_bucket or "/" in results_bucket or "\\" in results_bucket):
         raise ValueError(f"Invalid results bucket: {results_bucket}")
+
+
+def resolve_tenant_id(event: finops_common.Event, event_data: dict) -> str:
+    tenant_id = event.tenant_id or event_data.get("tenant_id")
+    if tenant_id:
+        return str(tenant_id)
+    if event.account_id:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{event.account_id}"))
+    return str(uuid.uuid4())
+
+
+def resolve_account_name(event: finops_common.Event, event_data: dict) -> str:
+    account_policy = event_data.get("account_policy") if isinstance(event_data.get("account_policy"), dict) else {}
+    return (
+        event_data.get("account_name")
+        or event.environment
+        or account_policy.get("environment")
+        or event.account_id
+    )
+
+
+def normalize_business_context(raw_context: Any, account_id: str) -> dict:
+    default_context = {
+        "linked_account_id": account_id,
+        "traffic_volume": 0,
+        "traffic_source": "ALB",
+        "campaign_flag": False,
+        "load_test_flag": False,
+        "migration_flag": False,
+    }
+
+    selected = {}
+    if isinstance(raw_context, dict):
+        selected = raw_context
+    elif isinstance(raw_context, list):
+        candidates = [item for item in raw_context if isinstance(item, dict)]
+        selected = next(
+            (item for item in candidates if item.get("linked_account_id") == account_id),
+            candidates[0] if candidates else {},
+        )
+
+    return {**default_context, **selected}
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -179,25 +222,15 @@ def handle_request(event_data: dict, context: Any) -> dict:
     s3_bucket_uri = ""
     s3_object_checksum = ""
     batch_type = "adhoc" if event.is_ad_hoc else "daily"
+    tenant_id = resolve_tenant_id(event, event_data)
+    account_name = resolve_account_name(event, event_data)
+    ai_idempotency_key = event_data.get("idempotency_key") or f"{tenant_id}:{event.execution_date}:{batch_type}"
+    request_timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # Resolve business context
-    business_context = [
-        {
-            "linked_account_id": event.account_id,
-            "traffic_volume": 0,
-            "traffic_source": "ALB",
-            "campaign_flag": False,
-            "load_test_flag": False,
-            "migration_flag": False
-        }
-    ]
     raw_bc = ingestion_details.get("business_context")
-    if raw_bc:
-        if isinstance(raw_bc, list):
-            business_context = raw_bc
-        elif isinstance(raw_bc, dict):
-            business_context = [raw_bc]
-    else:
+    business_context = normalize_business_context(raw_bc, event.account_id)
+    if not raw_bc:
         missing_cloudwatch = True
         if not explicit_completeness_score:
             completeness_score = min(completeness_score, 0.5)
@@ -379,11 +412,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # Build full AI detect payload JSON, gzip it, and write to S3
         detect_payload = {
             "schema_version": "3.2.0",
-            "tenant_id": event.tenant_id or "tenant-default",
+            "tenant_id": tenant_id,
             "account_id": event.account_id,
+            "account_name": account_name,
             "correlation_id": event.correlation_id,
-            "idempotency_key": event_data.get("idempotency_key") or f"{event.tenant_id or 'tenant-default'}:{event.execution_date}:{batch_type}",
-            "request_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "idempotency_key": ai_idempotency_key,
+            "request_timestamp": request_timestamp,
             "aws_cur_line_items": cur_records,
             "aws_cost_explorer_daily": [],
             "resource_utilization_metrics": resource_utilization_metrics,
@@ -554,9 +588,58 @@ def handle_request(event_data: dict, context: Any) -> dict:
             if isinstance(cw_val, dict):
                 comparison_window = cw_val
 
+    if telemetry_delay_event:
+        detect_payload = {
+            "schema_version": "3.2.0",
+            "tenant_id": tenant_id,
+            "account_id": event.account_id,
+            "account_name": account_name,
+            "correlation_id": event.correlation_id,
+            "idempotency_key": ai_idempotency_key,
+            "request_timestamp": request_timestamp,
+            "aws_cur_line_items": cur_records,
+            "aws_cost_explorer_daily": ce_records,
+            "missing_resources": missing_resources,
+            "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
+            "comparison_window": comparison_window,
+            "resource_utilization_metrics": resource_utilization_metrics,
+            "business_context": business_context,
+            "quality": {
+                "completeness_score": completeness_score,
+                "delayed_cur": delayed_cur,
+                "stale_cost_explorer": stale_cost_explorer,
+                "missing_cloudwatch": missing_cloudwatch,
+                "estimated_billing": estimated_billing,
+            },
+        }
+
+        detect_json = json.dumps(detect_payload).encode("utf-8")
+        detect_gzipped = gzip.compress(detect_json)
+        s3_object_checksum = hashlib.sha256(detect_gzipped).hexdigest()
+        ai_key = f"ai-input/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_input.json.gz"
+        s3_bucket_uri = f"s3://{bucket_name}/{ai_key}"
+
+        if ".." in ai_key:
+            raise finops_common.UnsafeActionError("Unsafe raw data key path traversal detected")
+
+        if client:
+            try:
+                logger.info("Writing gzipped AI detect input to S3: %s", s3_bucket_uri)
+                client.put_object(bucket_name, ai_key, detect_gzipped)
+            except Exception as e:
+                logger.error("Failed to write AI detect input to S3: %s", e)
+                raise e
+
     details = {
         "curated_data_uri": curated_data_uri,
+        "schema_version": "3.2.0",
         "schema": "finops-cost-window-v1",
+        "tenant_id": tenant_id,
+        "account_id": event.account_id,
+        "account_name": account_name,
+        "correlation_id": event.correlation_id,
+        "idempotency_key": ai_idempotency_key,
+        "request_timestamp": request_timestamp,
         "partition_keys": ["account_id", "year", "month"],
         "completeness_score": completeness_score,
         "delayed_cur": delayed_cur,

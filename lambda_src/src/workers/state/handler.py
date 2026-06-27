@@ -1,7 +1,7 @@
 import os
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 import finops_common
 
@@ -9,6 +9,20 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 ddb_client = None
+
+
+def _utc_date() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _default_tenant_id(account_id: str) -> str:
+    if account_id:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{account_id}"))
+    return str(uuid.uuid4())
 
 def get_ddb_client():
     global ddb_client
@@ -29,11 +43,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
         if not isinstance(payload, dict):
             payload = event_data
             
+        account_id = payload.get("account_id") or event_data.get("account_id") or ""
         run_id = payload.get("run_id") or event_data.get("run_id") or f"run-{uuid.uuid4()}"
-        correlation_id = payload.get("correlation_id") or event_data.get("correlation_id") or run_id
-        execution_date = payload.get("execution_date") or event_data.get("execution_date") or datetime.utcnow().strftime("%Y-%m-%d")
+        correlation_id = payload.get("correlation_id") or event_data.get("correlation_id") or str(uuid.uuid4())
+        execution_date = payload.get("execution_date") or event_data.get("execution_date") or _utc_date()
         cost_period = payload.get("cost_period") or event_data.get("cost_period") or execution_date[:7]
-        tenant_id = payload.get("tenant_id") or payload.get("account_id") or event_data.get("tenant_id") or event_data.get("account_id") or "tenant-default"
+        tenant_id = payload.get("tenant_id") or event_data.get("tenant_id") or _default_tenant_id(account_id)
         
         is_ad_hoc = False
         if "is_ad_hoc" in payload:
@@ -61,7 +76,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "ai_retry": ai_retry,
             "ce_retry": ce_retry,
             "force_dry_run": False,
-            "account_id": event_data.get("account_id", "")
+            "account_id": account_id
         }
         
         response = finops_common.create_response("OK", run_id, correlation_id, "state", details)
@@ -83,8 +98,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
     if op == "check_quota":
         is_ad_hoc = event_data.get("is_ad_hoc") or False
-        tenant_id = event_data.get("tenant_id") or "tenant-default"
-        execution_date = event_data.get("execution_date") or datetime.utcnow().strftime("%Y-%m-%d")
+        tenant_id = event_data.get("tenant_id") or _default_tenant_id(event.account_id)
+        execution_date = event_data.get("execution_date") or _utc_date()
         
         status = "OK"
         client = get_ddb_client()
@@ -105,7 +120,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                         client.put_item(table_name, {
                             "idempotency_key": quota_key,
                             "count": count + 1,
-                            "updated_at": datetime.utcnow().isoformat() + "Z"
+                            "updated_at": _utc_timestamp()
                         })
                 except Exception as e:
                     logger.error("DynamoDB quota check failed: %s", e)
@@ -131,7 +146,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
     elif op == "check_error_budget":
         budget_table = os.environ.get("ERROR_BUDGET_TABLE_NAME")
         locked = False
-        tenant_id = event_data.get("tenant_id") or "tenant-default"
+        tenant_id = event_data.get("tenant_id") or _default_tenant_id(event.account_id)
         client = get_ddb_client()
         
         if client and budget_table:
@@ -181,7 +196,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                             "status": "IN_PROGRESS",
                             "run_id": event.run_id,
                             "correlation_id": event.correlation_id,
-                            "updated_at": datetime.utcnow().isoformat() + "Z"
+                            "updated_at": _utc_timestamp()
                         }, condition_expression="attribute_not_exists(idempotency_key)")
                         status = "NEW"
                     except Exception as conditional_error:
@@ -205,7 +220,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "status": "COMPLETED",
                     "run_id": event.run_id,
                     "correlation_id": event.correlation_id,
-                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                    "updated_at": _utc_timestamp()
                 })
                 status = "COMPLETED"
             except Exception as e:
@@ -218,7 +233,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "status": "FAILED",
                     "run_id": event.run_id,
                     "correlation_id": event.correlation_id,
-                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                    "updated_at": _utc_timestamp()
                 })
                 status = "FAILED"
             except Exception as e:
@@ -251,7 +266,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
     }
     
     response = finops_common.create_response(status, event.run_id, event.correlation_id, "state", details)
-    response.tenant_id = event_data.get("tenant_id") or (event.account_id and str(uuid.uuid5(uuid.NAMESPACE_DNS, event.account_id))) or "tenant-default"
+    response.tenant_id = event_data.get("tenant_id") or _default_tenant_id(event.account_id)
     response.is_ad_hoc = event_data.get("is_ad_hoc") or False
     response.force_dry_run = event_data.get("force_dry_run") or False
     

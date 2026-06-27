@@ -526,10 +526,21 @@
         "ai_contract_version.$": "$.ai_contract_version",
         "dry_run_mode.$": "$.force_dry_run",
         "body": {
+          "schema_version": "3.2.0",
+          "tenant_id.$": "$.tenant_id",
+          "account_id.$": "$.account_id",
+          "account_name.$": "$.environment",
+          "correlation_id.$": "$.correlation_id",
+          "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
           "data_source_type": "S3_POINTER",
           "is_ad_hoc.$": "$.is_ad_hoc",
           "telemetry_delay_event.$": "$.normalized.details.telemetry_delay_event",
           "s3_bucket_uri.$": "$.normalized.details.s3_bucket_uri",
+          "s3_object_checksum.$": "$.normalized.details.s3_object_checksum",
+          "aws_cost_explorer_daily.$": "$.normalized.details.aws_cost_explorer_daily",
+          "missing_resources.$": "$.normalized.details.missing_resources",
+          "current_ce_cost_gap_usd.$": "$.normalized.details.current_ce_cost_gap_usd",
+          "comparison_window.$": "$.normalized.details.comparison_window",
           "business_context.$": "$.normalized.details.business_context",
           "resource_utilization_metrics.$": "$.normalized.details.resource_utilization_metrics"
         }
@@ -627,11 +638,11 @@
         "method": "POST",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "$.correlation_id",
+        "idempotency_key.$": "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)",
         "ai_contract_version.$": "$.ai_contract_version",
         "body": {
           "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "$.correlation_id",
+          "idempotency_key.$": "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)",
           "dry_run_mode.$": "$.force_dry_run",
           "anomaly_context.$": "$.ai_detect_response.anomalies_list[0]"
         }
@@ -1043,11 +1054,11 @@
         "method": "POST",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "$.correlation_id",
+        "idempotency_key.$": "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)",
         "ai_contract_version.$": "$.ai_contract_version",
         "body": {
           "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "$.correlation_id",
+          "idempotency_key.$": "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)",
           "dry_run_mode.$": "$.force_dry_run",
           "action_executed": {
             "action.$": "$.ai.recommended_containment_mode",

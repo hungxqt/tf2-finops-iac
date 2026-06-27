@@ -214,6 +214,27 @@ def check_asl_file(asl_path, is_template=True):
     assert states["InvokeDecide"]["Parameters"]["path"] == "/v1/decide"
     assert states["ReportVerifyResult"]["Parameters"]["path"] == "/v1/verify"
 
+    detect_body = states["BuildDetectRequestS3Pointer"]["Parameters"]["body"]
+    for required_key in [
+        "schema_version",
+        "tenant_id.$",
+        "account_id.$",
+        "account_name.$",
+        "correlation_id.$",
+        "idempotency_key.$",
+        "s3_object_checksum.$",
+        "aws_cost_explorer_daily.$",
+        "missing_resources.$",
+        "current_ce_cost_gap_usd.$",
+        "comparison_window.$",
+    ]:
+        assert required_key in detect_body, f"BuildDetectRequestS3Pointer body missing {required_key}"
+
+    assert states["InvokeDecide"]["Parameters"]["idempotency_key.$"] == "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)"
+    assert states["InvokeDecide"]["Parameters"]["body"]["idempotency_key.$"] == "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)"
+    assert states["ReportVerifyResult"]["Parameters"]["idempotency_key.$"] == "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)"
+    assert states["ReportVerifyResult"]["Parameters"]["body"]["idempotency_key.$"] == "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)"
+
 def test_state_machine_asl_contract():
     asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
     check_asl_file(asl_template_path, is_template=True)

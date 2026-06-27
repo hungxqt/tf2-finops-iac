@@ -2,9 +2,13 @@ import pytest
 import os
 import json
 import gzip
+import re
 from workers.normalizer import handler
 import finops_common
 
+
+TENANT_ID = "11111111-1111-4111-8111-111111111111"
+CORRELATION_ID = "22222222-2222-4222-8222-222222222222"
 
 ATHENA_ENV = {
     "ATHENA_WORKGROUP_NAME": "test-wg",
@@ -161,15 +165,17 @@ def test_normalizer_s3_read_write_filtering():
     assert len(get_called) == 1
     assert get_called[0] == ("test-lakehouse", "cost/raw/year=2026/month=06/day=24/run-400_raw.json")
 
-    # Assert S3 PUT was called with filtered/curated records
-    assert len(put_called) == 1
-    assert put_called[0]["bucket"] == "test-lakehouse"
-    assert put_called[0]["key"] == "cost/curated/account_id=112233445566/year=2026/month=06/run-400_curated.parquet"
+    # Assert S3 PUT wrote filtered/curated records and the normalized AI input.
+    curated_put = next(p for p in put_called if p["key"].endswith("_curated.parquet"))
+    ai_input_put = next(p for p in put_called if p["key"].endswith("_input.json.gz"))
+    assert curated_put["bucket"] == "test-lakehouse"
+    assert curated_put["key"] == "cost/curated/account_id=112233445566/year=2026/month=06/run-400_curated.parquet"
+    assert ai_input_put["key"] == "ai-input/account_id=112233445566/year=2026/month=06/day=24/run-400_input.json.gz"
 
     # Parse Parquet data using pyarrow
     import io
     import pyarrow.parquet as pq
-    table = pq.read_table(io.BytesIO(put_called[0]["body"]))
+    table = pq.read_table(io.BytesIO(curated_put["body"]))
     curated_records = table.to_pylist()
 
     # 4 input records, 2 should be filtered out
@@ -458,15 +464,17 @@ def test_normalizer_payload_contract_fields():
     # 1. Test standard S3 pointer mode selection
     event_data = {
         "run_id": "run-s3-pointer-1",
-        "correlation_id": "corr-s3-pointer-1",
+        "correlation_id": CORRELATION_ID,
         "account_id": "123456789012",
         "cost_period": "2026-06",
         "execution_date": "2026-06-24",
+        "environment": "sandbox",
+        "tenant_id": TENANT_ID,
         "is_ad_hoc": True,
         "ingestion": {
             "status": "READY",
             "run_id": "run-s3-pointer-1",
-            "correlation_id": "corr-s3-pointer-1",
+            "correlation_id": CORRELATION_ID,
             "worker": "cost_puller",
             "details": {
                 "telemetry_delay_event": False,
@@ -497,9 +505,14 @@ def test_normalizer_payload_contract_fields():
     assert details["detect_request_mode"] == "S3_POINTER"
     assert details["s3_bucket_uri"].startswith("s3://test-lakehouse/ai-input/account_id=123456789012/year=2026/month=06/day=24/")
     assert details["s3_bucket_uri"].endswith("_input.json.gz")
-    assert details["s3_object_checksum"] != ""
-    assert details["business_context"][0]["linked_account_id"] == "123456789012"
-    assert details["business_context"][0]["traffic_volume"] == 120000
+    assert re.fullmatch(r"[a-f0-9]{64}", details["s3_object_checksum"])
+    assert details["tenant_id"] == TENANT_ID
+    assert details["account_id"] == "123456789012"
+    assert details["account_name"] == "sandbox"
+    assert details["correlation_id"] == CORRELATION_ID
+    assert details["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc"
+    assert details["business_context"]["linked_account_id"] == "123456789012"
+    assert details["business_context"]["traffic_volume"] == 120000
     assert details["resource_utilization_metrics"][0]["cpu_utilization"] == 75.5
     assert len(details["aws_cur_line_items"]) == 1
     assert details["batch_type"] == "adhoc"
@@ -511,8 +524,14 @@ def test_normalizer_payload_contract_fields():
     decompressed = gzip.decompress(ai_bytes)
     envelope = json.loads(decompressed.decode("utf-8"))
     assert envelope["schema_version"] == "3.2.0"
+    assert envelope["tenant_id"] == TENANT_ID
+    assert envelope["account_id"] == "123456789012"
+    assert envelope["account_name"] == "sandbox"
+    assert envelope["correlation_id"] == CORRELATION_ID
+    assert envelope["request_timestamp"].endswith("Z")
     assert len(envelope["aws_cur_line_items"]) == 1
-    assert envelope["idempotency_key"] == "tenant-default:2026-06-24:adhoc"
+    assert envelope["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc"
+    assert envelope["business_context"]["linked_account_id"] == "123456789012"
 
     # 2. Test CE fallback S3 pointer
     put_called.clear()
@@ -548,14 +567,15 @@ def test_normalizer_payload_contract_fields():
 
     event_data_ce = {
         "run_id": "run-ce-1",
-        "correlation_id": "corr-ce-1",
+        "correlation_id": CORRELATION_ID,
         "account_id": "123456789012",
         "cost_period": "2026-06",
         "execution_date": "2026-06-24",
+        "tenant_id": TENANT_ID,
         "ingestion": {
             "status": "READY",
             "run_id": "run-ce-1",
-            "correlation_id": "corr-ce-1",
+            "correlation_id": CORRELATION_ID,
             "worker": "cost_puller",
             "details": {
                 "telemetry_delay_event": True,
@@ -571,9 +591,15 @@ def test_normalizer_payload_contract_fields():
     details_ce = resp_ce["details"]
     assert details_ce["detect_request_mode"] == "S3_POINTER"
     assert details_ce["telemetry_delay_event"] is True
-    assert details_ce["s3_bucket_uri"] == "s3://test-lakehouse/cur/account_id=123456789012/year=2026/month=06/day=24/run-ce-1_raw.json.gz"
+    assert details_ce["s3_bucket_uri"].startswith("s3://test-lakehouse/ai-input/account_id=123456789012/year=2026/month=06/day=24/")
+    assert re.fullmatch(r"[a-f0-9]{64}", details_ce["s3_object_checksum"])
     assert len(details_ce["aws_cost_explorer_daily"]) == 1
     assert details_ce["current_ce_cost_gap_usd"] == 150.0
+    ai_ce_bytes = next(p["body"] for p in put_called if p["key"].endswith("_input.json.gz"))
+    ce_envelope = json.loads(gzip.decompress(ai_ce_bytes).decode("utf-8"))
+    assert ce_envelope["business_context"]["linked_account_id"] == "123456789012"
+    assert ce_envelope["missing_resources"] == ["AmazonEC2"]
+    assert ce_envelope["current_ce_cost_gap_usd"] == 150.0
 
     # Clean up
     if "LAKEHOUSE_BUCKET_NAME" in os.environ:
