@@ -249,11 +249,12 @@ Hành vi thu thập dữ liệu được kiểm soát bởi các biến Terrafor
 * `cur_delay_threshold_hours`: Ngưỡng thời gian trễ (tính bằng giờ) trước khi chuyển sang chế độ dự phòng CE (mặc định: `36`).
 * `ce_lookback_window_days`: Số ngày lịch sử CE cần lấy khi chạy dự phòng (mặc định: `30`).
 * `traffic_metric_identifiers`: Định danh dùng để truy vấn dữ liệu traffic vật lý (ví dụ: tên ALB).
-* `synthetic_fallback_enabled`: Bật/tắt chế độ tự động tạo dữ liệu giả lập cho local tests/simulations (mặc định: `true`).
+
+Không còn cơ chế tự động tạo telemetry dự phòng. `cost_puller` yêu cầu cấu hình lakehouse bucket và CUR source bucket cho luồng thu thập thông thường. Nếu CUR bị trễ và Cost Explorer không trả về bản ghi, hoặc cache telemetry không có sẵn khi CE bị throttling, worker trả về `CUR_DELAY` hoặc `CE_THROTTLED` và workflow phải giữ chế độ dry-run/alert-only.
 
 ### Bước 7.2: Xác minh và Giả lập
 Người vận hành có thể xác minh luồng retry/wait và xử lý lỗi của State Machine thông qua các hành động giả lập (simulation actions) trong event thực thi:
-* **Giả lập CUR bị trễ**: Gửi `"action": "simulate-cur-delay"` để ép trạng thái trễ CUR và kích hoạt luồng dự phòng Cost Explorer.
+* **Giả lập CUR bị trễ**: Gửi `"action": "simulate-cur-delay"` để ép trạng thái trễ CUR và kích hoạt luồng dự phòng Cost Explorer. Worker vẫn cần bản ghi Cost Explorer thật hoặc telemetry cache để tiếp tục.
 * **Giả lập CE bị throttling**: Gửi `"action": "simulate-ce-throttled"` để kích hoạt lỗi rate limit cho CE. Nếu có dữ liệu cache trong destination bucket, hệ thống sẽ khôi phục dữ liệu từ cache và đặt cờ chất lượng `stale_cost_explorer = true`; nếu không sẽ trả về lỗi `CE_THROTTLED`.
 
 Xác minh các tệp JSON gzipped được tạo ra bằng cách kiểm tra các đường dẫn prefix S3:

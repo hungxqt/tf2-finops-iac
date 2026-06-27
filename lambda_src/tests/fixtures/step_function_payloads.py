@@ -190,6 +190,15 @@ _CUR_LINE_ITEMS = [
     }
 ]
 
+_BUSINESS_CONTEXT_DEFAULT = {
+    "linked_account_id": ACCOUNT_ID,
+    "traffic_volume": 100000,
+    "traffic_source": "Mixed",
+    "campaign_flag": False,
+    "load_test_flag": False,
+    "migration_flag": False,
+}
+
 _NORMALIZED_HEALTHY_DETAILS = {
     "curated_data_uri": f"s3://tf2-finops-lakehouse-bucket/cost/curated/account_id={ACCOUNT_ID}/year=2026/month=06/{RUN_ID}_curated.parquet",
     "schema": "finops-cost-window-v1",
@@ -199,7 +208,17 @@ _NORMALIZED_HEALTHY_DETAILS = {
     "stale_cost_explorer": False,
     "missing_cloudwatch": False,
     "estimated_billing": False,
+    "detect_request_mode": "RAW_JSON",
+    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/cur/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_raw.json.gz",
+    "business_context": _BUSINESS_CONTEXT_DEFAULT,
+    "resource_utilization_metrics": None,
     "aws_cur_line_items": _CUR_LINE_ITEMS,
+    "aws_cost_explorer_daily": [],
+    "missing_resources": [],
+    "current_ce_cost_gap_usd": 0.0,
+    "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
+    "batch_type": "daily",
+    "telemetry_delay_event": False,
 }
 
 POST_NORMALIZE_HEALTHY = {
@@ -210,6 +229,23 @@ POST_NORMALIZE_HEALTHY = {
         "correlation_id": CORRELATION_ID,
         "worker": "normalizer",
         "details": _NORMALIZED_HEALTHY_DETAILS,
+    },
+}
+
+_NORMALIZED_POINTER_DETAILS = {
+    **_NORMALIZED_HEALTHY_DETAILS,
+    "detect_request_mode": "S3_POINTER",
+    "s3_bucket_uri": f"s3://company-cdo-{ACCOUNT_ID}-telemetry/{RUN_ID}_raw.json.gz",
+}
+
+POST_NORMALIZE_POINTER = {
+    **POST_INGEST_COST_DATA_S3,
+    "normalized": {
+        "status": "NORMALIZED",
+        "run_id": RUN_ID,
+        "correlation_id": CORRELATION_ID,
+        "worker": "normalizer",
+        "details": _NORMALIZED_POINTER_DETAILS,
     },
 }
 
@@ -226,7 +262,17 @@ _NORMALIZED_DEGRADED_DETAILS = {
     "stale_cost_explorer": True,
     "missing_cloudwatch": False,
     "estimated_billing": True,
+    "detect_request_mode": "RAW_JSON_CE_FALLBACK",
+    "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/cur/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_raw.json.gz",
+    "business_context": _BUSINESS_CONTEXT_DEFAULT,
+    "resource_utilization_metrics": None,
     "aws_cur_line_items": [],
+    "aws_cost_explorer_daily": [],
+    "missing_resources": ["AmazonEC2"],
+    "current_ce_cost_gap_usd": 150.0,
+    "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
+    "batch_type": "daily",
+    "telemetry_delay_event": True,
 }
 
 POST_NORMALIZE_DEGRADED = {
@@ -251,21 +297,61 @@ POST_BUILD_DETECT_REQUEST = {
         "method": "POST",
         "tenant_id": TENANT_ID,
         "correlation_id": CORRELATION_ID,
-        "idempotency_key": CORRELATION_ID,
+        "idempotency_key": IDEMPOTENCY_KEY,
         "ai_contract_version": AI_CONTRACT_VERSION,
+        "dry_run_mode": False,
         "body": {
             "data_source_type": "RAW_JSON",
             "is_ad_hoc": False,
             "telemetry_delay_event": False,
             "aws_cur_line_items": _CUR_LINE_ITEMS,
-            "business_context": {
-                "linked_account_id": ACCOUNT_ID,
-                "traffic_volume": 100000,
-                "traffic_source": "Mixed",
-                "campaign_flag": False,
-                "load_test_flag": False,
-                "migration_flag": False,
-            },
+            "business_context": _BUSINESS_CONTEXT_DEFAULT,
+            "resource_utilization_metrics": None,
+        },
+    },
+}
+
+POST_BUILD_DETECT_REQUEST_S3_POINTER = {
+    **POST_NORMALIZE_POINTER,
+    "ai_detect_request": {
+        "path": "/v1/detect",
+        "method": "POST",
+        "tenant_id": TENANT_ID,
+        "correlation_id": CORRELATION_ID,
+        "idempotency_key": IDEMPOTENCY_KEY,
+        "ai_contract_version": AI_CONTRACT_VERSION,
+        "dry_run_mode": False,
+        "body": {
+            "data_source_type": "S3_POINTER",
+            "is_ad_hoc": False,
+            "telemetry_delay_event": False,
+            "s3_bucket_uri": f"s3://company-cdo-{ACCOUNT_ID}-telemetry/{RUN_ID}_raw.json.gz",
+            "business_context": _BUSINESS_CONTEXT_DEFAULT,
+            "resource_utilization_metrics": None,
+        },
+    },
+}
+
+POST_BUILD_DETECT_REQUEST_CE_FALLBACK = {
+    **POST_NORMALIZE_DEGRADED,
+    "ai_detect_request": {
+        "path": "/v1/detect",
+        "method": "POST",
+        "tenant_id": TENANT_ID,
+        "correlation_id": CORRELATION_ID,
+        "idempotency_key": IDEMPOTENCY_KEY,
+        "ai_contract_version": AI_CONTRACT_VERSION,
+        "dry_run_mode": True,
+        "body": {
+            "data_source_type": "RAW_JSON",
+            "is_ad_hoc": False,
+            "telemetry_delay_event": True,
+            "aws_cost_explorer_daily": [],
+            "missing_resources": ["AmazonEC2"],
+            "current_ce_cost_gap_usd": 150.0,
+            "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
+            "business_context": _BUSINESS_CONTEXT_DEFAULT,
+            "resource_utilization_metrics": None,
         },
     },
 }

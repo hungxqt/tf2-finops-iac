@@ -124,12 +124,6 @@ variable "traffic_metric_identifiers" {
   default     = []
 }
 
-variable "synthetic_fallback_enabled" {
-  type        = bool
-  description = "Flag to enable synthetic fallback logic if real AWS collection fails or environment variables are not set"
-  default     = true
-}
-
 variable "telemetry_member_account_ids" {
   type        = list(string)
   description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
@@ -159,5 +153,4 @@ variable "trusted_cost_puller_role_arns" {
   description = "The ARNs of trusted cost puller IAM roles allowed to assume the ingestion role"
   default     = []
 }
-
 

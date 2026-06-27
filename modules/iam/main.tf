@@ -16,7 +16,8 @@ data "aws_iam_policy_document" "boundary" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
     ]
     resources = concat(
       [
@@ -28,6 +29,10 @@ data "aws_iam_policy_document" "boundary" {
       var.cur_source_bucket_arn != "" ? [
         var.cur_source_bucket_arn,
         "${var.cur_source_bucket_arn}/*"
+      ] : [],
+      var.athena_results_bucket_arn != "" ? [
+        var.athena_results_bucket_arn,
+        "${var.athena_results_bucket_arn}/*"
       ] : []
     )
   }
@@ -48,9 +53,38 @@ data "aws_iam_policy_document" "boundary" {
     effect = "Allow"
     actions = [
       "kms:Decrypt",
-      "kms:GenerateDataKey"
+      "kms:GenerateDataKey",
+      "kms:Encrypt"
     ]
     resources = var.kms_key_arns
+  }
+
+  statement {
+    sid    = "AllowAthenaActions"
+    effect = "Allow"
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = var.athena_workgroup_arn != "" ? [var.athena_workgroup_arn] : ["*"]
+  }
+
+  statement {
+    sid    = "AllowGlueActions"
+    effect = "Allow"
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = compact([
+      var.glue_database_arn != "" ? var.glue_database_arn : "",
+      var.cur_data_table_arn != "" ? var.cur_data_table_arn : "",
+      "arn:aws:glue:*:*:catalog"
+    ])
   }
 
   statement {
@@ -339,13 +373,40 @@ resource "aws_iam_role_policy" "normalizer" {
 
 data "aws_iam_policy_document" "normalizer" {
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${var.lakehouse_bucket_arn}/*"]
+    actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [
+      var.lakehouse_bucket_arn,
+      "${var.lakehouse_bucket_arn}/*",
+      var.athena_results_bucket_arn,
+      "${var.athena_results_bucket_arn}/*"
+    ]
+  }
+  statement {
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = [var.athena_workgroup_arn]
+  }
+  statement {
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = [
+      var.glue_database_arn,
+      var.cur_data_table_arn,
+      "arn:aws:glue:*:*:catalog"
+    ]
   }
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
-      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:Encrypt"]
       resources = var.kms_key_arns
     }
   }

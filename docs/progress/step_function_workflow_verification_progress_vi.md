@@ -17,17 +17,17 @@ tài liệu TF2 đang hoạt động.
 
 ---
 
-## Các File Được Tạo
+## Các File Được Tạo/Sửa Đổi
 
 | File | Mục Đích |
 |------|----------|
 | `lambda_src/tests/fixtures/__init__.py` | Package init cho module fixtures |
-| `lambda_src/tests/fixtures/step_function_payloads.py` | 19 fixture dict xác định cho mọi ranh giới quy trình |
-| `lambda_src/tests/test_step_function_payload_contract.py` | 73 bài kiểm tra payload-contract trong 9 nhóm (A-I) |
+| `lambda_src/tests/fixtures/step_function_payloads.py` | 21 fixture dict xác định cho mọi ranh giới quy trình |
+| `lambda_src/tests/test_step_function_payload_contract.py` | 77 bài kiểm tra payload-contract trong 9 nhóm (A-I) |
 
 ---
 
-## Danh Sách Fixtures (19 fixtures)
+## Danh Sách Fixtures (21 fixtures)
 
 1. `SCHEDULED_WORKFLOW_INPUT` - EventBridge Scheduler -> PrepareRunContext đầu vào
 2. `POST_PREPARE_RUN_CONTEXT` - Sau thao tác prepare của state_lambda
@@ -35,30 +35,33 @@ tài liệu TF2 đang hoạt động.
 4. `POST_INGEST_COST_DATA_CE` - CUR bị trễ, CE fallback hoạt động
 5. `POST_NORMALIZE_HEALTHY` - Đầu ra chuẩn hóa chất lượng cao (completeness >= 0.8)
 6. `POST_NORMALIZE_DEGRADED` - Telemetry bị suy giảm (completeness < 0.8, kích hoạt cổng dry-run)
-7. `POST_BUILD_DETECT_REQUEST` - Đầu ra Pass state BuildDetectRequest ($.ai_detect_request)
-8. `POST_INVOKE_DETECT_ANOMALY` - /v1/detect trả về có bất thường
-9. `POST_INVOKE_DETECT_NO_ANOMALY` - /v1/detect trả về sạch (không có bất thường)
-10. `POST_INVOKE_DECIDE` - /v1/decide trả về action_plan + rollback_payload
-11. `POST_FORMAT_DECIDE_RESULT` - FormatDecideResult Pass state ghi $.ai
-12. `POST_ROUTER` - RouteAlert ghi $.alert với cả hai tuyến finance+engineering
-13. `POST_CONTAINMENT_POLICY_APPLY` - sandbox+tag mode -> WritePreActionAudit
-14. `POST_CONTAINMENT_POLICY_DENIED_PROD` - prod+terminate -> WriteDeniedAudit
-15. `POST_CONTAINMENT_POLICY_DRYRUN_DENIED` - force_dry_run+apply -> WriteDeniedAudit
-16. `POST_EXECUTE_CONTAINMENT` - Kết quả ExecuteContainment tại $.containment
-17. `POST_VERIFY_RESULT` - Kết quả /v1/verify tại $.verify_result
-18. `AI_FAIL_CLOSED_CONTEXT` - Sau SetAIFailClosedError, $.error được điền
-19. `CUR_DELAY_EXCEEDED_CONTEXT` - Sau SetCURDelayExceededError, cur_retry.count=4
+7. `POST_NORMALIZE_POINTER` - Đầu ra chuẩn hóa chất lượng cao với con trỏ S3 hợp lệ theo hợp đồng
+8. `POST_BUILD_DETECT_REQUEST` - Đầu ra Pass state BuildDetectRequestRawJson ($.ai_detect_request)
+9. `POST_BUILD_DETECT_REQUEST_S3_POINTER` - Đầu ra Pass state BuildDetectRequestS3Pointer
+10. `POST_BUILD_DETECT_REQUEST_CE_FALLBACK` - Đầu ra Pass state BuildDetectRequestRawJsonCeFallback
+11. `POST_INVOKE_DETECT_ANOMALY` - /v1/detect trả về có bất thường
+12. `POST_INVOKE_DETECT_NO_ANOMALY` - /v1/detect trả về sạch (không có bất thường)
+13. `POST_INVOKE_DECIDE` - /v1/decide trả về action_plan + rollback_payload
+14. `POST_FORMAT_DECIDE_RESULT` - FormatDecideResult Pass state ghi $.ai
+15. `POST_ROUTER` - RouteAlert ghi $.alert với cả hai tuyến finance+engineering
+16. `POST_CONTAINMENT_POLICY_APPLY` - sandbox+tag mode -> WritePreActionAudit
+17. `POST_CONTAINMENT_POLICY_DENIED_PROD` - prod+terminate -> WriteDeniedAudit
+18. `POST_CONTAINMENT_POLICY_DRYRUN_DENIED` - force_dry_run+apply -> WriteDeniedAudit
+19. `POST_EXECUTE_CONTAINMENT` - Kết quả ExecuteContainment tại $.containment
+20. `POST_VERIFY_RESULT` - Kết quả /v1/verify tại $.verify_result
+21. `AI_FAIL_CLOSED_CONTEXT` - Sau SetAIFailClosedError, $.error được điền
+22. `CUR_DELAY_EXCEEDED_CONTEXT` - Sau SetCURDelayExceededError, cur_retry.count=4
 
 ---
 
-## Nhóm Kiểm Tra (73 bài kiểm tra, 9 nhóm)
+## Nhóm Kiểm Tra (77 bài kiểm tra, 9 nhóm)
 
 | Nhóm | Tên | Số Lượng | Phạm Vi |
 |------|-----|----------|---------|
 | A | Kiểm Kê Thành Phần | 15 | ASL states, kiểm tra không có polling, VPC ALB caller, DynamoDB, SNS, SQS |
 | B | Giải Quyết Payload | 18 | JSONPath resolver xác minh từng fixture ranh giới |
 | C | Hợp Đồng Telemetry | 5 | Mặc định S3_POINTER, CE fallback, cờ chất lượng |
-| D | Đường Detect | 6 | Hình dạng /v1/detect, fail-closed khi success=false và data_confidence=LOW |
+| D | Đường Detect | 10 | Hình dạng /v1/detect, khóa idempotency ổn định, các builder theo chế độ, truyền chế độ dry-run, fail-closed khi success=false |
 | E | Đường Decide/Cache | 6 | Body /v1/decide, rollback_payload, ghi DynamoDB CacheRollbackPayload |
 | F | Chính Sách Containment | 4 | Từ chối prod+destructive, từ chối dry-run, đường an toàn sandbox+tag |
 | G | Đường Verify | 5 | Body /v1/verify, JSONPath action_executed.target, chuỗi audit |
@@ -70,9 +73,9 @@ tài liệu TF2 đang hoạt động.
 ## Kết Quả Kiểm Tra
 
 ```
-73 passed in 0.14s (chỉ kiểm tra payload contract)
-84 passed in 0.39s (payload contract + state machine + lambda coverage + vpc alb caller)
-187 passed in 5.74s (toàn bộ suite, 0 thất bại)
+77 passed in 0.19s (chỉ kiểm tra payload contract)
+88 passed in 0.45s (payload contract + state machine + lambda coverage + vpc alb caller)
+107 passed in 3.93s (toàn bộ suite, 0 thất bại)
 ```
 
 ---
@@ -84,6 +87,7 @@ Bộ giải quyết ASL nhẹ trong file kiểm tra hỗ trợ tập con đượ
 - `"$"` -> toàn bộ dict context  
 - `"$.a.b.c"` -> duyệt key lồng nhau  
 - `"$.anomalies_list[0].anomaly_id"` -> chỉ số mảng sau đó key
+- `"States.Format"` -> đánh giá hàm intrinsic format string với các đối số JSONPath được giải quyết
 
 Điều này đủ để xác minh tất cả Task.Parameters, JSONPaths của Pass state, và đường dẫn
 biến Choice mà không cần mô phỏng runtime ASL đầy đủ.
@@ -95,15 +99,20 @@ biến Choice mà không cần mô phỏng runtime ASL đầy đủ.
 Không phát hiện khoảng trống payload nào. Các thuộc tính hợp đồng sau đây đã được xác minh:
 
 1. **Ingestion CUR sẵn sàng** - `$.ingestion.details.data_source_type` = `S3_POINTER` (mặc định hợp đồng telemetry)
-2. **BuildDetectRequest** - `$.normalized.details.aws_cur_line_items` có thể đọc và không rỗng trong chuẩn hóa tốt
-3. **InvokeDetect** - đọc `path` từ `$.ai_detect_request.path` (động, xác nhận `/v1/detect`)
-4. **Body InvokeDecide** - `anomaly_context.$` giải quyết thành `$.ai_detect_response.anomalies_list[0]`
-5. **CacheRollbackPayload** - DynamoDB putItem với `rollback_payload` được tuần tự hóa qua `States.JsonToString`
-6. **FormatDecideResult** - đọc `action_plan[0].action` và `anomalies_list[0].anomaly_id`
-7. **ReportVerifyResult** - `action_executed.target.$` giải quyết từ `anomalies_list[0].resource_id`
-8. **FailClosed/WriteCURDelayAudit** - tất cả 9 trường ngữ cảnh audit yêu cầu giải quyết đúng
-9. **EvaluateContainmentPolicy** - từ chối prod+destructive và từ chối dry-run đều được mã hóa trong ASL
-10. **SQS** - chỉ có hàng đợi `rollback_status_queue_url` trong ASL; không có hàng đợi detection
+2. **SelectDetectRequestMode** - chọn đúng chế độ request builder dựa trên `detect_request_mode`:
+   - `S3_POINTER`: mặc định khi con trỏ hợp lệ khớp với `^s3://company-cdo-[0-9]{12}-telemetry/.+\.json\.gz$`
+   - `RAW_JSON`: fallback dòng CUR khi khớp con trỏ thất bại hoặc vắng mặt
+   - `RAW_JSON` CE fallback: fallback metrics cost explorer khi `telemetry_delay_event` là true
+3. **Khóa Idempotency Ổn Định** - được tính toán trước InvokeDetect bằng cách sử dụng `{tenant_id}:{execution_date}:{batch_type}` thay vì `correlation_id`
+4. **VpcAlbCallerLambda Dry-run mode** - truyền `dry_run_mode` vào InvokeDetect để phản ánh suy giảm telemetry/hạn mức lỗi
+5. **InvokeDetect** - đọc các tham số từ `$.ai_detect_request` (động, đường dẫn `/v1/detect`, truyền path, tenant_id, khóa idempotency ổn định, dry_run_mode, và body)
+6. **Body InvokeDecide** - `anomaly_context.$` giải quyết thành `$.ai_detect_response.anomalies_list[0]`
+7. **CacheRollbackPayload** - DynamoDB putItem với `rollback_payload` được tuần tự hóa qua `States.JsonToString`
+8. **FormatDecideResult** - đọc `action_plan[0].action` và `anomalies_list[0].anomaly_id`
+9. **ReportVerifyResult** - `action_executed.target.$` giải quyết từ `anomalies_list[0].resource_id`
+10. **FailClosed/WriteCURDelayAudit** - tất cả 9 trường ngữ cảnh audit yêu cầu giải quyết đúng
+11. **EvaluateContainmentPolicy** - từ chối prod+destructive và từ chối dry-run đều được mã hóa trong ASL
+12. **SQS** - chỉ có hàng đợi `rollback_status_queue_url` trong ASL; không có hàng đợi detection
 
 ---
 

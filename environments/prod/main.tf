@@ -484,6 +484,10 @@ module "iam" {
   cur_source_bucket_arn                  = var.cur_source_bucket_arn
   create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
   trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
+  athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
+  athena_workgroup_arn                   = module.lakehouse.athena_workgroup_arn
+  glue_database_arn                      = module.lakehouse.glue_database_arn
+  cur_data_table_arn                     = module.lakehouse.cur_data_table_arn
   tags                                   = var.tags
 }
 
@@ -539,7 +543,6 @@ module "compute_lambda" {
   cur_delay_threshold_hours  = var.cur_delay_threshold_hours
   ce_lookback_window_days    = var.ce_lookback_window_days
   traffic_metric_identifiers = var.traffic_metric_identifiers
-  synthetic_fallback_enabled = var.synthetic_fallback_enabled
 }
 
 # 7. Orchestration Module

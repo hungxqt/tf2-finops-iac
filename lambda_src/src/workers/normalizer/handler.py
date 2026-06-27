@@ -3,8 +3,11 @@ import io
 import json
 import gzip
 import logging
+import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any
+import boto3
 import finops_common
 
 logger = logging.getLogger()
@@ -12,6 +15,7 @@ logger.setLevel(logging.INFO)
 
 s3_client = None
 ddb_client = None
+athena_client = None
 
 
 def get_s3_client():
@@ -30,6 +34,32 @@ def get_ddb_client():
     if os.environ.get("RUN_STATE_TABLE_NAME"):
         return finops_common.RealDynamoDB()
     return None
+
+
+def get_athena_client():
+    global athena_client
+    if athena_client is not None:
+        return athena_client
+    if os.environ.get("ATHENA_WORKGROUP_NAME"):
+        return boto3.client("athena", region_name=os.environ.get("AWS_DEFAULT_REGION", "ap-southeast-1"))
+    return None
+
+
+def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str) -> None:
+    if not re.match(r'^\d{12}$', account_id):
+        raise ValueError(f"Invalid account ID: {account_id}")
+    if not re.match(r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}Z)?$', start_date):
+        raise ValueError(f"Invalid start date format: {start_date}")
+    if not re.match(r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}Z)?$', end_date):
+        raise ValueError(f"Invalid end date format: {end_date}")
+    if database and not re.match(r'^[a-zA-Z0-9_-]+$', database):
+        raise ValueError(f"Invalid database name: {database}")
+    if table and not re.match(r'^[a-zA-Z0-9_-]+$', table):
+        raise ValueError(f"Invalid table name: {table}")
+    if workgroup and not re.match(r'^[a-zA-Z0-9_-]+$', workgroup):
+        raise ValueError(f"Invalid workgroup name: {workgroup}")
+    if results_bucket and (".." in results_bucket or "/" in results_bucket or "\\" in results_bucket):
+        raise ValueError(f"Invalid results bucket: {results_bucket}")
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -87,7 +117,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
         logger.error("Validation failed: %s", e)
         raise e
 
-    bucket_name = os.environ.get("LAKEHOUSE_BUCKET_NAME", "tf2-finops-lakehouse-bucket")
+    bucket_name = os.environ.get("LAKEHOUSE_BUCKET_NAME")
+    if not bucket_name:
+        raise finops_common.ConfigMissingError("LAKEHOUSE_BUCKET_NAME is required for normalized telemetry writes")
 
     try:
         exec_time = finops_common.parse_date(event.execution_date)
@@ -101,87 +133,289 @@ def handle_request(event_data: dict, context: Any) -> dict:
     curated_key = f"cost/curated/{partition_path}/{event.run_id}_curated.parquet"
     curated_data_uri = f"s3://{bucket_name}/{curated_key}"
 
-    # 1. Read raw S3 cost data ──────────────────────────────────────────
-    raw_uri = ""
-    if event.ingestion and event.ingestion.raw_data_uri:
-        raw_uri = event.ingestion.raw_data_uri
+    # Extract ingestion details
+    ingestion_details = event_data.get("ingestion", {}).get("details", {}) if isinstance(event_data.get("ingestion"), dict) else {}
+    raw_uri = ingestion_details.get("raw_data_uri") or event_data.get("ingestion", {}).get("raw_data_uri") or ""
+    telemetry_delay_event = bool(
+        ingestion_details.get("telemetry_delay_event")
+        or raw_uri
+        or False
+    )
 
     client = get_s3_client()
-    raw_data = b""
-    if client and raw_uri:
-        try:
-            logger.info("Reading raw cost data from: %s", raw_uri)
-            s3_bucket, s3_key = finops_common.parse_s3_uri(raw_uri)
-            raw_data = client.get_object(s3_bucket, s3_key)
-        except Exception as e:
-            logger.error("Failed to read raw cost data from S3: %s", e)
-            raise e
-    else:
-        # Mock local fallback raw cost data
-        logger.info("S3 Client or Raw URI not present, using default raw data mockup")
-        default_records = [
-            {
-                "account_id": event.account_id,
-                "service": "AmazonEC2",
-                "region": "ap-southeast-1",
-                "owner": "",  # Untagged
-                "cost": 150.00,
-                "currency": "USD",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        ]
-        raw_data = json.dumps(default_records).encode("utf-8")
+    raw_records = None
 
-    # 2. Parse and decompress ───────────────────────────────────────────
-    try:
-        decompressed_data = raw_data
-        if decompressed_data.startswith(b"\x1f\x8b"):
-            decompressed_data = gzip.decompress(decompressed_data)
-        raw_records = json.loads(decompressed_data.decode("utf-8"))
-    except Exception as e:
-        logger.error("Failed to parse raw cost records JSON: %s", e)
-        raise e
-
-    # 3. Extract envelope quality + choose records to normalise ─────────
-    envelope_quality = {}
-    if isinstance(raw_records, dict):
-        envelope_quality = raw_records.get("quality", {})
-        if raw_records.get("aws_cur_line_items"):
-            records_to_normalize = raw_records["aws_cur_line_items"]
-        elif raw_records.get("aws_cost_explorer_daily"):
-            records_to_normalize = raw_records["aws_cost_explorer_daily"]
-        else:
-            records_to_normalize = []
-    else:
-        records_to_normalize = raw_records
-
-    # 4. Resolve telemetry quality flags ────────────────────────────────
+    # Resolve telemetry quality flags
+    explicit_completeness_score = (
+        event_data.get("completeness_score") is not None
+        or event_data.get("telemetry_quality") is not None
+        or ingestion_details.get("completeness_score") is not None
+    )
     completeness_score = float(
         event_data.get("completeness_score")
         or event_data.get("telemetry_quality")
-        or envelope_quality.get("completeness_score")
+        or ingestion_details.get("completeness_score")
         or 1.0
     )
-    delayed_cur = bool(
-        event_data.get("delayed_cur") or envelope_quality.get("delayed_cur") or False
-    )
+    delayed_cur = telemetry_delay_event
     stale_cost_explorer = bool(
         event_data.get("stale_cost_explorer")
-        or envelope_quality.get("stale_cost_explorer")
+        or ingestion_details.get("stale_cost_explorer")
         or False
     )
     missing_cloudwatch = bool(
         event_data.get("missing_cloudwatch")
-        or envelope_quality.get("missing_cloudwatch")
+        or ingestion_details.get("missing_cloudwatch")
         or False
     )
     estimated_billing = bool(
         event_data.get("estimated_billing")
-        or envelope_quality.get("estimated_billing")
+        or ingestion_details.get("estimated_billing")
         or False
     )
 
-    # 5. Normalise records ──────────────────────────────────────────────
+    cur_records = []
+    ce_records = []
+    s3_bucket_uri = ""
+    s3_object_checksum = ""
+    batch_type = "adhoc" if event.is_ad_hoc else "daily"
+
+    # Resolve business context
+    business_context = [
+        {
+            "linked_account_id": event.account_id,
+            "traffic_volume": 0,
+            "traffic_source": "ALB",
+            "campaign_flag": False,
+            "load_test_flag": False,
+            "migration_flag": False
+        }
+    ]
+    raw_bc = ingestion_details.get("business_context")
+    if raw_bc:
+        if isinstance(raw_bc, list):
+            business_context = raw_bc
+        elif isinstance(raw_bc, dict):
+            business_context = [raw_bc]
+    else:
+        missing_cloudwatch = True
+        if not explicit_completeness_score:
+            completeness_score = min(completeness_score, 0.5)
+
+    # Resolve resource utilization metrics
+    resource_utilization_metrics = ingestion_details.get("resource_utilization_metrics") or []
+
+    if telemetry_delay_event:
+        # CE Fallback path: read gzipped CE data from S3, normalize to curated Parquet
+        logger.info("Normalizing Cost Explorer fallback telemetry from: %s", raw_uri)
+        if not raw_uri:
+            raise finops_common.InvalidInputError("telemetry_delay_event requires raw_data_uri")
+        if not client:
+            raise finops_common.ConfigMissingError("LAKEHOUSE_BUCKET_NAME did not resolve an S3 client")
+
+        try:
+            s3_bucket, s3_key = finops_common.parse_s3_uri(raw_uri)
+            raw_gzipped = client.get_object(s3_bucket, s3_key)
+            if isinstance(raw_gzipped, dict) and "Body" in raw_gzipped:
+                raw_data = raw_gzipped["Body"].read()
+            else:
+                raw_data = raw_gzipped
+            s3_object_checksum = hashlib.sha256(raw_data).hexdigest()
+        except Exception as e:
+            logger.error("Failed to read raw cost data from S3: %s", e)
+            raise e
+
+        try:
+            if raw_data.startswith(b'\x1f\x8b'):
+                decompressed_data = gzip.decompress(raw_data)
+            else:
+                decompressed_data = raw_data
+            raw_records = json.loads(decompressed_data.decode("utf-8"))
+        except Exception as e:
+            logger.error("Failed to parse raw cost records JSON: %s", e)
+            raise e
+
+        if isinstance(raw_records, dict):
+            ce_records = raw_records.get("aws_cost_explorer_daily", [])
+            if not ce_records and "aws_cur_line_items" in raw_records:
+                ce_records = raw_records.get("aws_cur_line_items", [])
+            records_to_normalize = ce_records
+
+            # Extract quality flags from envelope if present and not overridden by event_data
+            envelope_quality = raw_records.get("quality", {})
+            if envelope_quality:
+                if "completeness_score" in envelope_quality and event_data.get("completeness_score") is None:
+                    completeness_score = float(envelope_quality["completeness_score"])
+                if "delayed_cur" in envelope_quality and event_data.get("delayed_cur") is None:
+                    delayed_cur = bool(envelope_quality["delayed_cur"])
+                if "stale_cost_explorer" in envelope_quality and event_data.get("stale_cost_explorer") is None:
+                    stale_cost_explorer = bool(envelope_quality["stale_cost_explorer"])
+                if "missing_cloudwatch" in envelope_quality and event_data.get("missing_cloudwatch") is None:
+                    missing_cloudwatch = bool(envelope_quality["missing_cloudwatch"])
+                if "estimated_billing" in envelope_quality and event_data.get("estimated_billing") is None:
+                    estimated_billing = bool(envelope_quality["estimated_billing"])
+        elif isinstance(raw_records, list):
+            records_to_normalize = raw_records
+        else:
+            records_to_normalize = []
+
+        s3_bucket_uri = raw_uri
+
+    else:
+        # CUR ready path: run Athena query to fetch CUR records, build full detect payload, gzip and write to S3
+        logger.info("CUR is available. Querying Athena to fetch cost data.")
+
+        workgroup = os.environ.get("ATHENA_WORKGROUP_NAME")
+        database = os.environ.get("GLUE_DATABASE_NAME")
+        table = os.environ.get("GLUE_TABLE_NAME")
+        results_bucket = os.environ.get("ATHENA_RESULTS_BUCKET_NAME")
+        missing_athena_config = [
+            name for name, value in {
+                "ATHENA_WORKGROUP_NAME": workgroup,
+                "GLUE_DATABASE_NAME": database,
+                "GLUE_TABLE_NAME": table,
+                "ATHENA_RESULTS_BUCKET_NAME": results_bucket,
+            }.items()
+            if not value
+        ]
+        if missing_athena_config:
+            raise finops_common.ConfigMissingError(
+                "Missing Athena configuration for CUR normalization: "
+                + ", ".join(missing_athena_config)
+            )
+
+        start_date = event.execution_date
+        end_date = event.execution_date
+
+        # SQL validation
+        validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket)
+
+        query = f"""
+        SELECT bill_billing_period_start_date, bill_payer_account_id, line_item_usage_account_id,
+               line_item_line_item_type, line_item_usage_start_date, line_item_usage_end_date,
+               line_item_product_code, line_item_usage_type, line_item_operation, line_item_resource_id,
+               line_item_usage_amount, pricing_unit, line_item_unblended_rate, line_item_unblended_cost,
+               line_item_currency_code, product_product_name, product_region_code, product_instance_type,
+               resource_tags_user_environment, resource_tags_user_owner, resource_tags_user_team, resource_tags_user_cost_center
+        FROM {database or 'db'}.{table or 'tbl'}
+        WHERE line_item_usage_account_id = '{event.account_id}'
+          AND line_item_usage_start_date >= '{start_date}'
+          AND line_item_usage_start_date <= '{end_date}'
+        """
+
+        ath = get_athena_client()
+        if not ath:
+            raise finops_common.ConfigMissingError("ATHENA_WORKGROUP_NAME did not resolve an Athena client")
+
+        try:
+            output_loc = f"s3://{results_bucket}/results/"
+            response = ath.start_query_execution(
+                QueryString=query,
+                QueryExecutionContext={"Database": database},
+                ResultConfiguration={"OutputLocation": output_loc},
+                WorkGroup=workgroup
+            )
+            query_exec_id = response["QueryExecutionId"]
+
+            # Poll query execution status
+            import time
+            max_attempts = 30
+            attempt = 0
+            while attempt < max_attempts:
+                status_res = ath.get_query_execution(QueryExecutionId=query_exec_id)
+                state = status_res["QueryExecution"]["Status"]["State"]
+                if state in ["SUCCEEDED"]:
+                    break
+                elif state in ["FAILED", "CANCELLED"]:
+                    reason = status_res["QueryExecution"]["Status"].get("StateChangeReason", "Unknown")
+                    raise RuntimeError(f"Athena query execution {query_exec_id} failed with state {state}: {reason}")
+                time.sleep(0.5)
+                attempt += 1
+            else:
+                raise TimeoutError("Athena query execution timed out")
+
+            # Paginate results
+            next_token = None
+            headers = []
+            while True:
+                kwargs = {"QueryExecutionId": query_exec_id}
+                if next_token:
+                    kwargs["NextToken"] = next_token
+                res_page = ath.get_query_results(**kwargs)
+
+                rows = res_page["ResultSet"]["Rows"]
+                start_idx = 0
+                if not next_token and rows:
+                    headers = [col.get("VarCharValue", "") for col in rows[0]["Data"]]
+                    start_idx = 1
+
+                for row in rows[start_idx:]:
+                    row_data = {}
+                    for idx, col in enumerate(row["Data"]):
+                        val = col.get("VarCharValue", "")
+                        if idx < len(headers):
+                            row_data[headers[idx]] = val
+                    cur_records.append(row_data)
+
+                next_token = res_page.get("NextToken")
+                if not next_token:
+                    break
+        except Exception as e:
+            logger.error("Athena query execution failed: %s", e)
+            raise e
+
+        if not cur_records:
+            raise finops_common.InvalidInputError("Athena returned no CUR records")
+
+        # Calculate usage density for Hrs pricing unit
+        for rec in cur_records:
+            if rec.get("pricing_unit") == "Hrs":
+                rec["usage_density_24h"] = min(float(rec.get("line_item_usage_amount") or 0.0) / 24.0, 1.0)
+            else:
+                rec["usage_density_24h"] = 0.0
+
+        records_to_normalize = cur_records
+
+        # Build full AI detect payload JSON, gzip it, and write to S3
+        detect_payload = {
+            "schema_version": "3.2.0",
+            "tenant_id": event.tenant_id or "tenant-default",
+            "account_id": event.account_id,
+            "correlation_id": event.correlation_id,
+            "idempotency_key": event_data.get("idempotency_key") or f"{event.tenant_id or 'tenant-default'}:{event.execution_date}:{batch_type}",
+            "request_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "aws_cur_line_items": cur_records,
+            "aws_cost_explorer_daily": [],
+            "resource_utilization_metrics": resource_utilization_metrics,
+            "business_context": business_context,
+            "quality": {
+                "completeness_score": completeness_score,
+                "delayed_cur": False,
+                "stale_cost_explorer": False,
+                "missing_cloudwatch": missing_cloudwatch,
+                "estimated_billing": estimated_billing
+            }
+        }
+
+        detect_json = json.dumps(detect_payload).encode("utf-8")
+        detect_gzipped = gzip.compress(detect_json)
+        s3_object_checksum = hashlib.sha256(detect_gzipped).hexdigest()
+
+        ai_key = f"ai-input/account_id={event.account_id}/year={exec_time.year:04d}/month={exec_time.month:02d}/day={exec_time.day:02d}/{event.run_id}_input.json.gz"
+        s3_bucket_uri = f"s3://{bucket_name}/{ai_key}"
+
+        if ".." in ai_key:
+            raise finops_common.UnsafeActionError("Unsafe raw data key path traversal detected")
+
+        if client:
+            try:
+                logger.info("Writing gzipped AI detect input to S3: %s", s3_bucket_uri)
+                client.put_object(bucket_name, ai_key, detect_gzipped)
+            except Exception as e:
+                logger.error("Failed to write AI detect input to S3: %s", e)
+                raise e
+
+    # 5. Normalise records
     curated_records = []
     for rec in records_to_normalize:
         account_id = (
@@ -233,7 +467,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
         )
 
         curated_records.append({
-            # Original fields for backward compatibility
             "account_id": account_id,
             "service": service,
             "region": region,
@@ -242,7 +475,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "currency": currency,
             "timestamp": timestamp,
             "curated_at": datetime.now(timezone.utc).isoformat(),
-            # Formally required cost fields
             "unblended_cost": cost,
             "service_code": service,
             "resource_id": resource_id,
@@ -254,7 +486,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "quality_score": completeness_score,
         })
 
-    # 6. Serialise to Parquet (fallback JSON) ───────────────────────────
+    # 6. Serialise to Parquet (fallback JSON)
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -270,7 +502,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         )
         curated_data = json.dumps(curated_records).encode("utf-8")
 
-    # 7. Write to S3 curated folder ─────────────────────────────────────
+    # 7. Write to S3 curated folder
     if client:
         try:
             logger.info("Writing curated cost data to S3: %s", curated_data_uri)
@@ -281,6 +513,47 @@ def handle_request(event_data: dict, context: Any) -> dict:
     else:
         logger.info("S3 Client not configured, skipping curated S3 write")
 
+    # Resolve missing_resources
+    missing_resources = []
+    if not telemetry_delay_event:
+        missing_resources = []
+    else:
+        if isinstance(raw_records, dict):
+            missing_resources = raw_records.get("missing_resources", [])
+        if not missing_resources:
+            missing_resources = (
+                event_data.get("missing_resources")
+                or ingestion_details.get("missing_resources")
+                or []
+            )
+
+    # Resolve current_ce_cost_gap_usd
+    current_ce_cost_gap_usd = 0.0
+    if telemetry_delay_event:
+        if isinstance(raw_records, dict):
+            current_ce_cost_gap_usd = float(raw_records.get("current_ce_cost_gap_usd", 0.0))
+        if not current_ce_cost_gap_usd:
+            current_ce_cost_gap_usd = float(
+                event_data.get("current_ce_cost_gap_usd")
+                or ingestion_details.get("current_ce_cost_gap_usd")
+                or 0.0
+            )
+
+    # Resolve comparison_window
+    comparison_window = {"start_date": event.execution_date, "end_date": event.execution_date}
+    if telemetry_delay_event:
+        if isinstance(raw_records, dict) and "comparison_window" in raw_records:
+            raw_cw = raw_records["comparison_window"]
+            if isinstance(raw_cw, dict):
+                comparison_window = raw_cw
+        else:
+            cw_val = (
+                event_data.get("comparison_window")
+                or ingestion_details.get("comparison_window")
+            )
+            if isinstance(cw_val, dict):
+                comparison_window = cw_val
+
     details = {
         "curated_data_uri": curated_data_uri,
         "schema": "finops-cost-window-v1",
@@ -290,6 +563,18 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "stale_cost_explorer": stale_cost_explorer,
         "missing_cloudwatch": missing_cloudwatch,
         "estimated_billing": estimated_billing,
+        "detect_request_mode": "S3_POINTER",
+        "s3_bucket_uri": s3_bucket_uri,
+        "s3_object_checksum": s3_object_checksum,
+        "business_context": business_context,
+        "resource_utilization_metrics": resource_utilization_metrics,
+        "aws_cur_line_items": cur_records,
+        "aws_cost_explorer_daily": ce_records,
+        "missing_resources": missing_resources,
+        "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
+        "comparison_window": comparison_window,
+        "batch_type": batch_type,
+        "telemetry_delay_event": telemetry_delay_event,
     }
 
     response = finops_common.create_response(

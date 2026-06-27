@@ -222,16 +222,9 @@ class FakeSTS(STSClient):
     def assume_role(self, **kwargs) -> Dict[str, Any]:
         if self.assume_role_func:
             return self.assume_role_func(**kwargs)
-        return {
-            "Credentials": {
-                "AccessKeyId": "fake-access-key",
-                "SecretAccessKey": "fake-secret-key",
-                "SessionToken": "fake-session-token",
-                "Expiration": "2026-06-26T12:00:00Z"
-            }
-        }
+        raise NotImplementedError("FakeSTS.assume_role requires an explicit test fixture")
 
     def get_caller_identity(self) -> Dict[str, Any]:
         if self.get_caller_identity_func:
             return self.get_caller_identity_func()
-        return {"AccountId": "112233445566", "Arn": "arn:aws:iam::112233445566:role/test-role"}
+        raise NotImplementedError("FakeSTS.get_caller_identity requires an explicit test fixture")

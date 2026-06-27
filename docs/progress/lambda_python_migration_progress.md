@@ -7,7 +7,7 @@ Completed
 Migrate all seven Lambda workers and common library from Go custom-runtime to managed python3.13, ensuring parity of contracts and safety guardrails:
 - **Common library (`finops_common`)**: Created Python package for event/response dataclasses, validation, normalization, boto3 clients wrapping/mocking, S3 parsing, and redacted logging.
 - **State Worker (`state`)**: Ported DynamoDB run-state checking and idempotency.
-- **Cost Puller (`cost_puller`)**: Ported synthetic CUR cost pulling and simulation override modes (`simulate-cur-delay`, `simulate-ce-throttled`).
+- **Cost Puller (`cost_puller`)**: Ported CUR freshness detection, Cost Explorer fallback, cached telemetry recovery, and simulation override modes (`simulate-cur-delay`, `simulate-ce-throttled`) without generated cost data.
 - **Normalizer (`normalizer`)**: Ported raw S3 cost parsing, required field filtering, and untagged owner mapping.
 - **VPC ALB Caller (`vpc_alb_caller`)**: Ported private internal ALB calling mechanism, IAM SigV4 request signing, and HTTPS routing for secure AI Engine integration.
 - **Router (`router`)**: Ported severities mapping, routing targets, and optional routing state DB persistence.

@@ -51,6 +51,15 @@ def _load_asl_doc() -> dict:
 def _resolve_path(ctx: dict, path: str):
     if path == "$":
         return ctx
+    if path.startswith("States.Format("):
+        m = re.match(r"^States\.Format\('([^']*)',\s*(.*)\)$", path)
+        if not m:
+            raise ValueError(f"Invalid States.Format pattern: {path}")
+        fmt_str = m.group(1)
+        args_str = m.group(2)
+        args_paths = [arg.strip() for arg in args_str.split(",")]
+        resolved_args = [_resolve_path(ctx, p) for p in args_paths]
+        return fmt_str.format(*resolved_args)
     if not path.startswith("$."):
         raise ValueError(f"Expected JSONPath starting with dollar.dot, got: {path!r}")
     parts_raw = path[2:]
@@ -86,11 +95,11 @@ def _resolve_parameters(ctx: dict, params: dict) -> dict:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from fixtures.step_function_payloads import (
-    ACCOUNT_ID, ANOMALY_ID, CORRELATION_ID, RUN_ID, TENANT_ID,
+    ACCOUNT_ID, ANOMALY_ID, CORRELATION_ID, RUN_ID, TENANT_ID, IDEMPOTENCY_KEY, EXECUTION_DATE,
     SCHEDULED_WORKFLOW_INPUT, POST_PREPARE_RUN_CONTEXT,
     POST_INGEST_COST_DATA_S3, POST_INGEST_COST_DATA_CE,
-    POST_NORMALIZE_HEALTHY, POST_NORMALIZE_DEGRADED,
-    POST_BUILD_DETECT_REQUEST,
+    POST_NORMALIZE_HEALTHY, POST_NORMALIZE_DEGRADED, POST_NORMALIZE_POINTER,
+    POST_BUILD_DETECT_REQUEST, POST_BUILD_DETECT_REQUEST_S3_POINTER, POST_BUILD_DETECT_REQUEST_CE_FALLBACK,
     POST_INVOKE_DETECT_ANOMALY, POST_INVOKE_DETECT_NO_ANOMALY,
     POST_INVOKE_DECIDE, POST_FORMAT_DECIDE_RESULT, POST_ROUTER,
     POST_CONTAINMENT_POLICY_APPLY, POST_CONTAINMENT_POLICY_DENIED_PROD,
@@ -123,7 +132,7 @@ class TestComponentInventory:
             "CheckErrorBudgetLock", "EvaluateErrorBudgetLock",
             "IngestCostData", "IngestionReady",
             "NormalizeCostWindow", "CheckTelemetryQuality", "SetTelemetryForceDryRun",
-            "BuildDetectRequest", "InvokeDetect", "EvaluateDetectResponse",
+            "VerifyS3Pointer", "SetS3PointerMissingError", "BuildDetectRequestS3Pointer", "InvokeDetect", "EvaluateDetectResponse",
             "SetAIFailClosedError", "InvokeDecide", "CacheRollbackPayload",
             "FormatDecideResult", "RouteAlert",
             "FinanceAlertRequired", "SendFinanceAlert",
@@ -376,16 +385,69 @@ class TestDetectPath:
         ctx = POST_BUILD_DETECT_REQUEST
         assert _resolve_path(ctx, "$.ai_detect_request.tenant_id") == TENANT_ID
 
-    def test_build_detect_request_idempotency_key_equals_correlation_id(self):
+    def test_build_detect_request_stable_idempotency_key(self):
         ctx = POST_BUILD_DETECT_REQUEST
         idem = _resolve_path(ctx, "$.ai_detect_request.idempotency_key")
-        corr = _resolve_path(ctx, "$.ai_detect_request.correlation_id")
-        assert idem == corr
+        assert idem == IDEMPOTENCY_KEY
 
     def test_build_detect_request_body_has_business_context(self):
         ctx = POST_BUILD_DETECT_REQUEST
         bc = _resolve_path(ctx, "$.ai_detect_request.body.business_context")
         assert "linked_account_id" in bc
+
+    def test_builder_s3_pointer_only_contains_required_fields(self):
+        asl = _load_asl_template()
+        params = asl["States"]["BuildDetectRequestS3Pointer"]["Parameters"]
+        ctx = POST_NORMALIZE_POINTER
+        resolved = _resolve_parameters(ctx, params)
+        body = resolved["body"]
+        assert body["data_source_type"] == "S3_POINTER"
+        assert "s3_bucket_uri" in body
+        assert "business_context" in body
+        assert "telemetry_delay_event" in body
+        assert "is_ad_hoc" in body
+        assert "aws_cur_line_items" not in body
+        assert "aws_cost_explorer_daily" not in body
+        assert resolved["idempotency_key"] == IDEMPOTENCY_KEY
+        assert resolved["dry_run_mode"] is False
+
+    def test_verify_s3_pointer_choice_logic(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["VerifyS3Pointer"]["Choices"]
+        default = asl["States"]["VerifyS3Pointer"]["Default"]
+        assert default == "SetS3PointerMissingError"
+        
+        rule = choices[0]
+        assert rule["And"][0]["Variable"] == "$.normalized.details.s3_bucket_uri"
+        assert rule["And"][0]["IsPresent"] is True
+        assert rule["And"][1]["Variable"] == "$.normalized.details.s3_bucket_uri"
+        assert rule["And"][1]["StringMatches"] == "s3://*.json.gz"
+        assert rule["Next"] == "BuildDetectRequestS3Pointer"
+
+    def test_set_s3_pointer_missing_error_payload(self):
+        asl = _load_asl_template()
+        result = asl["States"]["SetS3PointerMissingError"]["Result"]
+        assert result["Error"] == "S3PointerMissing"
+        assert "Cause" in result
+
+    def test_invoke_detect_passes_all_required_fields(self):
+        asl = _load_asl_template()
+        params = asl["States"]["InvokeDetect"]["Parameters"]
+        ctx = POST_BUILD_DETECT_REQUEST
+        resolved = _resolve_parameters(ctx, params)
+        assert resolved["path"] == "/v1/detect"
+        assert resolved["tenant_id"] == TENANT_ID
+        assert resolved["idempotency_key"] == IDEMPOTENCY_KEY
+        assert resolved["dry_run_mode"] is False
+        assert isinstance(resolved["body"], dict)
+
+        ctx_fallback = POST_BUILD_DETECT_REQUEST_CE_FALLBACK
+        resolved_fallback = _resolve_parameters(ctx_fallback, params)
+        assert resolved_fallback["path"] == "/v1/detect"
+        assert resolved_fallback["tenant_id"] == TENANT_ID
+        assert resolved_fallback["idempotency_key"] == IDEMPOTENCY_KEY
+        assert resolved_fallback["dry_run_mode"] is True
+        assert isinstance(resolved_fallback["body"], dict)
 
     def test_detect_response_fail_closed_on_success_false(self):
         asl = _load_asl_template()

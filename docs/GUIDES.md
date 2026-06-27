@@ -249,11 +249,12 @@ The ingestion behavior is controlled by these Terraform variables passed to the 
 * `cur_delay_threshold_hours`: Delay threshold in hours before switching to CE fallback (default: `36`).
 * `ce_lookback_window_days`: Days of CE history retrieved during fallback (default: `30`).
 * `traffic_metric_identifiers`: Identifiers for querying physical traffic metrics (e.g., ALB names).
-* `synthetic_fallback_enabled`: Controls whether local tests/simulations fall back to generated data (default: `true`).
+
+There is no generated telemetry fallback. `cost_puller` requires a configured lakehouse bucket and CUR source bucket for normal ingestion. If CUR is delayed and Cost Explorer returns no records, or if cached telemetry is unavailable during CE throttling, the worker returns `CUR_DELAY` or `CE_THROTTLED` and the workflow must remain dry-run/alert-only.
 
 ### Step 7.2: Verification and Simulation
 Operators can verify the retry/wait and error-handling state machine branches using simulation actions in the execution event:
-* **Simulate CUR Delay**: Send `"action": "simulate-cur-delay"` to force CUR delayed status and trigger the Cost Explorer fallback path.
+* **Simulate CUR Delay**: Send `"action": "simulate-cur-delay"` to force CUR delayed status and trigger the Cost Explorer fallback path. The worker still requires real Cost Explorer records or cached telemetry to continue.
 * **Simulate CE Throttling**: Send `"action": "simulate-ce-throttled"` to throttle CE requests. If cached telemetry exists in the destination bucket, it will recover telemetry and set the `stale_cost_explorer` quality flag; otherwise, it returns `CE_THROTTLED`.
 
 Verify the gzipped JSON raw envelopes outputted by checking S3 key prefixes:
@@ -412,4 +413,3 @@ The `_resolve_path(ctx, path)` helper in the test file resolves:
 | `"$.anomalies_list[0].anomaly_id"` | Array index 0, then key |
 
 This is sufficient for all `Parameters` (JSONPath `key.$`) and `Choice` variable expressions used by this state machine, without a full ASL runtime.
-

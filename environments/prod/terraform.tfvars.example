@@ -36,6 +36,4 @@ cur_source_prefix          = "cdo-01/"
 cur_delay_threshold_hours  = 36
 ce_lookback_window_days    = 30
 traffic_metric_identifiers  = ["my-alb-identifier"]
-synthetic_fallback_enabled = false
-
 

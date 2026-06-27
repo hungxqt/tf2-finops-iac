@@ -41,7 +41,9 @@ def check_asl_file(asl_path, is_template=True):
         "CheckAdHocQuota",
         "CheckErrorBudgetLock",
         "CheckTelemetryQuality",
-        "BuildDetectRequest",
+        "VerifyS3Pointer",
+        "SetS3PointerMissingError",
+        "BuildDetectRequestS3Pointer",
         "InvokeDetect",
         "EvaluateDetectResponse",
         "SetAIFailClosedError",
@@ -131,7 +133,7 @@ def check_asl_file(asl_path, is_template=True):
             assert any(cond.get("Variable") == "$.normalized.details.estimated_billing" and cond.get("BooleanEquals") is True for cond in or_conditions)
             assert tc["Next"] == "SetTelemetryForceDryRun"
     assert found_quality_gate, "Telemetry quality gate not found in CheckTelemetryQuality"
-    assert states["SetTelemetryForceDryRun"]["Next"] == "BuildDetectRequest"
+    assert states["SetTelemetryForceDryRun"]["Next"] == "VerifyS3Pointer"
     
     # Assert /v1/detect response handling checks success, anomalies_detected, data_confidence, and anomalies_list
     eval_detect = states["EvaluateDetectResponse"]
