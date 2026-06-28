@@ -481,7 +481,7 @@ module "iam" {
       module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
     ]
   )
-  ai_payload_idempotency_table_arn       = module.orchestration.dynamodb_table_arns["ai_payload_idempotency"]
+  ai_payload_idempotency_table_arn       = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
   kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
   containment_apply_enabled              = false
   queue_arns                             = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
