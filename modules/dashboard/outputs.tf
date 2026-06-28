@@ -82,3 +82,9 @@ output "cognito_group_names" {
   ]
 }
 
+output "cloudfront_log_bucket_name" {
+  description = "The name of the dedicated CloudFront logs S3 bucket"
+  value       = aws_s3_bucket.cloudfront_logs.id
+}
+
+

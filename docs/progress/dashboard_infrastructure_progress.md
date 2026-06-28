@@ -1,4 +1,4 @@
-﻿# Dashboard Infrastructure Progress
+# Dashboard Infrastructure Progress
 
 ## Status
 Completed (Security Hardened; Frontend Publish Decoupled)
@@ -20,11 +20,14 @@ Remediation and security hardening of the Finance dashboard hosting, API routing
 * `docs/GUIDES_vi.md` (Modified)
 * `modules/ai-runtime-lambda/main.tf` (Modified)
 * `environments/sandbox/main.tf` (Modified)
+* `environments/sandbox/outputs.tf` (Modified)
 * `environments/staging/main.tf` (Modified)
+* `environments/staging/outputs.tf` (Modified)
 * `environments/prod/main.tf` (Modified)
+* `environments/prod/outputs.tf` (Modified)
 * `lambda_src/edge/dashboard_auth/viewer_auth.py` (Created)
 * `lambda_src/edge/dashboard_auth/origin_sigv4.py` (Created)
-* `lambda_src/tests/test_dashboard_infrastructure.py` (Created)
+* `lambda_src/tests/test_dashboard_infrastructure.py` (Modified)
 * `lambda_src/tests/test_dashboard_static_assets.py` (Created)
 * `scripts/package-lambdas.ps1` (Modified)
 
@@ -65,6 +68,7 @@ terraform -chdir=environments/prod validate
 * Frontend resources README added to document UI shell structure, independent upload, runtime config, summary schema, and operator action behavior.
 * Dashboard UI now includes doc-06 operational surfaces for Manual Approval, Alert Routing previews, Audit Diff, and Access Settings while preserving Finance read-only restrictions and hiding raw rollback/CLI payloads.
 * Frontend validation passed: `node --check modules\dashboard\resources\assets\app.js` and `python -m pytest -p no:cacheprovider tests/test_dashboard_static_assets.py`.
+* Resolved CloudFront Logging Bucket ACL failure (Finding 3): Separated CloudFront logs from the existing S3 logging bucket. Provisioned a dedicated S3 bucket (`aws_s3_bucket.cloudfront_logs`) with `BucketOwnerPreferred` ownership and canonical user ACL grants for CloudFront log delivery, allowing standard CloudFront logs to be delivered successfully while keeping the main lakehouse logging bucket hardened with `BucketOwnerEnforced`. Added `depends_on = [aws_s3_bucket_acl.cloudfront_logs]` to the CloudFront distribution to ensure standard log delivery is correctly initialized.
 
 ## Blockers
 Local full Lambda test execution needs `pyarrow` installed to pass the normalizer Parquet assertions.

@@ -7,6 +7,7 @@ locals {
 
   worker_configs = {
     state = {
+      description = "FinOps Watch worker - manages state tracking and error budgets"
       timeout     = 30
       memory_size = 256
       env = {
@@ -15,6 +16,7 @@ locals {
       }
     }
     cost_puller = {
+      description = "FinOps Watch worker - pulls cost telemetry from CUR or Cost Explorer"
       timeout     = 120
       memory_size = 512
       env = {
@@ -29,6 +31,7 @@ locals {
       }
     }
     normalizer = {
+      description = "FinOps Watch worker - validates and normalizes telemetry data"
       timeout     = 120
       memory_size = 512
       env = {
@@ -42,6 +45,7 @@ locals {
       }
     }
     router = {
+      description = "FinOps Watch worker - routes alerts and decisions based on policy"
       timeout     = 30
       memory_size = 256
       env = {
@@ -49,6 +53,7 @@ locals {
       }
     }
     audit_writer = {
+      description = "FinOps Watch worker - writes containment audit records to S3 and DynamoDB"
       timeout     = 30
       memory_size = 256
       env = {
@@ -57,6 +62,7 @@ locals {
       }
     }
     containment_worker = {
+      description = "FinOps Watch worker - executes containment actions and manages rollback cache"
       timeout     = 120
       memory_size = 256
       env = {
@@ -67,6 +73,7 @@ locals {
       }
     }
     vpc_alb_caller = {
+      description = "FinOps Watch worker - invokes AI Engine synchronous endpoints via VPC ALB"
       timeout     = 90
       memory_size = 256
       env = {
@@ -145,6 +152,7 @@ resource "aws_sqs_queue" "lambda_dlq" {
 resource "aws_lambda_function" "workers" {
   for_each      = toset(local.workers)
   function_name = "${var.project_name}-${var.environment}-${each.key}"
+  description   = local.worker_configs[each.key].description
   role          = lookup(var.lambda_role_arns, each.key, "")
   handler       = "workers.${each.key}.handler.handle_request"
   runtime       = "python3.13"

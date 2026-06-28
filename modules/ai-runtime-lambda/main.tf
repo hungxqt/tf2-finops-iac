@@ -165,6 +165,7 @@ resource "aws_lambda_function" "request" {
   # checkov:skip=CKV_AWS_272: "Code signing is not supported for container image Lambda packages (package_type = Image)"
   # checkov:skip=CKV_AWS_116: "Lambda DLQ is not used because this function is invoked synchronously by Step Functions"
   function_name = "${var.project_name}-${var.environment}-ai-request"
+  description   = "AI Engine Request Lambda - processes synchronous FinOps AIOps requests"
   role          = aws_iam_role.request.arn
   package_type  = "Image"
   image_uri     = var.request_image_uri

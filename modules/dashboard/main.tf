@@ -1,5 +1,7 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+data "aws_canonical_user_id" "current" {}
+data "aws_cloudfront_log_delivery_canonical_user_id" "this" {}
 
 locals {
   queries = {
@@ -325,6 +327,126 @@ resource "aws_s3_bucket_cors_configuration" "dashboard_data" {
   }
 }
 
+# Dedicated CloudFront logs S3 bucket
+resource "aws_s3_bucket" "cloudfront_logs" {
+  # checkov:skip=CKV_AWS_18: "CloudFront logs bucket should not have access logging enabled to avoid infinite logging loops"
+  # checkov:skip=CKV_AWS_144: "Cross-region replication is not required for standard CloudFront logs"
+  # checkov:skip=CKV_AWS_145: "KMS encryption is not supported for standard CloudFront log delivery (requires SSE-S3)"
+  # checkov:skip=CKV2_AWS_62: "Event notifications are not required for standard CloudFront logs"
+  bucket        = "${var.project_name}-${var.environment}-cloudfront-logs"
+  force_destroy = var.destroyable
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "cloudfront_logs" {
+  bucket                  = aws_s3_bucket.cloudfront_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 90
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "cloudfront_logs" {
+  # checkov:skip=CKV2_AWS_65: "ACLs are required for CloudFront log delivery"
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_acl" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+
+  depends_on = [aws_s3_bucket_ownership_controls.cloudfront_logs]
+
+  access_control_policy {
+    grant {
+      grantee {
+        id   = data.aws_canonical_user_id.current.id
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+
+    grant {
+      grantee {
+        id   = data.aws_cloudfront_log_delivery_canonical_user_id.this.id
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+
+    owner {
+      id = data.aws_canonical_user_id.current.id
+    }
+  }
+}
+
+data "aws_iam_policy_document" "cloudfront_logs_policy" {
+  statement {
+    sid    = "DenyHTTP"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.cloudfront_logs.arn,
+      "${aws_s3_bucket.cloudfront_logs.arn}/*"
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  policy = data.aws_iam_policy_document.cloudfront_logs_policy.json
+}
+
 # 3. CloudFront Distribution with Origin Access Control (OAC) and WAFv2
 resource "aws_cloudfront_origin_access_control" "dashboard" {
   name                              = "${var.project_name}-${var.environment}-dashboard-oac"
@@ -521,7 +643,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
   aliases             = var.cloudfront_acm_certificate_arn != "" ? var.cloudfront_aliases : []
 
   logging_config {
-    bucket          = "${var.s3_logging_bucket_id}.s3.amazonaws.com"
+    bucket          = aws_s3_bucket.cloudfront_logs.bucket_domain_name
     include_cookies = false
     prefix          = "cloudfront/"
   }
@@ -624,6 +746,8 @@ resource "aws_cloudfront_distribution" "dashboard" {
   }
 
   tags = var.tags
+
+  depends_on = [aws_s3_bucket_acl.cloudfront_logs]
 }
 
 # S3 Bucket Policies enforcing TLS and restricting asset bucket to CloudFront OAC
@@ -1048,6 +1172,7 @@ resource "aws_lambda_function" "edge_viewer_auth" {
   # checkov:skip=CKV_AWS_272: "Code signing is not configured for edge authentication handlers"
   provider         = aws.us_east_1
   function_name    = "${var.project_name}-${var.environment}-edge-viewer-auth"
+  description      = "Lambda@Edge for dashboard authentication using Cognito"
   role             = aws_iam_role.edge_auth.arn
   handler          = "viewer_auth.handler"
   runtime          = "python3.12"
@@ -1066,6 +1191,7 @@ resource "aws_lambda_function" "edge_origin_sigv4" {
   # checkov:skip=CKV_AWS_272: "Code signing is not configured for edge authentication handlers"
   provider         = aws.us_east_1
   function_name    = "${var.project_name}-${var.environment}-edge-origin-sigv4"
+  description      = "Lambda@Edge for dashboard origin requests using SigV4 signing"
   role             = aws_iam_role.edge_auth.arn
   handler          = "origin_sigv4.handler"
   runtime          = "python3.12"

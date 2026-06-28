@@ -108,6 +108,12 @@ output "dashboard_athena_named_query_ids" {
   value       = module.dashboard.athena_named_query_ids
 }
 
+output "dashboard_cloudfront_log_bucket_name" {
+  description = "The name of the dedicated CloudFront logs S3 bucket"
+  value       = module.dashboard.cloudfront_log_bucket_name
+}
+
+
 output "request_lambda_function_name" {
   description = "The name of the AI Request Lambda function"
   value       = module.ai_runtime_lambda.request_lambda_function_name

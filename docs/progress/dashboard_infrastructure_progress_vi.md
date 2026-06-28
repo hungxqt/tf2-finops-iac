@@ -1,4 +1,4 @@
-﻿# Tiáº¿n Ä‘á»™ Dashboard Infrastructure
+# Tiáº¿n Ä‘á»™ Dashboard Infrastructure
 
 ## Tráº¡ng thÃ¡i
 Hoàn thành (Đã thắt chặt bảo mật; đã tách publish Frontend)
@@ -20,11 +20,14 @@ Khắc phục và thắt chặt bảo mật cho hạ tầng lưu trữ Dashboard
 * `docs/GUIDES_vi.md` (Thay Ä‘á»•i)
 * `modules/ai-runtime-lambda/main.tf` (Thay Ä‘á»•i)
 * `environments/sandbox/main.tf` (Thay Ä‘á»•i)
+* `environments/sandbox/outputs.tf` (Thay Ä‘á»•i)
 * `environments/staging/main.tf` (Thay Ä‘á»•i)
+* `environments/staging/outputs.tf` (Thay Ä‘á»•i)
 * `environments/prod/main.tf` (Thay Ä‘á»•i)
+* `environments/prod/outputs.tf` (Thay Ä‘á»•i)
 * `lambda_src/edge/dashboard_auth/viewer_auth.py` (Táº¡o má»›i)
 * `lambda_src/edge/dashboard_auth/origin_sigv4.py` (Táº¡o má»›i)
-* `lambda_src/tests/test_dashboard_infrastructure.py` (Táº¡o má»›i)
+* `lambda_src/tests/test_dashboard_infrastructure.py` (Thay Ä‘á»•i)
 * `lambda_src/tests/test_dashboard_static_assets.py` (Táº¡o má»›i)
 * `scripts/package-lambdas.ps1` (Thay Ä‘á»•i)
 
@@ -65,6 +68,7 @@ terraform -chdir=environments/prod validate
 * README cho frontend resources da duoc them de mo ta cau truc UI shell, upload doc lap, runtime config, summary schema, va operator action behavior.
 * Dashboard UI hien co them cac be mat van hanh theo doc-06: Manual Approval, Alert Routing previews, Audit Diff, va Access Settings, dong thoi giu Finance read-only va khong hien raw rollback/CLI payloads.
 * Frontend validation pass: `node --check modules\dashboard\resources\assets\app.js` va `python -m pytest -p no:cacheprovider tests/test_dashboard_static_assets.py`.
+* Khắc phục lỗi CloudFront Logging Bucket ACL (Finding 3): Tách biệt log của CloudFront khỏi bucket log của lakehouse. Cung cấp một S3 bucket chuyên dụng (`aws_s3_bucket.cloudfront_logs`) với ownership cấu hình là `BucketOwnerPreferred` và gán ACL full control cho canonical user phân phát log của CloudFront. Điều này giúp CloudFront phân phát log chuẩn thành công trong khi vẫn giữ S3 logging bucket chính của lakehouse an toàn với `BucketOwnerEnforced`. Thêm khai báo `depends_on = [aws_s3_bucket_acl.cloudfront_logs]` vào CloudFront distribution để đảm bảo việc cấu hình S3 ACL được nhận diện đầy đủ.
 
 ## VÆ°á»›ng máº¯c
 Full Lambda test cá»¥c bá»™ cáº§n cÃ i `pyarrow` Ä‘á»ƒ pass cÃ¡c assertion Parquet cá»§a normalizer.

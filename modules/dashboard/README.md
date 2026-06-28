@@ -1,4 +1,4 @@
-﻿# Dashboard Module
+# Dashboard Module
 
 This module provisions an AWS-native, secure dashboard hosting and data access foundation. It enforces CloudFront as the authenticated front door for static assets, dashboard JSON summaries, and `/v1/*` API actions using Cognito Authorization Code + PKCE authentication at the edge.
 
@@ -38,5 +38,10 @@ module "dashboard" {
   destroyable                         = true
 }
 ```
+
+## Logging Configuration
+
+- `s3_logging_bucket_id`: This input variable specifies the S3 bucket used as the target for server-access logs of the dashboard asset and data S3 buckets.
+- **CloudFront Logs**: Standard logs for the CloudFront distribution are written to a dedicated, module-managed S3 bucket (`aws_s3_bucket.cloudfront_logs`) named `${var.project_name}-${var.environment}-cloudfront-logs`. This dedicated bucket utilizes ACL-based delivery (via `BucketOwnerPreferred` ownership and canonical user grants) to comply with CloudFront logging requirements, while the main lakehouse logging bucket remains hardened with `BucketOwnerEnforced`.
 
 

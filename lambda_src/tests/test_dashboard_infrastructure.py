@@ -86,3 +86,22 @@ def test_edge_auth_handlers():
     assert "def handler(" in origin_code
     assert "urllib.request" in viewer_code
     assert "SigV4Auth" in origin_code
+
+def test_cloudfront_logging_bucket_acl():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Assert resource "aws_s3_bucket" "cloudfront_logs" exists
+    assert 'resource "aws_s3_bucket" "cloudfront_logs"' in content
+
+    # Assert object_ownership = "BucketOwnerPreferred" exists for the CloudFront log bucket
+    assert 'object_ownership = "BucketOwnerPreferred"' in content
+
+    # Assert data "aws_cloudfront_log_delivery_canonical_user_id" and resource "aws_s3_bucket_acl" "cloudfront_logs" exist
+    assert 'data "aws_cloudfront_log_delivery_canonical_user_id"' in content
+    assert 'resource "aws_s3_bucket_acl" "cloudfront_logs"' in content
+
+    # Assert CloudFront logging_config.bucket uses aws_s3_bucket.cloudfront_logs.bucket_domain_name
+    assert 'aws_s3_bucket.cloudfront_logs.bucket_domain_name' in content
+
