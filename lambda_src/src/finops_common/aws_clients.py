@@ -22,6 +22,10 @@ class S3Client:
     def list_objects_v2(self, bucket: str, prefix: str) -> Dict[str, Any]:
         raise NotImplementedError()
 
+    def head_object(self, bucket: str, key: str) -> Dict[str, Any]:
+        """Return metadata dict with ETag and ContentLength, raise on 404."""
+        raise NotImplementedError()
+
 class SecretsManagerClient:
     def get_secret_value(self, secret_id: str) -> str:
         raise NotImplementedError()
@@ -79,6 +83,10 @@ class RealS3(S3Client):
 
     def list_objects_v2(self, bucket: str, prefix: str) -> Dict[str, Any]:
         return self.client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+
+    def head_object(self, bucket: str, key: str) -> Dict[str, Any]:
+        response = self.client.head_object(Bucket=bucket, Key=key)
+        return {"ETag": response.get("ETag", ""), "ContentLength": response.get("ContentLength", 0)}
 
 class RealSecretsManager(SecretsManagerClient):
     def __init__(self, client=None):
@@ -163,11 +171,13 @@ class FakeS3(S3Client):
         self,
         put_object_func: Optional[Callable[[str, str, bytes], None]] = None,
         get_object_func: Optional[Callable[[str, str], bytes]] = None,
-        list_objects_func: Optional[Callable[[str, str], Dict[str, Any]]] = None
+        list_objects_func: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+        head_object_func: Optional[Callable[[str, str], Dict[str, Any]]] = None,
     ):
         self.put_object_func = put_object_func
         self.get_object_func = get_object_func
         self.list_objects_func = list_objects_func
+        self.head_object_func = head_object_func
 
     def put_object(self, bucket: str, key: str, body: bytes) -> None:
         if self.put_object_func:
@@ -182,6 +192,14 @@ class FakeS3(S3Client):
         if self.list_objects_func:
             return self.list_objects_func(bucket, prefix)
         return {}
+
+    def head_object(self, bucket: str, key: str) -> Dict[str, Any]:
+        if self.head_object_func:
+            return self.head_object_func(bucket, key)
+        # Default: simulate object not found (404-like)
+        error = Exception(f"404 NoSuchKey: The specified key does not exist: {key}")
+        error.response = {"Error": {"Code": "404", "Message": "Not Found"}}  # type: ignore[attr-defined]
+        raise error
 
 class FakeSecretsManager(SecretsManagerClient):
     def __init__(self, get_secret_value_func: Optional[Callable[[str], str]] = None):

@@ -200,6 +200,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
     # Extract ingestion details
     ingestion_details = event_data.get("ingestion", {}).get("details", {}) if isinstance(event_data.get("ingestion"), dict) else {}
     raw_uri = ingestion_details.get("raw_data_uri") or event_data.get("ingestion", {}).get("raw_data_uri") or ""
+    cur_manifest_uri = (
+        ingestion_details.get("cur_manifest_uri")
+        or event_data.get("cur_manifest_uri")
+        or ""
+    )
     telemetry_delay_event = bool(
         ingestion_details.get("telemetry_delay_event")
         or raw_uri
@@ -315,14 +320,19 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
         s3_bucket_uri = raw_uri
 
-    else:
-        # CUR ready path: run Athena query to fetch CUR records, build full detect payload, gzip and write to S3
-        logger.info("CUR is available. Querying Athena to fetch cost data.")
+    if not telemetry_delay_event:
+        # CUR ready path — cur_manifest_uri is required
+        if not cur_manifest_uri:
+            raise finops_common.InvalidInputError(
+                "CUR-ready normalizer path requires ingestion.details.cur_manifest_uri; "
+                "pass the manifest URI returned by cost_puller."
+            )
 
         workgroup = os.environ.get("ATHENA_WORKGROUP_NAME")
         database = os.environ.get("GLUE_DATABASE_NAME")
         table = os.environ.get("GLUE_TABLE_NAME")
         results_bucket = os.environ.get("ATHENA_RESULTS_BUCKET_NAME")
+        cur_raw_export_prefix = os.environ.get("CUR_RAW_EXPORT_PREFIX") or ""
         missing_athena_config = [
             name for name, value in {
                 "ATHENA_WORKGROUP_NAME": workgroup,
@@ -337,6 +347,44 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "Missing Athena configuration for CUR normalization: "
                 + ", ".join(missing_athena_config)
             )
+
+        # Re-read and re-validate the manifest reportKeys so normalizer can
+        # independently confirm they stay within the allowed raw export prefix.
+        if client and cur_manifest_uri:
+            try:
+                m_bucket, m_key = finops_common.parse_s3_uri(cur_manifest_uri)
+                manifest_raw = client.get_object(m_bucket, m_key)
+                if isinstance(manifest_raw, dict) and "Body" in manifest_raw:
+                    manifest_bytes = manifest_raw["Body"].read()
+                else:
+                    manifest_bytes = manifest_raw
+                manifest_json = json.loads(manifest_bytes.decode("utf-8"))
+                report_keys = manifest_json.get("reportKeys", [])
+                # Validate cross-account reportKeys and prefix containment
+                for rk in report_keys:
+                    if rk.startswith("s3://"):
+                        without_proto = rk[len("s3://"):]
+                        slash_pos = without_proto.find("/")
+                        if slash_pos == -1:
+                            raise finops_common.InvalidInputError(f"Malformed S3 URI in reportKey: {rk}")
+                        rk_bucket = without_proto[:slash_pos]
+                        rk_key = without_proto[slash_pos + 1:]
+                        if rk_bucket != m_bucket:
+                            raise finops_common.UnsafeActionError(
+                                f"Cross-account reportKey rejected: {rk_bucket} != {m_bucket}"
+                            )
+                    else:
+                        rk_key = rk
+                    if cur_raw_export_prefix:
+                        allowed = cur_raw_export_prefix.strip("/") + "/"
+                        if not rk_key.startswith(allowed):
+                            raise finops_common.UnsafeActionError(
+                                f"Manifest reportKey {rk!r} is outside the configured CUR_RAW_EXPORT_PREFIX {cur_raw_export_prefix!r}"
+                            )
+            except (finops_common.UnsafeActionError, finops_common.InvalidInputError):
+                raise
+            except Exception as manifest_err:
+                logger.warning("Could not re-validate manifest reportKeys: %s", manifest_err)
 
         start_date = event.execution_date
         end_date = event.execution_date

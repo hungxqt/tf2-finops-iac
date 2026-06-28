@@ -37,3 +37,46 @@ cur_delay_threshold_hours  = 36
 ce_lookback_window_days    = 30
 traffic_metric_identifiers  = ["my-alb-identifier"]
 
+# ──────────────────────────────────────────────────────────────────────────────
+# CUR 2.0 / AWS Data Exports configuration (optional, preferred over legacy list-scan)
+#
+# Option A: Externally-managed CUR export bucket (pre-existing, e.g. managed by AWS Billing)
+#   - Set cur_source_bucket to "tf2-finops-cur-export-bucket" (or your export bucket name)
+#   - Set cur_raw_prefix to the export prefix (e.g. the export name at the top level)
+#   - Set cur_exports_json with your account-keyed export configuration
+#   - Leave create_cur_export_bucket = false (default)
+#
+# Option B: Terraform-managed CUR export landing bucket (Terraform creates the bucket)
+#   - Set create_cur_export_bucket = true
+#   - Optionally set cur_export_bucket_name to override the default "tf2-finops-cur-export-bucket"
+#   - Set cur_raw_prefix and cur_exports_json as above
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Set to true to create the CUR export landing bucket via Terraform (default: false)
+create_cur_export_bucket = false
+
+# Override the CUR export bucket name (leave empty to use "tf2-finops-cur-export-bucket")
+cur_export_bucket_name = ""
+
+# S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR files.
+# This is typically the export name you configured in the AWS Billing Console.
+# Example: "finops-cur-export" → writes to s3://<bucket>/finops-cur-export/<export-name>/...
+cur_raw_prefix = "finops-cur-export"
+
+# Account-keyed JSON map of CUR 2.0 export configurations.
+# Each entry key is the source AWS Account ID; each value contains:
+#   source_account_id: the account whose CUR data is being exported
+#   prefix:           the top-level S3 prefix for the export (typically the export name prefix)
+#   export_name:      the export name configured in AWS Billing Console Data Exports
+#   allowed_raw_prefix: (optional) restrict manifest reportKey containment check to this prefix
+# Example (single payer account):
+cur_exports_json = <<-EOT
+{
+  "123456789012": {
+    "source_account_id": "123456789012",
+    "prefix": "finops-cur-export",
+    "export_name": "finops-export",
+    "allowed_raw_prefix": "finops-cur-export"
+  }
+}
+EOT

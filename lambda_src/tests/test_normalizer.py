@@ -456,8 +456,11 @@ def test_normalizer_payload_contract_fields():
             "body": body
         })
 
+    _MANIFEST_BYTES = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
+
     handler.s3_client = finops_common.FakeS3(
-        put_object_func=fake_put_object
+        put_object_func=fake_put_object,
+        get_object_func=lambda b, k: _MANIFEST_BYTES,
     )
     handler.athena_client = FakeAthena()
 
@@ -478,6 +481,7 @@ def test_normalizer_payload_contract_fields():
             "worker": "cost_puller",
             "details": {
                 "telemetry_delay_event": False,
+                "cur_manifest_uri": "s3://tf2-finops-cur-export-bucket/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json",
                 "business_context": [
                     {
                         "linked_account_id": "123456789012",
@@ -633,7 +637,23 @@ def test_normalizer_cur_ready_requires_athena_config():
     }
 
     with pytest.raises(finops_common.ConfigMissingError, match="ATHENA_WORKGROUP_NAME"):
-        handler.handle_request(event_data, None)
+        handler.handle_request({
+            "run_id": "run-no-athena",
+            "correlation_id": "corr-no-athena",
+            "account_id": "123456789012",
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+            "ingestion": {
+                "status": "READY",
+                "run_id": "run-no-athena",
+                "correlation_id": "corr-no-athena",
+                "worker": "cost_puller",
+                "details": {
+                    "telemetry_delay_event": False,
+                    "cur_manifest_uri": "s3://tf2-finops-cur-export-bucket/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json",
+                },
+            },
+        }, None)
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     handler.s3_client = None
@@ -642,7 +662,11 @@ def test_normalizer_cur_ready_requires_athena_config():
 def test_normalizer_athena_empty_result_fails():
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
     _set_athena_env()
-    handler.s3_client = finops_common.FakeS3(put_object_func=lambda bucket, key, body: None)
+    _MANIFEST_BYTES_EMPTY = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
+    handler.s3_client = finops_common.FakeS3(
+        put_object_func=lambda bucket, key, body: None,
+        get_object_func=lambda b, k: _MANIFEST_BYTES_EMPTY,
+    )
     handler.athena_client = FakeAthena(rows=[
         {"Data": [{"VarCharValue": "line_item_unblended_cost"}, {"VarCharValue": "line_item_product_code"}, {"VarCharValue": "line_item_usage_account_id"}]},
     ])
@@ -658,7 +682,10 @@ def test_normalizer_athena_empty_result_fails():
             "run_id": "run-empty-athena",
             "correlation_id": "corr-empty-athena",
             "worker": "cost_puller",
-            "details": {"telemetry_delay_event": False},
+            "details": {
+                "telemetry_delay_event": False,
+                "cur_manifest_uri": "s3://tf2-finops-cur-export-bucket/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json",
+            },
         },
     }
 
@@ -735,8 +762,10 @@ def test_normalizer_athena_query_integration():
             "body": body
         })
 
+    _MANIFEST_BYTES_ATH = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
     handler.s3_client = finops_common.FakeS3(
-        put_object_func=fake_put_object
+        put_object_func=fake_put_object,
+        get_object_func=lambda b, k: _MANIFEST_BYTES_ATH,
     )
 
     event_data = {
@@ -750,7 +779,9 @@ def test_normalizer_athena_query_integration():
             "run_id": "run-ath-1",
             "correlation_id": "corr-ath-1",
             "worker": "cost_puller",
-            "details": {}
+            "details": {
+                "cur_manifest_uri": "s3://tf2-finops-cur-export-bucket/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json",
+            }
         }
     }
 

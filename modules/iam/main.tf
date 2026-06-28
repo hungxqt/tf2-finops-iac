@@ -326,7 +326,7 @@ data "aws_iam_policy_document" "cost_puller" {
     for_each = var.cur_source_bucket_arn != "" ? [1] : []
     content {
       sid     = "AllowCURSourceGet"
-      actions = ["s3:GetObject"]
+      actions = ["s3:GetObject", "s3:HeadObject"]
       resources = [
         var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
       ]

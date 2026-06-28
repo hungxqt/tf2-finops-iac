@@ -929,3 +929,157 @@ resource "terraform_data" "destroy_guard" {
     prevent_destroy = true
   }
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CUR 2.0 / AWS Data Exports Landing Bucket
+# This bucket receives raw CUR 2.0 exports written by bcm-data-exports.amazonaws.com.
+# It is distinct from the lakehouse bucket. cost_puller reads manifests and Parquet
+# files from here; no CDO-internal service writes to it.
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_s3_bucket" "cur_export" {
+  # checkov:skip=CKV_AWS_144: "CUR export landing bucket does not need cross-region replication (raw source only)"
+  count         = var.create_cur_export_bucket ? 1 : 0
+  bucket        = var.cur_export_bucket_name != "" ? var.cur_export_bucket_name : "tf2-finops-cur-export-bucket"
+  force_destroy = var.destroyable
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "cur_export" {
+  count                   = var.create_cur_export_bucket ? 1 : 0
+  bucket                  = aws_s3_bucket.cur_export[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.data.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_logging" "cur_export" {
+  count         = var.create_cur_export_bucket ? 1 : 0
+  bucket        = aws_s3_bucket.cur_export[0].id
+  target_bucket = aws_s3_bucket.logging.id
+  target_prefix = "cur-export/"
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  rule {
+    id     = "expire-raw-cur"
+    status = "Enabled"
+    filter {
+      prefix = var.cur_raw_prefix != "" ? "${var.cur_raw_prefix}/" : ""
+    }
+    expiration {
+      days = 90
+    }
+  }
+}
+
+# Bucket policy: allow bcm-data-exports to write only to raw CUR prefixes.
+# Deny all other writes and deny HTTP.
+# Per: https://docs.aws.amazon.com/cur/latest/userguide/dataexports-s3-bucket.html
+resource "aws_s3_bucket_policy" "cur_export" {
+  count      = var.create_cur_export_bucket ? 1 : 0
+  bucket     = aws_s3_bucket.cur_export[0].id
+  policy     = data.aws_iam_policy_document.cur_export[0].json
+  depends_on = [aws_s3_bucket_public_access_block.cur_export]
+}
+
+data "aws_iam_policy_document" "cur_export" {
+  count = var.create_cur_export_bucket ? 1 : 0
+
+  statement {
+    sid    = "DenyHTTP"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.cur_export[0].arn,
+      "${aws_s3_bucket.cur_export[0].arn}/*"
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  # Allow AWS Data Exports service to PUT raw CUR files under the configured prefix.
+  # aws:SourceArn and aws:SourceAccount conditions prevent confused-deputy attacks.
+  statement {
+    sid    = "AllowBCMDataExportsPut"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["bcm-data-exports.amazonaws.com"]
+    }
+    actions = [
+      "s3:PutObject"
+    ]
+    # Scope writes to the raw export prefix only; curated/, ai-input/, audit/, features/ are excluded.
+    resources = [
+      var.cur_raw_prefix != "" ? "${aws_s3_bucket.cur_export[0].arn}/${var.cur_raw_prefix}/*" : "${aws_s3_bucket.cur_export[0].arn}/*"
+    ]
+    condition {
+      test     = "StringLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:bcm-data-exports:us-east-1:${data.aws_caller_identity.current.account_id}:export/*"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  # Deny writes to protected prefixes (curated, ai-input, audit, features) from all principals.
+  statement {
+    sid    = "DenyWritesToProtectedPrefixes"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:PutObject", "s3:DeleteObject"]
+    resources = [
+      "${aws_s3_bucket.cur_export[0].arn}/curated/*",
+      "${aws_s3_bucket.cur_export[0].arn}/ai-input/*",
+      "${aws_s3_bucket.cur_export[0].arn}/audit/*",
+      "${aws_s3_bucket.cur_export[0].arn}/features/*",
+    ]
+  }
+}
+

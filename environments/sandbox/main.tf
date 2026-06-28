@@ -457,6 +457,9 @@ module "lakehouse" {
   athena_replica_bucket_arn    = aws_s3_bucket.athena_results_replica.arn
   tags                         = var.tags
   destroyable                  = var.destroyable
+  create_cur_export_bucket     = var.create_cur_export_bucket
+  cur_export_bucket_name       = var.cur_export_bucket_name
+  cur_raw_prefix               = var.cur_raw_prefix
 }
 
 # 3. Alerting Module
@@ -491,7 +494,14 @@ module "iam" {
   sns_topic_arns                         = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
   telemetry_member_account_ids           = var.telemetry_member_account_ids
   telemetry_member_role_name             = var.telemetry_member_role_name
-  cur_source_bucket_arn                  = var.cur_source_bucket_arn
+  # IAM module receives CUR export bucket ARN when the bucket is managed by this environment.
+  # When cur_source_bucket_arn is set in tfvars (external bucket), that value is used instead.
+  cur_source_bucket_arn = (
+    var.cur_source_bucket_arn != "" ? var.cur_source_bucket_arn :
+    module.lakehouse.cur_export_bucket_arn != "" ? module.lakehouse.cur_export_bucket_arn :
+    ""
+  )
+  cur_source_prefix                      = var.cur_raw_prefix
   create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
   trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
   athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
@@ -557,7 +567,11 @@ module "compute_lambda" {
   sigv4_service_name         = var.sigv4_service_name
   tags                       = var.tags
 
-  cur_source_bucket          = var.cur_source_bucket
+  cur_source_bucket = (
+    var.cur_source_bucket != "" ? var.cur_source_bucket :
+    module.lakehouse.cur_export_bucket_name != "" ? module.lakehouse.cur_export_bucket_name :
+    ""
+  )
   cur_source_prefix          = var.cur_source_prefix
   cur_delay_threshold_hours  = var.cur_delay_threshold_hours
   ce_lookback_window_days    = var.ce_lookback_window_days
@@ -567,6 +581,8 @@ module "compute_lambda" {
   cur_data_table_name        = module.lakehouse.cur_data_table_name
   athena_results_bucket_name = module.lakehouse.athena_results_bucket_name
   telemetry_member_role_name = var.telemetry_member_role_name
+  cur_exports_json           = var.cur_exports_json
+  cur_raw_export_prefix      = var.cur_raw_prefix
 }
 
 # 7. Orchestration Module

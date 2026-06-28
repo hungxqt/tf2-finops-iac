@@ -25,6 +25,7 @@ locals {
         CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
         TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
         TELEMETRY_MEMBER_ROLE_NAME = var.telemetry_member_role_name
+        CUR_EXPORTS_JSON           = var.cur_exports_json
       }
     }
     normalizer = {
@@ -37,6 +38,7 @@ locals {
         GLUE_DATABASE_NAME         = var.glue_database_name
         GLUE_TABLE_NAME            = var.cur_data_table_name
         ATHENA_RESULTS_BUCKET_NAME = var.athena_results_bucket_name
+        CUR_RAW_EXPORT_PREFIX      = var.cur_raw_export_prefix
       }
     }
     router = {

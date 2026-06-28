@@ -154,3 +154,26 @@ variable "trusted_cost_puller_role_arns" {
   default     = []
 }
 
+variable "cur_exports_json" {
+  type        = string
+  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. Each entry must have source_account_id, prefix, export_name, and optionally allowed_raw_prefix. Leave empty to fall back to legacy CUR_SOURCE_PREFIX discovery."
+  default     = ""
+}
+
+variable "create_cur_export_bucket" {
+  type        = bool
+  description = "Set to true to create the dedicated CUR 2.0 / AWS Data Exports landing bucket via the lakehouse module."
+  default     = false
+}
+
+variable "cur_export_bucket_name" {
+  type        = string
+  description = "Override name for the CUR 2.0 export landing bucket. Defaults to 'tf2-finops-cur-export-bucket' when empty."
+  default     = ""
+}
+
+variable "cur_raw_prefix" {
+  type        = string
+  description = "S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 Parquet files (e.g. 'finops-cur-export'). Used for IAM scoping and bcm-data-exports bucket policy."
+  default     = ""
+}

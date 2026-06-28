@@ -94,3 +94,14 @@ output "athena_results_bucket_name" {
   value       = aws_s3_bucket.athena_results.id
 }
 
+output "cur_export_bucket_name" {
+  description = "The name of the CUR 2.0 Data Exports landing bucket (empty string when create_cur_export_bucket=false)"
+  value       = var.create_cur_export_bucket ? aws_s3_bucket.cur_export[0].id : ""
+}
+
+output "cur_export_bucket_arn" {
+  description = "The ARN of the CUR 2.0 Data Exports landing bucket (empty string when create_cur_export_bucket=false)"
+  value       = var.create_cur_export_bucket ? aws_s3_bucket.cur_export[0].arn : ""
+}
+
+

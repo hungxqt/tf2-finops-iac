@@ -159,3 +159,16 @@ variable "telemetry_member_role_name" {
   description = "IAM role name in member accounts for CDO telemetry ingestion (cross-account STS assume)."
   default     = "cdo-telemetry-ingestion-role"
 }
+
+variable "cur_exports_json" {
+  type        = string
+  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. Each entry must have source_account_id, prefix, export_name, and optionally allowed_raw_prefix. Leave empty to fall back to the legacy list-based CUR_SOURCE_PREFIX discovery."
+  default     = ""
+  sensitive   = false
+}
+
+variable "cur_raw_export_prefix" {
+  type        = string
+  description = "S3 prefix under CUR_SOURCE_BUCKET where AWS Data Exports writes raw CUR 2.0 files. Used by the normalizer to validate that manifest reportKeys stay within the allowed prefix."
+  default     = ""
+}
