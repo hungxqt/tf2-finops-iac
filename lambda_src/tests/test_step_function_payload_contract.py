@@ -92,6 +92,11 @@ def _resolve_parameters(ctx: dict, params: dict) -> dict:
             result[key] = value
     return result
 
+def _get_map_iterator_states() -> dict:
+    """Return the per-anomaly states inside the ProcessDetectedAnomalies Map iterator."""
+    asl = _load_asl_template()
+    return asl["States"]["ProcessDetectedAnomalies"]["Iterator"]["States"]
+
 
 sys.path.insert(0, os.path.dirname(__file__))
 from fixtures.step_function_payloads import (
@@ -127,7 +132,8 @@ class TestComponentInventory:
     def test_asl_required_states_present(self):
         asl = _load_asl_template()
         states = asl["States"]
-        required = [
+        # Top-level parent states
+        required_parent = [
             "PrepareRunContext", "LoadAccountPolicy", "OverwriteEnvironment",
             "CheckRunState", "DuplicateRun", "CheckAdHocQuotaDecision", "CheckAdHocQuota",
             "CheckErrorBudgetLock", "EvaluateErrorBudgetLock",
@@ -136,26 +142,40 @@ class TestComponentInventory:
             "VerifyS3Pointer", "SetS3PointerMissingError",
             "ChooseDetectRequestMode", "BuildDetectRequestRawJson",
             "BuildDetectRequestS3Pointer", "InvokeDetect", "EvaluateDetectResponse",
-            "SetAIFailClosedError", "InvokeDecide", "CacheRollbackPayload",
-            "FormatDecideResult", "RouteAlert",
-            "FinanceAlertRequired", "SendFinanceAlert",
-            "EngineeringAlertRequired", "SendEngineeringAlert",
-            "EvaluateContainmentPolicy",
-            "WritePreActionAudit", "ExecuteContainment",
-            "ReportVerifyResult", "EvaluateVerifyResult",
-            "ExecuteRollbackFromCache", "NotifyAIRollback",
-            "WriteRollbackAudit", "SendRolledBackStatusMessage",
-            "WriteEscalationAudit", "SendEscalationAlert",
-            "WritePostActionAudit",
-            "SendAppliedStatusMessage", "WriteDeniedAudit", "SendDeniedStatusMessage",
-            "WritePendingApprovalAudit", "SendPendingStatusMessage",
+            "SetAIFailClosedError",
+            # G1 fix: anomaly processing is now a Map + summarize, not flat states
+            "ProcessDetectedAnomalies", "SummarizeAnomalyResults", "EvaluateAnomalySummary",
             "FailClosed", "SendFailClosedAlert",
             "MarkRunComplete", "MarkRunFailed",
             "RunCompleted", "RunFailed", "DuplicateIgnored",
             "CURRetryExceeded", "WaitForCURExport",
         ]
-        for state in required:
-            assert state in states, f"Required state missing: {state}"
+        for state in required_parent:
+            assert state in states, f"Required parent state missing: {state}"
+
+        # Per-anomaly Map iterator states
+        iter_states = _get_map_iterator_states()
+        required_iter = [
+            "InvokeDecideForAnomaly", "CacheRollbackPayloadForAnomaly",
+            "FormatDecideResultForAnomaly", "RouteAlertForAnomaly",
+            "FinanceAlertRequiredForAnomaly", "SendFinanceAlertForAnomaly",
+            "EngineeringAlertRequiredForAnomaly", "SendEngineeringAlertForAnomaly",
+            "EvaluateContainmentPolicyForAnomaly",
+            "WritePreActionAuditForAnomaly", "BuildContainmentInputForAnomaly",
+            "ExecuteContainmentForAnomaly",
+            "ReportVerifyResultForAnomaly", "EvaluateVerifyResultForAnomaly",
+            "ExecuteRollbackFromCacheForAnomaly", "NotifyAIRollbackForAnomaly",
+            "WriteRollbackAuditForAnomaly", "SendRolledBackStatusMessageForAnomaly",
+            "WriteEscalationAuditForAnomaly", "SendEscalationAlertForAnomaly",
+            "WritePostActionAuditForAnomaly", "SendAppliedStatusMessageForAnomaly",
+            "WriteDeniedAuditForAnomaly", "SendDeniedStatusMessageForAnomaly",
+            "WritePendingApprovalAuditForAnomaly", "SendPendingStatusMessageForAnomaly",
+            "AnomalyApplied", "AnomalyDenied", "AnomalyPending",
+            "AnomalyRolledBack", "AnomalyEscalated",
+            "AnomalyAIFailClosed", "AnomalyPlatformFailed",
+        ]
+        for state in required_iter:
+            assert state in iter_states, f"Required iterator state missing: {state}"
 
     def test_no_polling_states_present(self):
         asl = _load_asl_template()
@@ -166,55 +186,70 @@ class TestComponentInventory:
 
     def test_vpc_alb_caller_used_for_ai_endpoints(self):
         asl = _load_asl_template()
-        states = asl["States"]
-        for state_name in ["InvokeDetect", "InvokeDecide", "ReportVerifyResult"]:
-            resource = states[state_name]["Resource"]
+        parent_states = asl["States"]
+        iter_states = _get_map_iterator_states()
+        # InvokeDetect remains at the top level (one detect per run)
+        for state_name in ["InvokeDetect"]:
+            resource = parent_states[state_name]["Resource"]
+            assert resource == "arn:aws:placeholder", (
+                f"{state_name}.Resource must reference vpc_alb_caller_lambda_arn"
+            )
+        # InvokeDecide and ReportVerifyResult are inside the Map iterator
+        for state_name in ["InvokeDecideForAnomaly", "ReportVerifyResultForAnomaly",
+                           "NotifyAIRollbackForAnomaly"]:
+            resource = iter_states[state_name]["Resource"]
             assert resource == "arn:aws:placeholder", (
                 f"{state_name}.Resource must reference vpc_alb_caller_lambda_arn"
             )
 
     def test_rollback_cache_is_dynamodb_put(self):
-        asl = _load_asl_template()
-        state = asl["States"]["CacheRollbackPayload"]
+        iter_states = _get_map_iterator_states()
+        state = iter_states["CacheRollbackPayloadForAnomaly"]
         assert state["Type"] == "Task"
         assert state["Resource"] == "arn:aws:states:::dynamodb:putItem"
 
     def test_alert_delivery_uses_sns(self):
         asl = _load_asl_template()
         states = asl["States"]
-        for state_name in ["SendCURDelayAlert", "SendFinanceAlert",
-                            "SendEngineeringAlert", "SendFailClosedAlert"]:
+        iter_states = _get_map_iterator_states()
+        # Top-level alert states
+        for state_name in ["SendCURDelayAlert", "SendFailClosedAlert"]:
             resource = states[state_name]["Resource"]
+            assert resource == "arn:aws:states:::sns:publish", (
+                f"{state_name} must use sns:publish"
+            )
+        # Per-anomaly (Map iterator) alert states
+        for state_name in ["SendFinanceAlertForAnomaly", "SendEngineeringAlertForAnomaly"]:
+            resource = iter_states[state_name]["Resource"]
             assert resource == "arn:aws:states:::sns:publish", (
                 f"{state_name} must use sns:publish"
             )
 
     def test_status_messages_use_sqs(self):
-        asl = _load_asl_template()
-        states = asl["States"]
-        for state_name in ["SendAppliedStatusMessage", "SendDeniedStatusMessage",
-                            "SendPendingStatusMessage", "SendRolledBackStatusMessage"]:
-            resource = states[state_name]["Resource"]
+        iter_states = _get_map_iterator_states()
+        for state_name in ["SendAppliedStatusMessageForAnomaly", "SendDeniedStatusMessageForAnomaly",
+                            "SendPendingStatusMessageForAnomaly", "SendRolledBackStatusMessageForAnomaly"]:
+            resource = iter_states[state_name]["Resource"]
             assert resource == "arn:aws:states:::sqs:sendMessage", (
                 f"{state_name} must use sqs:sendMessage"
             )
 
     def test_notify_ai_rollback_uses_vpc_alb_caller(self):
-        """NotifyAIRollback must call /v1/audit/{id}/rollback via vpc_alb_caller."""
-        asl = _load_asl_template()
-        state = asl["States"]["NotifyAIRollback"]
+        """NotifyAIRollbackForAnomaly must call /v1/audit/{id}/rollback via vpc_alb_caller."""
+        iter_states = _get_map_iterator_states()
+        state = iter_states["NotifyAIRollbackForAnomaly"]
         assert state["Resource"] == "arn:aws:placeholder", (
-            "NotifyAIRollback must use vpc_alb_caller_lambda_arn"
+            "NotifyAIRollbackForAnomaly must use vpc_alb_caller_lambda_arn"
         )
         path_param = state["Parameters"].get("path.$", "")
         assert "rollback" in path_param and "audit" in path_param, (
-            "NotifyAIRollback path must reference /v1/audit/{id}/rollback"
+            "NotifyAIRollbackForAnomaly path must reference /v1/audit/{id}/rollback"
         )
 
     def test_cache_rollback_payload_item_has_contract_fields(self):
-        """CacheRollbackPayload DDB item must include anomaly_id, correlation_id, boto3_equivalent."""
-        asl = _load_asl_template()
-        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        """CacheRollbackPayloadForAnomaly DDB item must include anomaly_id, correlation_id, boto3_equivalent."""
+        iter_states = _get_map_iterator_states()
+        item = iter_states["CacheRollbackPayloadForAnomaly"]["Parameters"]["Item"]
         assert "anomaly_id" in item
         assert "correlation_id" in item
         assert "boto3_equivalent" in item
@@ -231,6 +266,8 @@ class TestComponentInventory:
             assert term not in content, f"Forbidden async-detection term in ASL: {term}"
 
     def test_asl_doc_matches_template_states(self):
+        # Compare top-level states only; the Map iterator states are embedded within
+        # ProcessDetectedAnomalies and are already verified by test_asl_required_states_present.
         template_states = set(_load_asl_template()["States"].keys())
         doc_states = set(_load_asl_doc()["States"].keys())
         assert not (doc_states - template_states), f"Extra states in doc: {doc_states - template_states}"
@@ -361,9 +398,13 @@ class TestPayloadResolution:
         assert "deliver" in finance and "deliver" in engineering
 
     def test_report_verify_result_parameters_resolvable(self):
-        ctx = POST_EXECUTE_CONTAINMENT
-        asl = _load_asl_template()
-        params = asl["States"]["ReportVerifyResult"]["Parameters"]
+        # G1 fix: ReportVerifyResultForAnomaly lives in the Map iterator; context must include $.anomaly
+        ctx = {
+            **POST_EXECUTE_CONTAINMENT,
+            "anomaly": POST_EXECUTE_CONTAINMENT["ai_detect_response"]["anomalies_list"][0],
+        }
+        iter_states = _get_map_iterator_states()
+        params = iter_states["ReportVerifyResultForAnomaly"]["Parameters"]
         resolved = _resolve_parameters(ctx, params)
         assert resolved["path"] == "/v1/verify"
         assert resolved["tenant_id"] == TENANT_ID
@@ -575,24 +616,29 @@ class TestDetectPath:
 
 class TestDecideCachePath:
     def test_invoke_decide_path_is_v1_decide(self):
-        asl = _load_asl_template()
-        params = asl["States"]["InvokeDecide"]["Parameters"]
+        """InvokeDecideForAnomaly must have path=/v1/decide (literal, not $.*)."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["InvokeDecideForAnomaly"]["Parameters"]
         assert params.get("path") == "/v1/decide"
 
-    def test_invoke_decide_uses_contract_idempotency_key(self):
-        asl = _load_asl_template()
-        params = asl["States"]["InvokeDecide"]["Parameters"]
-        resolved = _resolve_parameters(POST_INVOKE_DETECT_ANOMALY, params)
-        assert resolved["idempotency_key"] == DECIDE_IDEMPOTENCY_KEY
-        assert resolved["body"]["idempotency_key"] == DECIDE_IDEMPOTENCY_KEY
-        assert resolved["body"]["correlation_id"] == CORRELATION_ID
+    def test_invoke_decide_uses_anomaly_specific_idempotency_key(self):
+        """G1 fix: idempotency key must include anomaly_id to be anomaly-scoped."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["InvokeDecideForAnomaly"]["Parameters"]
+        idem_path = params.get("idempotency_key.$", "")
+        assert "anomaly_id" in idem_path or "anomaly.anomaly_id" in idem_path, (
+            "InvokeDecideForAnomaly idempotency_key must include anomaly_id for per-anomaly isolation"
+        )
 
-    def test_invoke_decide_body_uses_anomalies_list_0(self):
-        asl = _load_asl_template()
-        params = asl["States"]["InvokeDecide"]["Parameters"]
+    def test_invoke_decide_body_uses_anomaly_context(self):
+        """G1 fix: anomaly_context must reference $.anomaly (Map item), not anomalies_list[0]."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["InvokeDecideForAnomaly"]["Parameters"]
         body = params.get("body", {})
         assert "anomaly_context.$" in body
-        assert body["anomaly_context.$"] == "$.ai_detect_response.anomalies_list[0]"
+        assert body["anomaly_context.$"] == "$.anomaly", (
+            "G1 fix: anomaly_context must be $.anomaly (Map item), not anomalies_list[0]"
+        )
 
     def test_decide_response_rollback_payload_has_boto3_equivalent(self):
         ctx = POST_INVOKE_DECIDE
@@ -600,36 +646,41 @@ class TestDecideCachePath:
         assert "boto3_equivalent" in payload
 
     def test_cache_rollback_payload_uses_dynamodb_put_item(self):
-        asl = _load_asl_template()
-        state = asl["States"]["CacheRollbackPayload"]
+        iter_states = _get_map_iterator_states()
+        state = iter_states["CacheRollbackPayloadForAnomaly"]
         assert state["Type"] == "Task"
         assert state["Resource"] == "arn:aws:states:::dynamodb:putItem"
         assert "TableName" in state["Parameters"]
         assert "Item" in state["Parameters"]
 
     def test_format_decide_result_reads_action_plan_0_action(self):
-        asl = _load_asl_template()
-        params = asl["States"]["FormatDecideResult"]["Parameters"]
+        """FormatDecideResultForAnomaly reads recommended_containment_mode from action_plan[0].action."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["FormatDecideResultForAnomaly"]["Parameters"]
         assert "recommended_containment_mode.$" in params
         path = params["recommended_containment_mode.$"]
         ctx = POST_INVOKE_DECIDE
         mode = _resolve_path(ctx, path)
         assert isinstance(mode, str) and mode != ""
 
-    def test_format_decide_result_reads_anomaly_id_from_anomalies_list_0(self):
-        asl = _load_asl_template()
-        params = asl["States"]["FormatDecideResult"]["Parameters"]
+    def test_format_decide_result_reads_anomaly_id_from_anomaly(self):
+        """G1 fix: FormatDecideResultForAnomaly must read anomaly_id from $.anomaly, not anomalies_list[0]."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["FormatDecideResultForAnomaly"]["Parameters"]
         assert "anomaly_id.$" in params
         path = params["anomaly_id.$"]
-        assert "anomalies_list[0]" in path
-        ctx = POST_INVOKE_DECIDE
+        assert "anomalies_list[0]" not in path, (
+            "G1 fix: FormatDecideResultForAnomaly must use $.anomaly.anomaly_id, not anomalies_list[0]"
+        )
+        # Resolve against a Map item context (anomaly key at top level)
+        ctx = {**POST_INVOKE_DECIDE, "anomaly": POST_INVOKE_DECIDE["ai_detect_response"]["anomalies_list"][0]}
         assert _resolve_path(ctx, path) == ANOMALY_ID
 
 
 class TestContainmentPolicy:
     def _choices(self):
-        asl = _load_asl_template()
-        return asl["States"]["EvaluateContainmentPolicy"]["Choices"]
+        iter_states = _get_map_iterator_states()
+        return iter_states["EvaluateContainmentPolicyForAnomaly"]["Choices"]
 
     def test_prod_destructive_mode_denied(self):
         ctx = POST_CONTAINMENT_POLICY_DENIED_PROD
@@ -641,7 +692,7 @@ class TestContainmentPolicy:
         choices = self._choices()
         found = False
         for choice in choices:
-            if "And" in choice and choice.get("Next") == "WriteDeniedAudit":
+            if "And" in choice and choice.get("Next") == "WriteDeniedAuditForAnomaly":
                 conds = choice["And"]
                 has_prod = any(
                     c.get("Variable") == "$.account_policy.environment" and
@@ -665,7 +716,7 @@ class TestContainmentPolicy:
         assert ctx["ai"]["recommended_containment_mode"] == "tag"
         choices = self._choices()
         sandbox_safe_found = any(
-            "And" in choice and choice.get("Next") == "WritePreActionAudit" and
+            "And" in choice and choice.get("Next") == "WritePreActionAuditForAnomaly" and
             any(c.get("Variable") == "$.account_policy.environment" and
                 c.get("StringEquals") == "sandbox"
                 for c in choice["And"])
@@ -682,43 +733,46 @@ class TestContainmentPolicy:
 
 class TestVerifyPath:
     def test_report_verify_result_path_is_v1_verify(self):
-        asl = _load_asl_template()
-        params = asl["States"]["ReportVerifyResult"]["Parameters"]
+        iter_states = _get_map_iterator_states()
+        params = iter_states["ReportVerifyResultForAnomaly"]["Parameters"]
         assert params.get("path") == "/v1/verify"
 
-    def test_report_verify_result_uses_contract_idempotency_key(self):
-        asl = _load_asl_template()
-        params = asl["States"]["ReportVerifyResult"]["Parameters"]
-        resolved = _resolve_parameters(POST_EXECUTE_CONTAINMENT, params)
-        assert resolved["idempotency_key"] == VERIFY_IDEMPOTENCY_KEY
-        assert resolved["body"]["idempotency_key"] == VERIFY_IDEMPOTENCY_KEY
-        assert resolved["body"]["correlation_id"] == CORRELATION_ID
+    def test_report_verify_result_uses_anomaly_specific_idempotency_key(self):
+        """G1 fix: verify idempotency key must include anomaly_id."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["ReportVerifyResultForAnomaly"]["Parameters"]
+        idem_path = params.get("idempotency_key.$", "")
+        assert "anomaly_id" in idem_path or "anomaly.anomaly_id" in idem_path, (
+            "ReportVerifyResultForAnomaly idempotency_key must include anomaly_id"
+        )
 
-    def test_verify_body_action_executed_target_reads_anomalies_list_0(self):
-        asl = _load_asl_template()
-        params = asl["States"]["ReportVerifyResult"]["Parameters"]
+    def test_verify_body_action_executed_target_reads_anomaly_resource_id(self):
+        """G1 fix: verify action_executed.target must read from $.anomaly.resource_id, not anomalies_list[0]."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["ReportVerifyResultForAnomaly"]["Parameters"]
         body = params.get("body", {})
         action_executed = body.get("action_executed", {})
         target_path = action_executed.get("target.$")
         assert target_path is not None
-        assert "anomalies_list[0]" in target_path
-        ctx = POST_EXECUTE_CONTAINMENT
+        assert "anomalies_list[0]" not in target_path, (
+            "G1 fix: verify target must use $.anomaly.resource_id, not anomalies_list[0]"
+        )
+        ctx = {**POST_EXECUTE_CONTAINMENT, "anomaly": POST_EXECUTE_CONTAINMENT["ai_detect_response"]["anomalies_list"][0]}
         target = _resolve_path(ctx, target_path)
         assert target is not None and target != ""
 
     def test_verify_result_leads_to_evaluate_verify_result(self):
-        """ReportVerifyResult must now route to EvaluateVerifyResult choice state
-        which then branches on next_action: DONE|RETRY|ROLLBACK|ESCALATE."""
-        asl = _load_asl_template()
-        assert asl["States"]["ReportVerifyResult"].get("Next") == "EvaluateVerifyResult"
+        """ReportVerifyResultForAnomaly must route to EvaluateVerifyResultForAnomaly."""
+        iter_states = _get_map_iterator_states()
+        assert iter_states["ReportVerifyResultForAnomaly"].get("Next") == "EvaluateVerifyResultForAnomaly"
 
     def test_write_post_action_audit_leads_to_applied_status_message(self):
-        asl = _load_asl_template()
-        assert asl["States"]["WritePostActionAudit"]["Next"] == "SendAppliedStatusMessage"
+        iter_states = _get_map_iterator_states()
+        assert iter_states["WritePostActionAuditForAnomaly"]["Next"] == "SendAppliedStatusMessageForAnomaly"
 
     def test_applied_status_message_has_correct_status_value(self):
-        asl = _load_asl_template()
-        params = asl["States"]["SendAppliedStatusMessage"]["Parameters"]
+        iter_states = _get_map_iterator_states()
+        params = iter_states["SendAppliedStatusMessageForAnomaly"]["Parameters"]
         body = params.get("MessageBody", {})
         assert body.get("status") == "APPLIED"
 
@@ -772,6 +826,7 @@ class TestFailClosedPaths:
 
 class TestSQSStatusMessages:
     def test_only_rollback_status_queue_in_asl(self):
+        """All SQS queue refs must use rollback_status_queue_url or the placeholder ARN."""
         with open(ASL_TEMPLATE, "r", encoding="utf-8") as fh:
             content = fh.read()
         queue_refs = re.findall(r'"QueueUrl"\s*:\s*"([^"]+)"', content)
@@ -781,30 +836,30 @@ class TestSQSStatusMessages:
             )
 
     def test_applied_status_is_applied(self):
-        asl = _load_asl_template()
-        status = asl["States"]["SendAppliedStatusMessage"]["Parameters"]["MessageBody"]["status"]
+        iter_states = _get_map_iterator_states()
+        status = iter_states["SendAppliedStatusMessageForAnomaly"]["Parameters"]["MessageBody"]["status"]
         assert status == "APPLIED"
 
     def test_denied_status_is_denied(self):
-        asl = _load_asl_template()
-        status = asl["States"]["SendDeniedStatusMessage"]["Parameters"]["MessageBody"]["status"]
+        iter_states = _get_map_iterator_states()
+        status = iter_states["SendDeniedStatusMessageForAnomaly"]["Parameters"]["MessageBody"]["status"]
         assert status == "DENIED"
 
     def test_pending_status_is_pending(self):
-        asl = _load_asl_template()
-        status = asl["States"]["SendPendingStatusMessage"]["Parameters"]["MessageBody"]["status"]
+        iter_states = _get_map_iterator_states()
+        status = iter_states["SendPendingStatusMessageForAnomaly"]["Parameters"]["MessageBody"]["status"]
         assert status == "PENDING"
 
     def test_rolled_back_status_is_rolled_back(self):
-        asl = _load_asl_template()
-        status = asl["States"]["SendRolledBackStatusMessage"]["Parameters"]["MessageBody"]["status"]
+        iter_states = _get_map_iterator_states()
+        status = iter_states["SendRolledBackStatusMessageForAnomaly"]["Parameters"]["MessageBody"]["status"]
         assert status == "ROLLED_BACK"
 
     def test_status_messages_have_run_id_correlation_id_tenant_id(self):
-        asl = _load_asl_template()
-        for state_name in ["SendAppliedStatusMessage", "SendDeniedStatusMessage",
-                            "SendPendingStatusMessage", "SendRolledBackStatusMessage"]:
-            body = asl["States"][state_name]["Parameters"]["MessageBody"]
+        iter_states = _get_map_iterator_states()
+        for state_name in ["SendAppliedStatusMessageForAnomaly", "SendDeniedStatusMessageForAnomaly",
+                           "SendPendingStatusMessageForAnomaly", "SendRolledBackStatusMessageForAnomaly"]:
+            body = iter_states[state_name]["Parameters"]["MessageBody"]
             assert "run_id.$" in body
             assert "correlation_id.$" in body
             assert "tenant_id.$" in body
@@ -814,68 +869,66 @@ class TestVerifyBranching:
     """Contract Section 5: /v1/verify response branching: DONE|RETRY|ROLLBACK|ESCALATE."""
 
     def test_report_verify_result_routes_to_evaluate_verify_result(self):
-        asl = _load_asl_template()
-        assert asl["States"]["ReportVerifyResult"]["Next"] == "EvaluateVerifyResult"
+        iter_states = _get_map_iterator_states()
+        assert iter_states["ReportVerifyResultForAnomaly"]["Next"] == "EvaluateVerifyResultForAnomaly"
 
     def test_evaluate_verify_result_is_choice(self):
-        asl = _load_asl_template()
-        state = asl["States"]["EvaluateVerifyResult"]
+        iter_states = _get_map_iterator_states()
+        state = iter_states["EvaluateVerifyResultForAnomaly"]
         assert state["Type"] == "Choice"
 
     def test_evaluate_verify_result_done_goes_to_write_post_action_audit(self):
-        asl = _load_asl_template()
-        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        iter_states = _get_map_iterator_states()
+        choices = iter_states["EvaluateVerifyResultForAnomaly"]["Choices"]
         found = any(
-            c.get("Next") == "WritePostActionAudit" and "Or" in c
+            c.get("Next") == "WritePostActionAuditForAnomaly" and "Or" in c
             for c in choices
         )
-        assert found, "EvaluateVerifyResult must have DONE branch (Or condition) to WritePostActionAudit"
+        assert found, "EvaluateVerifyResultForAnomaly must have DONE branch (Or condition) to WritePostActionAuditForAnomaly"
 
     def test_evaluate_verify_result_rollback_goes_to_execute_rollback(self):
-        asl = _load_asl_template()
-        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        iter_states = _get_map_iterator_states()
+        choices = iter_states["EvaluateVerifyResultForAnomaly"]["Choices"]
         found = any(
             c.get("Variable") == "$.verify_result.next_action" and
             c.get("StringEquals") == "ROLLBACK" and
-            c.get("Next") == "ExecuteRollbackFromCache"
+            c.get("Next") == "ExecuteRollbackFromCacheForAnomaly"
             for c in choices
         )
-        assert found, "EvaluateVerifyResult must route ROLLBACK to ExecuteRollbackFromCache"
+        assert found, "EvaluateVerifyResultForAnomaly must route ROLLBACK to ExecuteRollbackFromCacheForAnomaly"
 
     def test_evaluate_verify_result_escalate_goes_to_write_escalation_audit(self):
-        asl = _load_asl_template()
-        choices = asl["States"]["EvaluateVerifyResult"]["Choices"]
+        iter_states = _get_map_iterator_states()
+        choices = iter_states["EvaluateVerifyResultForAnomaly"]["Choices"]
         found = any(
             c.get("Variable") == "$.verify_result.next_action" and
             c.get("StringEquals") == "ESCALATE" and
-            c.get("Next") == "WriteEscalationAudit"
+            c.get("Next") == "WriteEscalationAuditForAnomaly"
             for c in choices
         )
-        assert found, "EvaluateVerifyResult must route ESCALATE to WriteEscalationAudit"
+        assert found, "EvaluateVerifyResultForAnomaly must route ESCALATE to WriteEscalationAuditForAnomaly"
 
     def test_evaluate_verify_result_default_is_write_post_action_audit(self):
-        asl = _load_asl_template()
-        default = asl["States"]["EvaluateVerifyResult"]["Default"]
-        assert default == "WritePostActionAudit"
+        iter_states = _get_map_iterator_states()
+        default = iter_states["EvaluateVerifyResultForAnomaly"]["Default"]
+        assert default == "WritePostActionAuditForAnomaly"
 
     def test_rollback_path_chain(self):
-        asl = _load_asl_template()
-        states = asl["States"]
-        assert states["ExecuteRollbackFromCache"]["Next"] == "NotifyAIRollback"
-        assert states["NotifyAIRollback"]["Next"] == "WriteRollbackAudit"
-        assert states["WriteRollbackAudit"]["Next"] == "SendRolledBackStatusMessage"
-        assert states["SendRolledBackStatusMessage"]["Next"] == "MarkRunComplete"
+        iter_states = _get_map_iterator_states()
+        assert iter_states["ExecuteRollbackFromCacheForAnomaly"]["Next"] == "NotifyAIRollbackForAnomaly"
+        assert iter_states["NotifyAIRollbackForAnomaly"]["Next"] == "WriteRollbackAuditForAnomaly"
+        assert iter_states["WriteRollbackAuditForAnomaly"]["Next"] == "SendRolledBackStatusMessageForAnomaly"
+        assert iter_states["SendRolledBackStatusMessageForAnomaly"]["Next"] == "AnomalyRolledBack"
 
     def test_escalation_path_chain(self):
-        asl = _load_asl_template()
-        states = asl["States"]
-        assert states["WriteEscalationAudit"]["Next"] == "SendEscalationAlert"
-        assert states["SendEscalationAlert"]["Next"] == "SendPendingStatusMessage"
+        iter_states = _get_map_iterator_states()
+        assert iter_states["WriteEscalationAuditForAnomaly"]["Next"] == "SendEscalationAlertForAnomaly"
+        assert iter_states["SendEscalationAlertForAnomaly"]["Next"] == "SendPendingStatusMessageForAnomaly"
 
     def test_notify_ai_rollback_path_format(self):
-        """NotifyAIRollback must use States.Format path for /v1/audit/{id}/rollback."""
-        asl = _load_asl_template()
-        params = asl["States"]["NotifyAIRollback"]["Parameters"]
+        """NotifyAIRollbackForAnomaly must use States.Format path for /v1/audit/{id}/rollback."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["NotifyAIRollbackForAnomaly"]["Parameters"]
         assert "path.$" in params
         path_expr = params["path.$"]
         assert "rollback" in path_expr
@@ -883,29 +936,137 @@ class TestVerifyBranching:
         assert "States.Format" in path_expr
 
     def test_notify_ai_rollback_body_has_required_fields(self):
-        """NotifyAIRollback body must include correlation_id, anomaly_id, rollback_status."""
-        asl = _load_asl_template()
-        body = asl["States"]["NotifyAIRollback"]["Parameters"]["body"]
+        """NotifyAIRollbackForAnomaly body must include correlation_id, anomaly_id, rollback_status."""
+        iter_states = _get_map_iterator_states()
+        body = iter_states["NotifyAIRollbackForAnomaly"]["Parameters"]["body"]
         assert "correlation_id.$" in body
         assert "anomaly_id.$" in body
         assert "rollback_status.$" in body
 
     def test_execute_rollback_from_cache_is_task(self):
-        asl = _load_asl_template()
-        state = asl["States"]["ExecuteRollbackFromCache"]
+        iter_states = _get_map_iterator_states()
+        state = iter_states["ExecuteRollbackFromCacheForAnomaly"]
         assert state["Type"] == "Task"
         # Must use containment_worker (CDO-owned) not vpc_alb_caller
         assert state["Resource"] == "arn:aws:placeholder"
 
     def test_send_escalation_alert_uses_sns(self):
-        asl = _load_asl_template()
-        resource = asl["States"]["SendEscalationAlert"]["Resource"]
+        iter_states = _get_map_iterator_states()
+        resource = iter_states["SendEscalationAlertForAnomaly"]["Resource"]
         assert resource == "arn:aws:states:::sns:publish"
 
     def test_verify_result_written_to_verify_result_key(self):
         ctx = POST_VERIFY_RESULT
         result = _resolve_path(ctx, "$.verify_result")
         assert result["success"] is True
+
+
+class TestG1MultiAnomalyMap:
+    """G1 fix: Verify that the ProcessDetectedAnomalies Map is correctly structured
+    for sequential multi-anomaly processing."""
+
+    def test_process_detected_anomalies_is_map_type(self):
+        asl = _load_asl_template()
+        state = asl["States"]["ProcessDetectedAnomalies"]
+        assert state["Type"] == "Map"
+
+    def test_map_items_path_is_anomalies_list(self):
+        asl = _load_asl_template()
+        state = asl["States"]["ProcessDetectedAnomalies"]
+        assert state["ItemsPath"] == "$.ai_detect_response.anomalies_list"
+
+    def test_map_max_concurrency_is_1(self):
+        """MaxConcurrency must be 1 to prevent parallel containment blast radius."""
+        asl = _load_asl_template()
+        state = asl["States"]["ProcessDetectedAnomalies"]
+        assert state["MaxConcurrency"] == 1
+
+    def test_map_item_selector_injects_anomaly_and_context(self):
+        """ItemSelector must inject $.anomaly and required parent context fields."""
+        asl = _load_asl_template()
+        item_selector = asl["States"]["ProcessDetectedAnomalies"]["ItemSelector"]
+        assert "anomaly.$" in item_selector
+        assert item_selector["anomaly.$"] == "$$.Map.Item.Value"
+        for field in ["run_id.$", "tenant_id.$", "correlation_id.$", "account_id.$",
+                      "execution_date.$", "force_dry_run.$", "account_policy.$", "environment.$"]:
+            assert field in item_selector, f"ItemSelector missing: {field}"
+
+    def test_map_routes_to_summarize_anomaly_results(self):
+        asl = _load_asl_template()
+        state = asl["States"]["ProcessDetectedAnomalies"]
+        assert state.get("Next") == "SummarizeAnomalyResults"
+
+    def test_summarize_anomaly_results_uses_state_lambda(self):
+        asl = _load_asl_template()
+        state = asl["States"]["SummarizeAnomalyResults"]
+        assert state["Type"] == "Task"
+        assert state["Resource"] == "arn:aws:placeholder"
+        params = state["Parameters"]
+        assert params.get("operation") == "summarize_anomaly_results"
+        assert "processed_anomaly_results.$" in params
+
+    def test_evaluate_anomaly_summary_routes_failed_to_mark_run_failed(self):
+        asl = _load_asl_template()
+        state = asl["States"]["EvaluateAnomalySummary"]
+        assert state["Type"] == "Choice"
+        choices = state["Choices"]
+        found = any(
+            c.get("Variable") == "$.anomaly_summary.workflow_status" and
+            c.get("StringEquals") == "FAILED" and
+            c.get("Next") == "MarkRunFailed"
+            for c in choices
+        )
+        assert found, "EvaluateAnomalySummary must route workflow_status=FAILED to MarkRunFailed"
+        assert state["Default"] == "MarkRunComplete"
+
+    def test_map_iterator_starts_at_invoke_decide_for_anomaly(self):
+        asl = _load_asl_template()
+        iterator = asl["States"]["ProcessDetectedAnomalies"]["Iterator"]
+        assert iterator["StartAt"] == "InvokeDecideForAnomaly"
+
+    def test_decide_idempotency_includes_anomaly_id(self):
+        """InvokeDecideForAnomaly idempotency_key must contain anomaly_id for per-anomaly isolation."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["InvokeDecideForAnomaly"]["Parameters"]
+        idem_expr = params.get("idempotency_key.$", "")
+        assert "anomaly_id" in idem_expr or "anomaly.anomaly_id" in idem_expr
+
+    def test_verify_idempotency_includes_anomaly_id(self):
+        """ReportVerifyResultForAnomaly idempotency_key must contain anomaly_id."""
+        iter_states = _get_map_iterator_states()
+        params = iter_states["ReportVerifyResultForAnomaly"]["Parameters"]
+        idem_expr = params.get("idempotency_key.$", "")
+        assert "anomaly_id" in idem_expr or "anomaly.anomaly_id" in idem_expr
+
+    def test_anomaly_terminal_states_use_end_true(self):
+        """All per-anomaly terminal states must have End=true."""
+        iter_states = _get_map_iterator_states()
+        for state_name in ["AnomalyApplied", "AnomalyDenied", "AnomalyPending",
+                           "AnomalyRolledBack", "AnomalyEscalated",
+                           "AnomalyAIFailClosed", "AnomalyPlatformFailed"]:
+            state = iter_states[state_name]
+            assert state.get("End") is True, (
+                f"{state_name} must have End=true (iterator terminal state)"
+            )
+
+    def test_evaluate_detect_response_routes_to_map(self):
+        """EvaluateDetectResponse must route anomalies_detected=True to ProcessDetectedAnomalies."""
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateDetectResponse"]["Choices"]
+        found = any(
+            c.get("Next") == "ProcessDetectedAnomalies"
+            for c in choices
+        )
+        assert found, "EvaluateDetectResponse must have a choice routing to ProcessDetectedAnomalies"
+
+    def test_no_anomalies_list_0_references_in_map_iterator(self):
+        """G1 fix: no per-anomaly state should reference anomalies_list[0] (blast radius regression guard)."""
+        import json as _json
+        iter_states = _get_map_iterator_states()
+        serialized = _json.dumps(iter_states)
+        assert "anomalies_list[0]" not in serialized, (
+            "G1 regression: Map iterator must not reference anomalies_list[0]. Use $.anomaly instead."
+        )
 
 
 class TestNormalizedAIErrorEnvelope:
@@ -1055,26 +1216,26 @@ class TestRollbackCacheContract:
     """finops-rollback-cache DynamoDB item must include contract-required fields."""
 
     def test_cache_rollback_payload_item_has_anomaly_id(self):
-        asl = _load_asl_template()
-        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        iter_states = _get_map_iterator_states()
+        item = iter_states["CacheRollbackPayloadForAnomaly"]["Parameters"]["Item"]
         assert "anomaly_id" in item
         assert "S.$" in item["anomaly_id"]
 
     def test_cache_rollback_payload_item_has_correlation_id(self):
-        asl = _load_asl_template()
-        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        iter_states = _get_map_iterator_states()
+        item = iter_states["CacheRollbackPayloadForAnomaly"]["Parameters"]["Item"]
         assert "correlation_id" in item
         assert "S.$" in item["correlation_id"]
 
     def test_cache_rollback_payload_item_has_boto3_equivalent(self):
         """boto3_equivalent must be present so CDO can execute rollback independently."""
-        asl = _load_asl_template()
-        item = asl["States"]["CacheRollbackPayload"]["Parameters"]["Item"]
+        iter_states = _get_map_iterator_states()
+        item = iter_states["CacheRollbackPayloadForAnomaly"]["Parameters"]["Item"]
         assert "boto3_equivalent" in item
 
     def test_rollback_cache_table_is_dynamodb_put(self):
-        asl = _load_asl_template()
-        state = asl["States"]["CacheRollbackPayload"]
+        iter_states = _get_map_iterator_states()
+        state = iter_states["CacheRollbackPayloadForAnomaly"]
         assert state["Resource"] == "arn:aws:states:::dynamodb:putItem"
         assert "TableName" in state["Parameters"]
 

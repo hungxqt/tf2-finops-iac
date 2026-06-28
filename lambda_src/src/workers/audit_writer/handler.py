@@ -40,12 +40,18 @@ def get_ddb_client():
     return None
 
 def _first_anomaly(raw_event: dict) -> dict:
+    # G1 fix: prefer the top-level $.anomaly field injected by the Map ItemSelector.
+    # Fall back to anomalies_list[0] for backward compatibility with non-Map callers.
+    top_level = raw_event.get("anomaly")
+    if isinstance(top_level, dict) and top_level.get("anomaly_id"):
+        return top_level
     anomalies = raw_event.get("ai_detect_response", {}).get("anomalies_list", [])
     if isinstance(anomalies, list) and anomalies:
         first = anomalies[0]
         if isinstance(first, dict):
             return first
     return {}
+
 
 def _first_action_plan(raw_event: dict) -> dict:
     action_plan = raw_event.get("ai_decide_response", {}).get("action_plan", [])

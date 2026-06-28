@@ -89,6 +89,35 @@ def handle_request(event_data: dict, context: Any) -> dict:
         logger.info("Response: %s", resp_dict)
         return resp_dict
 
+    if op == "summarize_anomaly_results":
+        processed = event_data.get("processed_anomaly_results", [])
+        run_id = event_data.get("run_id", "")
+        correlation_id = event_data.get("correlation_id", "")
+
+        counts = {}
+        failed_anomaly_ids = []
+        for item in (processed or []):
+            status = item.get("status", "UNKNOWN")
+            counts[status] = counts.get(status, 0) + 1
+            if status == "PLATFORM_FAILED":
+                failed_anomaly_ids.append(item.get("anomaly_id", "unknown"))
+
+        # Mark parent run failed only when platform failures prevent durable audit/status evidence.
+        # AI_FAIL_CLOSED is handled inside the Map and does not fail the parent run.
+        has_platform_failure = counts.get("PLATFORM_FAILED", 0) > 0
+        workflow_status = "FAILED" if has_platform_failure else "COMPLETE"
+
+        result = {
+            "workflow_status": workflow_status,
+            "counts": counts,
+            "total": len(processed or []),
+            "failed_anomaly_ids": failed_anomaly_ids,
+            "run_id": run_id,
+            "correlation_id": correlation_id,
+        }
+        logger.info("Anomaly summary: %s", result)
+        return result
+
     try:
         event = finops_common.Event.from_dict(event_data)
         finops_common.validate_event(event)

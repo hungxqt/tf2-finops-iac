@@ -675,7 +675,7 @@
               "IsPresent": true
             }
           ],
-          "Next": "InvokeDecide"
+          "Next": "ProcessDetectedAnomalies"
         }
       ],
       "Default": "MarkRunComplete"
@@ -689,457 +689,1025 @@
       "ResultPath": "$.error",
       "Next": "FailClosed"
     },
-    "InvokeDecide": {
-      "Type": "Task",
-      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
-      "Parameters": {
-        "path": "/v1/decide",
-        "method": "POST",
+    "ProcessDetectedAnomalies": {
+      "Type": "Map",
+      "Comment": "G1 fix: Process each detected anomaly sequentially (MaxConcurrency=1) to avoid parallel containment blast radius and preserve deterministic audit order.",
+      "ItemsPath": "$.ai_detect_response.anomalies_list",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "anomaly.$": "$$.Map.Item.Value",
+        "run_id.$": "$.run_id",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)",
-        "ai_contract_version.$": "$.ai_contract_version",
-        "body": {
-          "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "States.Format('{}:{}:decide', $.tenant_id, $.execution_date)",
-          "dry_run_mode.$": "$.force_dry_run",
-          "anomaly_context.$": "$.ai_detect_response.anomalies_list[0]"
-        }
+        "account_id.$": "$.account_id",
+        "execution_date.$": "$.execution_date",
+        "cost_period.$": "$.cost_period",
+        "force_dry_run.$": "$.force_dry_run",
+        "account_policy.$": "$.account_policy",
+        "environment.$": "$.environment",
+        "normalized.$": "$.normalized",
+        "ai_contract_version.$": "$.ai_contract_version"
       },
-      "ResultPath": "$.ai_decide_response",
-      "Next": "CacheRollbackPayload",
-      "TimeoutSeconds": 60,
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "FailClosed"
-        }
-      ]
-    },
-    "CacheRollbackPayload": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::dynamodb:putItem",
-      "Parameters": {
-        "TableName": "tf2-finops-sandbox-rollback-cache",
-        "Item": {
-          "anomaly_id": {
-            "S.$": "$.ai_detect_response.anomalies_list[0].anomaly_id"
-          },
-          "correlation_id": {
-            "S.$": "$.correlation_id"
-          },
-          "rollback_payload": {
-            "S.$": "States.JsonToString($.ai_decide_response.rollback_payload)"
-          },
-          "boto3_equivalent": {
-            "S.$": "States.JsonToString($.ai_decide_response.rollback_payload.boto3_equivalent)"
-          }
-        }
-      },
-      "ResultPath": "$.cache_rollback_result",
-      "Next": "FormatDecideResult"
-    },
-    "FormatDecideResult": {
-      "Type": "Pass",
-      "Parameters": {
-        "anomaly_found": true,
-        "required_fields_valid": true,
-        "recommended_containment_mode.$": "$.ai_decide_response.action_plan[0].action",
-        "anomaly_id.$": "$.ai_detect_response.anomalies_list[0].anomaly_id",
-        "severity.$": "$.ai_detect_response.anomalies_list[0].severity",
-        "confidence_score.$": "$.ai_detect_response.anomalies_list[0].confidence_score"
-      },
-      "ResultPath": "$.ai",
-      "Next": "RouteAlert"
-    },
-    "RouteAlert": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-router",
-      "ResultPath": "$.alert",
-      "Next": "FinanceAlertRequired",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "FinanceAlertRequired": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.alert.details.finance_route.deliver",
-          "BooleanEquals": true,
-          "Next": "SendFinanceAlert"
-        }
-      ],
-      "Default": "EngineeringAlertRequired"
-    },
-    "SendFinanceAlert": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-finance-alerts",
-        "Subject.$": "$.alert.details.finance_route.subject",
-        "Message.$": "$.alert.details.finance_route.message"
-      },
-      "ResultPath": "$.finance_alert_result",
-      "Next": "EngineeringAlertRequired",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.alert_error",
-          "Next": "WriteAlertDeliveryFailureAudit"
-        }
-      ]
-    },
-    "EngineeringAlertRequired": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.alert.details.engineering_route.deliver",
-          "BooleanEquals": true,
-          "Next": "SendEngineeringAlert"
-        }
-      ],
-      "Default": "EvaluateContainmentPolicy"
-    },
-    "SendEngineeringAlert": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
-        "Subject.$": "$.alert.details.engineering_route.subject",
-        "Message.$": "$.alert.details.engineering_route.message"
-      },
-      "ResultPath": "$.engineering_alert_result",
-      "Next": "EvaluateContainmentPolicy",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.alert_error",
-          "Next": "WriteAlertDeliveryFailureAudit"
-        }
-      ]
-    },
-    "WriteAlertDeliveryFailureAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "ResultPath": "$.alert_failure_audit",
-      "Next": "MarkRunFailed",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "EvaluateContainmentPolicy": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            {
-              "Variable": "$.account_policy.environment",
-              "StringEquals": "prod"
+      "Iterator": {
+        "StartAt": "InvokeDecideForAnomaly",
+        "States": {
+          "InvokeDecideForAnomaly": {
+            "Type": "Task",
+            "Comment": "Step Functions invokes VpcAlbCallerLambda for this anomaly; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
+            "Parameters": {
+              "path": "/v1/decide",
+              "method": "POST",
+              "tenant_id.$": "$.tenant_id",
+              "correlation_id.$": "$.correlation_id",
+              "idempotency_key.$": "States.Format('{}:{}:{}:decide', $.tenant_id, $.execution_date, $.anomaly.anomaly_id)",
+              "ai_contract_version.$": "$.ai_contract_version",
+              "body": {
+                "correlation_id.$": "$.correlation_id",
+                "idempotency_key.$": "States.Format('{}:{}:{}:decide', $.tenant_id, $.execution_date, $.anomaly.anomaly_id)",
+                "dry_run_mode.$": "$.force_dry_run",
+                "anomaly_context.$": "$.anomaly"
+              }
             },
-            {
-              "Or": [
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "terminate"
+            "ResultPath": "$.ai_decide_response",
+            "Next": "CacheRollbackPayloadForAnomaly",
+            "TimeoutSeconds": 60,
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyAIFailClosed"
+              }
+            ]
+          },
+          "CacheRollbackPayloadForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Parameters": {
+              "TableName": "tf2-finops-sandbox-rollback-cache",
+              "Item": {
+                "anomaly_id": {
+                  "S.$": "$.anomaly.anomaly_id"
                 },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "delete"
+                "correlation_id": {
+                  "S.$": "$.correlation_id"
                 },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "modify_iam"
+                "rollback_payload": {
+                  "S.$": "States.JsonToString($.ai_decide_response.rollback_payload)"
                 },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "apply"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "auto-shutdown"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "quota-cap"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "time-gated-countdown"
+                "boto3_equivalent": {
+                  "S.$": "States.JsonToString($.ai_decide_response.rollback_payload.boto3_equivalent)"
                 }
-              ]
-            }
-          ],
-          "Next": "WriteDeniedAudit"
-        },
-        {
-          "And": [
-            {
-              "Variable": "$.force_dry_run",
-              "BooleanEquals": true
+              }
             },
-            {
-              "Not": {
+            "ResultPath": "$.cache_rollback_result",
+            "Next": "FormatDecideResultForAnomaly"
+          },
+          "FormatDecideResultForAnomaly": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_found": true,
+              "required_fields_valid": true,
+              "recommended_containment_mode.$": "$.ai_decide_response.action_plan[0].action",
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "severity.$": "$.anomaly.severity",
+              "confidence_score.$": "$.anomaly.confidence_score"
+            },
+            "ResultPath": "$.ai",
+            "Next": "RouteAlertForAnomaly"
+          },
+          "RouteAlertForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-router",
+            "ResultPath": "$.alert",
+            "Next": "FinanceAlertRequiredForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "FinanceAlertRequiredForAnomaly": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.alert.details.finance_route.deliver",
+                "BooleanEquals": true,
+                "Next": "SendFinanceAlertForAnomaly"
+              }
+            ],
+            "Default": "EngineeringAlertRequiredForAnomaly"
+          },
+          "SendFinanceAlertForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-finance-alerts",
+              "Subject.$": "$.alert.details.finance_route.subject",
+              "Message.$": "$.alert.details.finance_route.message"
+            },
+            "ResultPath": "$.finance_alert_result",
+            "Next": "EngineeringAlertRequiredForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.alert_error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "EngineeringAlertRequiredForAnomaly": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.alert.details.engineering_route.deliver",
+                "BooleanEquals": true,
+                "Next": "SendEngineeringAlertForAnomaly"
+              }
+            ],
+            "Default": "EvaluateContainmentPolicyForAnomaly"
+          },
+          "SendEngineeringAlertForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
+              "Subject.$": "$.alert.details.engineering_route.subject",
+              "Message.$": "$.alert.details.engineering_route.message"
+            },
+            "ResultPath": "$.engineering_alert_result",
+            "Next": "EvaluateContainmentPolicyForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.alert_error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "EvaluateContainmentPolicyForAnomaly": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "And": [
+                  {
+                    "Variable": "$.account_policy.environment",
+                    "StringEquals": "prod"
+                  },
+                  {
+                    "Or": [
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "terminate"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "delete"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "modify_iam"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "apply"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "auto-shutdown"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "quota-cap"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "time-gated-countdown"
+                      }
+                    ]
+                  }
+                ],
+                "Next": "WriteDeniedAuditForAnomaly"
+              },
+              {
+                "And": [
+                  {
+                    "Variable": "$.force_dry_run",
+                    "BooleanEquals": true
+                  },
+                  {
+                    "Not": {
+                      "Or": [
+                        {
+                          "Variable": "$.ai.recommended_containment_mode",
+                          "StringEquals": "dry-run"
+                        },
+                        {
+                          "Variable": "$.ai.recommended_containment_mode",
+                          "StringEquals": "tag"
+                        },
+                        {
+                          "Variable": "$.ai.recommended_containment_mode",
+                          "StringEquals": "suggest"
+                        },
+                        {
+                          "Variable": "$.ai.recommended_containment_mode",
+                          "StringEquals": "tag-for-review"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "Next": "WriteDeniedAuditForAnomaly"
+              },
+              {
+                "And": [
+                  {
+                    "Variable": "$.account_policy.environment",
+                    "StringEquals": "prod"
+                  },
+                  {
+                    "Or": [
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "tag"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "suggest"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "dry-run"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "tag-for-review"
+                      }
+                    ]
+                  }
+                ],
+                "Next": "WritePreActionAuditForAnomaly"
+              },
+              {
+                "And": [
+                  {
+                    "Variable": "$.account_policy.environment",
+                    "StringEquals": "sandbox"
+                  },
+                  {
+                    "Variable": "$.approval_status",
+                    "IsPresent": true
+                  },
+                  {
+                    "Variable": "$.approval_status",
+                    "StringEquals": "approved"
+                  }
+                ],
+                "Next": "WritePreActionAuditForAnomaly"
+              },
+              {
+                "And": [
+                  {
+                    "Variable": "$.account_policy.environment",
+                    "StringEquals": "sandbox"
+                  },
+                  {
+                    "Or": [
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "tag"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "suggest"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "dry-run"
+                      },
+                      {
+                        "Variable": "$.ai.recommended_containment_mode",
+                        "StringEquals": "tag-for-review"
+                      }
+                    ]
+                  }
+                ],
+                "Next": "WritePreActionAuditForAnomaly"
+              }
+            ],
+            "Default": "WritePendingApprovalAuditForAnomaly"
+          },
+          "WritePreActionAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "force_dry_run.$": "$.force_dry_run",
+              "anomaly.$": "$.anomaly",
+              "ai.$": "$.ai"
+            },
+            "ResultPath": "$.pre_audit",
+            "Next": "BuildContainmentInputForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "BuildContainmentInputForAnomaly": {
+            "Type": "Pass",
+            "Comment": "Flatten required top-level fields for containment worker from per-anomaly Map item context.",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "tenant_id.$": "$.tenant_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "execution_date.$": "$.execution_date",
+              "cost_period.$": "$.cost_period",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "force_dry_run.$": "$.force_dry_run",
+              "ai.$": "$.ai",
+              "anomaly.$": "$.anomaly",
+              "pre_audit.$": "$.pre_audit",
+              "ai_decide_response.$": "$.ai_decide_response",
+              "normalized.$": "$.normalized",
+              "ai_contract_version.$": "$.ai_contract_version"
+            },
+            "ResultPath": "$",
+            "Next": "ExecuteContainmentForAnomaly"
+          },
+          "ExecuteContainmentForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-containment_worker",
+            "ResultPath": "$.containment",
+            "Next": "ReportVerifyResultForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.containment_error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "ReportVerifyResultForAnomaly": {
+            "Type": "Task",
+            "Comment": "Step Functions invokes VpcAlbCallerLambda for this anomaly; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
+            "Parameters": {
+              "path": "/v1/verify",
+              "method": "POST",
+              "tenant_id.$": "$.tenant_id",
+              "correlation_id.$": "$.correlation_id",
+              "idempotency_key.$": "States.Format('{}:{}:{}:verify', $.tenant_id, $.execution_date, $.anomaly.anomaly_id)",
+              "ai_contract_version.$": "$.ai_contract_version",
+              "body": {
+                "correlation_id.$": "$.correlation_id",
+                "idempotency_key.$": "States.Format('{}:{}:{}:verify', $.tenant_id, $.execution_date, $.anomaly.anomaly_id)",
+                "dry_run_mode.$": "$.force_dry_run",
+                "action_executed": {
+                  "action.$": "$.ai.recommended_containment_mode",
+                  "target.$": "$.anomaly.resource_id",
+                  "status": "COMPLETED"
+                },
+                "post_telemetry_window": {
+                  "data_source_type": "RAW_JSON",
+                  "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
+                  "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items"
+                }
+              }
+            },
+            "ResultPath": "$.verify_result",
+            "Next": "EvaluateVerifyResultForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyAIFailClosed"
+              }
+            ]
+          },
+          "EvaluateVerifyResultForAnomaly": {
+            "Type": "Choice",
+            "Comment": "Branch on verify_result.next_action: DONE|RETRY|ROLLBACK|ESCALATE per contract Section 5.",
+            "Choices": [
+              {
                 "Or": [
                   {
-                    "Variable": "$.ai.recommended_containment_mode",
-                    "StringEquals": "dry-run"
+                    "Variable": "$.verify_result.next_action",
+                    "StringEquals": "DONE"
                   },
                   {
-                    "Variable": "$.ai.recommended_containment_mode",
-                    "StringEquals": "tag"
-                  },
-                  {
-                    "Variable": "$.ai.recommended_containment_mode",
-                    "StringEquals": "suggest"
-                  },
-                  {
-                    "Variable": "$.ai.recommended_containment_mode",
-                    "StringEquals": "tag-for-review"
+                    "Variable": "$.verify_result.success",
+                    "BooleanEquals": true
                   }
-                ]
+                ],
+                "Next": "WritePostActionAuditForAnomaly"
+              },
+              {
+                "Variable": "$.verify_result.next_action",
+                "StringEquals": "ROLLBACK",
+                "Next": "ExecuteRollbackFromCacheForAnomaly"
+              },
+              {
+                "Variable": "$.verify_result.next_action",
+                "StringEquals": "ESCALATE",
+                "Next": "WriteEscalationAuditForAnomaly"
+              },
+              {
+                "Variable": "$.verify_result.next_action",
+                "StringEquals": "RETRY",
+                "Next": "WritePostActionAuditForAnomaly"
               }
-            }
-          ],
-          "Next": "WriteDeniedAudit"
-        },
-        {
-          "And": [
-            {
-              "Variable": "$.account_policy.environment",
-              "StringEquals": "prod"
-            },
-            {
-              "Or": [
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "tag"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "suggest"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "dry-run"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "tag-for-review"
-                }
-              ]
-            }
-          ],
-          "Next": "WritePreActionAudit"
-        },
-        {
-          "And": [
-            {
-              "Variable": "$.account_policy.environment",
-              "StringEquals": "sandbox"
-            },
-            {
-              "Variable": "$.approval_status",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.approval_status",
-              "StringEquals": "approved"
-            }
-          ],
-          "Next": "WritePreActionAudit"
-        },
-        {
-          "And": [
-            {
-              "Variable": "$.account_policy.environment",
-              "StringEquals": "sandbox"
-            },
-            {
-              "Or": [
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "tag"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "suggest"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "dry-run"
-                },
-                {
-                  "Variable": "$.ai.recommended_containment_mode",
-                  "StringEquals": "tag-for-review"
-                }
-              ]
-            }
-          ],
-          "Next": "WritePreActionAudit"
-        }
-      ],
-      "Default": "WritePendingApprovalAudit"
-    },
-    "WritePreActionAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "ResultPath": "$.pre_audit",
-      "Next": "ExecuteContainment",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "ExecuteContainment": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-containment_worker",
-      "ResultPath": "$.containment",
-      "Next": "ReportVerifyResult",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.containment_error",
-          "Next": "WriteContainmentFailureAudit"
-        }
-      ]
-    },
-    "ReportVerifyResult": {
-      "Type": "Task",
-      "Comment": "Step Functions invokes VpcAlbCallerLambda; helper sends signed HTTPS to internal ALB; ALB invokes AI Engine Request Lambda live alias.",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
-      "Parameters": {
-        "path": "/v1/verify",
-        "method": "POST",
-        "tenant_id.$": "$.tenant_id",
-        "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)",
-        "ai_contract_version.$": "$.ai_contract_version",
-        "body": {
-          "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "States.Format('{}:{}:verify', $.tenant_id, $.execution_date)",
-          "dry_run_mode.$": "$.force_dry_run",
-          "action_executed": {
-            "action.$": "$.ai.recommended_containment_mode",
-            "target.$": "$.ai_detect_response.anomalies_list[0].resource_id",
-            "status": "COMPLETED"
+            ],
+            "Default": "WritePostActionAuditForAnomaly"
           },
-          "post_telemetry_window": {
-            "data_source_type": "RAW_JSON",
-            "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
-            "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items"
+          "ExecuteRollbackFromCacheForAnomaly": {
+            "Type": "Task",
+            "Comment": "CDO executes rollback independently from finops-rollback-cache using cached boto3_equivalent. Does not depend on AI Engine availability.",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-containment_worker",
+            "Parameters": {
+              "operation": "execute_rollback",
+              "rollback_cache_table": "tf2-finops-sandbox-rollback-cache",
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "correlation_id.$": "$.correlation_id",
+              "run_id.$": "$.run_id"
+            },
+            "ResultPath": "$.rollback_result",
+            "Next": "NotifyAIRollbackForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.rollback_error",
+                "Next": "WriteRollbackAuditForAnomaly"
+              }
+            ]
+          },
+          "NotifyAIRollbackForAnomaly": {
+            "Type": "Task",
+            "Comment": "Notify AI Engine of rollback completion via /v1/audit/{audit_id}/rollback. This is the audit completion notification, NOT rollback dispatch.",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
+            "Parameters": {
+              "path.$": "States.Format('/v1/audit/{}/rollback', $.anomaly.anomaly_id)",
+              "method": "POST",
+              "tenant_id.$": "$.tenant_id",
+              "correlation_id.$": "$.correlation_id",
+              "idempotency_key.$": "States.Format('{}:{}:{}:rollback', $.tenant_id, $.execution_date, $.anomaly.anomaly_id)",
+              "ai_contract_version.$": "$.ai_contract_version",
+              "body": {
+                "correlation_id.$": "$.correlation_id",
+                "anomaly_id.$": "$.anomaly.anomaly_id",
+                "rollback_status.$": "$.rollback_result.rollback_status",
+                "executed_at.$": "$.execution_date"
+              }
+            },
+            "ResultPath": "$.rollback_notify_result",
+            "Next": "WriteRollbackAuditForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.rollback_notify_error",
+                "Next": "WriteRollbackAuditForAnomaly"
+              }
+            ]
+          },
+          "WriteRollbackAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "action": "rollback-executed",
+              "anomaly.$": "$.anomaly"
+            },
+            "ResultPath": "$.rollback_audit",
+            "Next": "SendRolledBackStatusMessageForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "SendRolledBackStatusMessageForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+              "MessageBody": {
+                "run_id.$": "$.run_id",
+                "correlation_id.$": "$.correlation_id",
+                "tenant_id.$": "$.tenant_id",
+                "anomaly_id.$": "$.anomaly.anomaly_id",
+                "status": "ROLLED_BACK",
+                "action.$": "$.ai.recommended_containment_mode",
+                "timestamp.$": "$.execution_date"
+              }
+            },
+            "ResultPath": "$.sqs_rollback_result",
+            "Next": "AnomalyRolledBack"
+          },
+          "WriteEscalationAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "action": "verify-escalated",
+              "anomaly.$": "$.anomaly"
+            },
+            "ResultPath": "$.escalation_audit",
+            "Next": "SendEscalationAlertForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "SendEscalationAlertForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
+              "Subject": "FinOps Watch Verify Escalation Alert",
+              "Message.$": "States.Format('Containment verification requires escalation. Run ID: {}, Anomaly: {}, Correlation: {}', $.run_id, $.anomaly.anomaly_id, $.correlation_id)"
+            },
+            "ResultPath": "$.escalation_alert_result",
+            "Next": "SendPendingStatusMessageForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.escalation_alert_error",
+                "Next": "SendPendingStatusMessageForAnomaly"
+              }
+            ]
+          },
+          "WritePostActionAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "force_dry_run.$": "$.force_dry_run",
+              "anomaly.$": "$.anomaly",
+              "ai.$": "$.ai",
+              "containment.$": "$.containment",
+              "verify_result.$": "$.verify_result"
+            },
+            "ResultPath": "$.post_audit",
+            "Next": "SendAppliedStatusMessageForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "SendAppliedStatusMessageForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+              "MessageBody": {
+                "run_id.$": "$.run_id",
+                "correlation_id.$": "$.correlation_id",
+                "tenant_id.$": "$.tenant_id",
+                "anomaly_id.$": "$.anomaly.anomaly_id",
+                "status": "APPLIED",
+                "action.$": "$.ai.recommended_containment_mode",
+                "timestamp.$": "$.execution_date"
+              }
+            },
+            "ResultPath": "$.sqs_applied_result",
+            "Next": "AnomalyApplied"
+          },
+          "WriteDeniedAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "force_dry_run.$": "$.force_dry_run",
+              "anomaly.$": "$.anomaly",
+              "ai.$": "$.ai"
+            },
+            "ResultPath": "$.denied_audit",
+            "Next": "SendDeniedStatusMessageForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "SendDeniedStatusMessageForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+              "MessageBody": {
+                "run_id.$": "$.run_id",
+                "correlation_id.$": "$.correlation_id",
+                "tenant_id.$": "$.tenant_id",
+                "anomaly_id.$": "$.anomaly.anomaly_id",
+                "status": "DENIED",
+                "action.$": "$.ai.recommended_containment_mode",
+                "timestamp.$": "$.execution_date"
+              }
+            },
+            "ResultPath": "$.sqs_denied_result",
+            "Next": "AnomalyDenied"
+          },
+          "WritePendingApprovalAuditForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+            "Parameters": {
+              "run_id.$": "$.run_id",
+              "correlation_id.$": "$.correlation_id",
+              "account_id.$": "$.account_id",
+              "cost_period.$": "$.cost_period",
+              "execution_date.$": "$.execution_date",
+              "tenant_id.$": "$.tenant_id",
+              "environment.$": "$.environment",
+              "account_policy.$": "$.account_policy",
+              "force_dry_run.$": "$.force_dry_run",
+              "anomaly.$": "$.anomaly",
+              "ai.$": "$.ai"
+            },
+            "ResultPath": "$.pending_audit",
+            "Next": "SendPendingStatusMessageForAnomaly",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "AnomalyPlatformFailed"
+              }
+            ]
+          },
+          "SendPendingStatusMessageForAnomaly": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
+              "MessageBody": {
+                "run_id.$": "$.run_id",
+                "correlation_id.$": "$.correlation_id",
+                "tenant_id.$": "$.tenant_id",
+                "anomaly_id.$": "$.anomaly.anomaly_id",
+                "status": "PENDING",
+                "action.$": "$.ai.recommended_containment_mode",
+                "timestamp.$": "$.execution_date"
+              }
+            },
+            "ResultPath": "$.sqs_pending_result",
+            "Next": "AnomalyPending"
+          },
+          "AnomalyApplied": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "APPLIED",
+              "audit_written": true,
+              "status_message_sent": true
+            },
+            "End": true
+          },
+          "AnomalyDenied": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "DENIED",
+              "audit_written": true,
+              "status_message_sent": true
+            },
+            "End": true
+          },
+          "AnomalyPending": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "PENDING",
+              "audit_written": true,
+              "status_message_sent": true
+            },
+            "End": true
+          },
+          "AnomalyRolledBack": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "ROLLED_BACK",
+              "audit_written": true,
+              "status_message_sent": true
+            },
+            "End": true
+          },
+          "AnomalyEscalated": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "ESCALATED",
+              "audit_written": true,
+              "status_message_sent": true
+            },
+            "End": true
+          },
+          "AnomalyAIFailClosed": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "AI_FAIL_CLOSED",
+              "audit_written": false,
+              "status_message_sent": false,
+              "next_action": "OPERATOR_ALERT"
+            },
+            "End": true
+          },
+          "AnomalyPlatformFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "anomaly_id.$": "$.anomaly.anomaly_id",
+              "status": "PLATFORM_FAILED",
+              "audit_written": false,
+              "status_message_sent": false,
+              "next_action": "OPERATOR_ALERT"
+            },
+            "End": true
           }
         }
       },
-      "ResultPath": "$.verify_result",
-      "Next": "EvaluateVerifyResult",
+      "ResultPath": "$.processed_anomaly_results",
+      "Next": "SummarizeAnomalyResults",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
+    "SummarizeAnomalyResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state",
+      "Parameters": {
+        "operation": "summarize_anomaly_results",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "account_id.$": "$.account_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "tenant_id.$": "$.tenant_id",
+        "processed_anomaly_results.$": "$.processed_anomaly_results"
+      },
+      "ResultPath": "$.anomaly_summary",
+      "Next": "EvaluateAnomalySummary",
       "Retry": [
         {
           "ErrorEquals": [
@@ -1158,378 +1726,21 @@
             "States.ALL"
           ],
           "ResultPath": "$.error",
-          "Next": "FailClosed"
+          "Next": "MarkRunFailed"
         }
       ]
     },
-    "EvaluateVerifyResult": {
+    "EvaluateAnomalySummary": {
       "Type": "Choice",
-      "Comment": "Branch on verify_result.next_action: DONE|RETRY|ROLLBACK|ESCALATE per contract Section 5.",
+      "Comment": "Mark parent run failed only when a platform failure prevents durable audit/status evidence.",
       "Choices": [
         {
-          "Or": [
-            {
-              "Variable": "$.verify_result.next_action",
-              "StringEquals": "DONE"
-            },
-            {
-              "Variable": "$.verify_result.success",
-              "BooleanEquals": true
-            }
-          ],
-          "Next": "WritePostActionAudit"
-        },
-        {
-          "Variable": "$.verify_result.next_action",
-          "StringEquals": "ROLLBACK",
-          "Next": "ExecuteRollbackFromCache"
-        },
-        {
-          "Variable": "$.verify_result.next_action",
-          "StringEquals": "ESCALATE",
-          "Next": "WriteEscalationAudit"
-        },
-        {
-          "Variable": "$.verify_result.next_action",
-          "StringEquals": "RETRY",
-          "Next": "WritePostActionAudit"
-        }
-      ],
-      "Default": "WritePostActionAudit"
-    },
-    "ExecuteRollbackFromCache": {
-      "Type": "Task",
-      "Comment": "CDO executes rollback independently from finops-rollback-cache using cached boto3_equivalent.",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-containment_worker",
-      "Parameters": {
-        "operation": "execute_rollback",
-        "rollback_cache_table.$": "$.rollback_cache_table_name",
-        "anomaly_id.$": "$.ai.anomaly_id",
-        "correlation_id.$": "$.correlation_id",
-        "run_id.$": "$.run_id"
-      },
-      "ResultPath": "$.rollback_result",
-      "Next": "NotifyAIRollback",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.rollback_error",
-          "Next": "WriteRollbackAudit"
-        }
-      ]
-    },
-    "NotifyAIRollback": {
-      "Type": "Task",
-      "Comment": "Notify AI Engine of rollback completion via /v1/audit/{audit_id}/rollback. Audit notification only, not rollback dispatch.",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-vpc_alb_caller",
-      "Parameters": {
-        "path.$": "States.Format('/v1/audit/{}/rollback', $.ai.anomaly_id)",
-        "method": "POST",
-        "tenant_id.$": "$.tenant_id",
-        "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "States.Format('{}:{}:rollback', $.tenant_id, $.execution_date)",
-        "ai_contract_version.$": "$.ai_contract_version",
-        "body": {
-          "correlation_id.$": "$.correlation_id",
-          "anomaly_id.$": "$.ai.anomaly_id",
-          "rollback_status.$": "$.rollback_result.rollback_status",
-          "executed_at.$": "$.execution_date"
-        }
-      },
-      "ResultPath": "$.rollback_notify_result",
-      "Next": "WriteRollbackAudit",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 2,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.rollback_notify_error",
-          "Next": "WriteRollbackAudit"
-        }
-      ]
-    },
-    "WriteRollbackAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "Parameters": {
-        "run_id.$": "$.run_id",
-        "correlation_id.$": "$.correlation_id",
-        "account_id.$": "$.account_id",
-        "cost_period.$": "$.cost_period",
-        "execution_date.$": "$.execution_date",
-        "tenant_id.$": "$.tenant_id",
-        "environment.$": "$.environment",
-        "account_policy.$": "$.account_policy",
-        "action": "rollback-executed",
-        "anomaly_id.$": "$.ai.anomaly_id"
-      },
-      "ResultPath": "$.rollback_audit",
-      "Next": "SendRolledBackStatusMessage",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
+          "Variable": "$.anomaly_summary.workflow_status",
+          "StringEquals": "FAILED",
           "Next": "MarkRunFailed"
         }
-      ]
-    },
-    "SendRolledBackStatusMessage": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sqs:sendMessage",
-      "Parameters": {
-        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
-        "MessageBody": {
-          "run_id.$": "$.run_id",
-          "correlation_id.$": "$.correlation_id",
-          "tenant_id.$": "$.tenant_id",
-          "status": "ROLLED_BACK",
-          "action.$": "$.ai.recommended_containment_mode",
-          "timestamp.$": "$.execution_date"
-        }
-      },
-      "ResultPath": "$.sqs_rollback_result",
-      "Next": "MarkRunComplete"
-    },
-    "WriteEscalationAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "Parameters": {
-        "run_id.$": "$.run_id",
-        "correlation_id.$": "$.correlation_id",
-        "account_id.$": "$.account_id",
-        "cost_period.$": "$.cost_period",
-        "execution_date.$": "$.execution_date",
-        "tenant_id.$": "$.tenant_id",
-        "environment.$": "$.environment",
-        "account_policy.$": "$.account_policy",
-        "action": "verify-escalated",
-        "anomaly_id.$": "$.ai.anomaly_id"
-      },
-      "ResultPath": "$.escalation_audit",
-      "Next": "SendEscalationAlert",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
       ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "SendEscalationAlert": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-southeast-1:123456789012:tf2-finops-sandbox-engineering-alerts",
-        "Subject": "FinOps Watch Verify Escalation Alert",
-        "Message.$": "States.Format('Containment verification requires escalation. Run ID: {}, Anomaly: {}, Correlation: {}', $.run_id, $.ai.anomaly_id, $.correlation_id)"
-      },
-      "ResultPath": "$.escalation_alert_result",
-      "Next": "SendPendingStatusMessage",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 2,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.escalation_alert_error",
-          "Next": "SendPendingStatusMessage"
-        }
-      ]
-    },
-    "WritePostActionAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "ResultPath": "$.post_audit",
-      "Next": "SendAppliedStatusMessage",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "SendAppliedStatusMessage": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sqs:sendMessage",
-      "Parameters": {
-        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
-        "MessageBody": {
-          "run_id.$": "$.run_id",
-          "correlation_id.$": "$.correlation_id",
-          "tenant_id.$": "$.tenant_id",
-          "status": "APPLIED",
-          "action.$": "$.ai.recommended_containment_mode",
-          "timestamp.$": "$.execution_date"
-        }
-      },
-      "ResultPath": "$.sqs_applied_result",
-      "Next": "MarkRunComplete"
-    },
-    "WriteDeniedAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "ResultPath": "$.denied_audit",
-      "Next": "SendDeniedStatusMessage",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "SendDeniedStatusMessage": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sqs:sendMessage",
-      "Parameters": {
-        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
-        "MessageBody": {
-          "run_id.$": "$.run_id",
-          "correlation_id.$": "$.correlation_id",
-          "tenant_id.$": "$.tenant_id",
-          "status": "DENIED",
-          "action.$": "$.ai.recommended_containment_mode",
-          "timestamp.$": "$.execution_date"
-        }
-      },
-      "ResultPath": "$.sqs_denied_result",
-      "Next": "MarkRunComplete"
-    },
-    "WritePendingApprovalAudit": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
-      "ResultPath": "$.pending_audit",
-      "Next": "SendPendingStatusMessage",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
-        }
-      ]
-    },
-    "SendPendingStatusMessage": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sqs:sendMessage",
-      "Parameters": {
-        "QueueUrl": "https://sqs.ap-southeast-1.amazonaws.com/123456789012/tf2-finops-sandbox-rollback-status",
-        "MessageBody": {
-          "run_id.$": "$.run_id",
-          "correlation_id.$": "$.correlation_id",
-          "tenant_id.$": "$.tenant_id",
-          "status": "PENDING",
-          "action.$": "$.ai.recommended_containment_mode",
-          "timestamp.$": "$.execution_date"
-        }
-      },
-      "ResultPath": "$.sqs_pending_result",
-      "Next": "MarkRunComplete"
+      "Default": "MarkRunComplete"
     },
     "FailClosed": {
       "Type": "Task",
@@ -1581,8 +1792,36 @@
       "ResultPath": "$.fail_closed_alert_result",
       "Next": "MarkRunFailed"
     },
+    "WriteAlertDeliveryFailureAudit": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
+      "ResultPath": "$.alert_failure_audit",
+      "Next": "MarkRunFailed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "MarkRunFailed"
+        }
+      ]
+    },
     "WriteContainmentFailureAudit": {
       "Type": "Task",
+      "Comment": "Legacy parent-level state kept for detection-path failures before the Map. Per-anomaly containment failures route to AnomalyPlatformFailed inside the Map.",
       "Resource": "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-audit_writer",
       "ResultPath": "$.containment_failure_audit",
       "Next": "MarkRunFailed",
