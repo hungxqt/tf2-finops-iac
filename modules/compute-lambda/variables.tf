@@ -46,11 +46,6 @@ variable "tags" {
   default     = {}
 }
 
-variable "aws_region" {
-  type        = string
-  description = "AWS region for deployment"
-  default     = "ap-southeast-1"
-}
 
 variable "cloudwatch_log_kms_key_arn" {
   type        = string

@@ -532,7 +532,6 @@ module "compute_lambda" {
 
   project_name                   = var.project_name
   environment                    = var.environment
-  aws_region                     = var.aws_region
   private_subnet_ids             = module.networking.private_subnet_ids
   vpc_id                         = module.networking.vpc_id
   vpc_endpoint_security_group_id = module.networking.vpc_endpoint_security_group_id
