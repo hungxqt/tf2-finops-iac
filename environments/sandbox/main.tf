@@ -487,13 +487,13 @@ module "iam" {
       module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
     ]
   )
-  ai_payload_idempotency_table_arn       = module.orchestration.dynamodb_table_arns["ai_payload_idempotency"]
-  kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
-  containment_apply_enabled              = true
-  queue_arns                             = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
-  sns_topic_arns                         = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
-  telemetry_member_account_ids           = var.telemetry_member_account_ids
-  telemetry_member_role_name             = var.telemetry_member_role_name
+  ai_payload_idempotency_table_arn = module.orchestration.dynamodb_table_arns["ai_payload_idempotency"]
+  kms_key_arns                     = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
+  containment_apply_enabled        = true
+  queue_arns                       = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
+  sns_topic_arns                   = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
+  telemetry_member_account_ids     = var.telemetry_member_account_ids
+  telemetry_member_role_name       = var.telemetry_member_role_name
   # IAM module receives CUR export bucket ARN when the bucket is managed by this environment.
   # When cur_source_bucket_arn is set in tfvars (external bucket), that value is used instead.
   cur_source_bucket_arn = (

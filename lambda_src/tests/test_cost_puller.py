@@ -15,13 +15,28 @@ def _fake_sts_for_account(account_id="112233"):
 
 
 def _fake_manifest_bytes():
-    return b'{"assemblyId": "cur-assembly-20260624", "reportKeys": ["cost_and_usage_reports-1.csv.gz"]}'
+    return json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/manifest/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
 
 
 def test_cost_puller_cur_ready_path():
     # 1. CUR-ready path writes gzipped S3 telemetry and returns READY.
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
-    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-112233-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
     
     put_called = []
     def fake_put_object(bucket, key, body):
@@ -31,16 +46,8 @@ def test_cost_puller_cur_ready_path():
             "body": body
         })
         
-    def fake_list_objects(bucket, prefix):
-        # Return a list indicating CUR is fresh (modified just now)
-        return {
-            "Contents": [
-                {
-                    "Key": "cur/manifest.json",
-                    "LastModified": datetime.utcnow()
-                }
-            ]
-        }
+    def fake_head_object(bucket, key):
+        return {"ETag": '"abc123"'}
 
     def fake_get_object(bucket, key):
         return _fake_manifest_bytes()
@@ -48,7 +55,7 @@ def test_cost_puller_cur_ready_path():
     handler.s3_client = finops_common.FakeS3(
         put_object_func=fake_put_object,
         get_object_func=fake_get_object,
-        list_objects_func=fake_list_objects
+        head_object_func=fake_head_object
     )
     handler.ce_client = finops_common.FakeCostExplorer()
     handler.cw_client = finops_common.FakeCloudWatch()
@@ -67,7 +74,7 @@ def test_cost_puller_cur_ready_path():
     assert "raw_data_uri" not in resp or not resp.get("raw_data_uri")
     assert resp["details"]["data_source_type"] == "S3_POINTER"
     assert resp["details"]["delayed_cur"] is False
-    assert resp["details"]["cur_manifest_uri"] == "s3://company-cdo-112233-telemetry/cur/manifest.json"
+    assert resp["details"]["cur_manifest_uri"] == "s3://tf2-finops-cur-export-bucket/cur/manifest/metadata/BILLING_PERIOD=2026-06/manifest-Manifest.json"
     
     assert len(put_called) == 1 # features only
     
@@ -304,10 +311,10 @@ def test_cost_puller_ce_throttled_with_cache():
 def test_cost_puller_missing_cloudwatch():
     # 6. Missing CloudWatch metrics returns READY with missing_cloudwatch=true.
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
-    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-112233-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
     
-    def fake_list_objects(bucket, prefix):
-        return {"Contents": [{"Key": "cur/manifest.json", "LastModified": datetime.utcnow()}]}
+    def fake_head_object(bucket, key):
+        return {"ETag": '"abc123"'}
 
     def fake_get_object(bucket, key):
         return _fake_manifest_bytes()
@@ -316,7 +323,7 @@ def test_cost_puller_missing_cloudwatch():
         raise Exception("CloudWatch is down")
         
     handler.s3_client = finops_common.FakeS3(
-        list_objects_func=fake_list_objects,
+        head_object_func=fake_head_object,
         get_object_func=fake_get_object,
     )
     handler.cw_client = finops_common.FakeCloudWatch(get_metric_data_func=fake_get_metric_data)
@@ -342,13 +349,14 @@ def test_cost_puller_missing_cloudwatch():
     handler.cw_client = None
     handler.sts_client = None
 
+
 def test_cost_puller_traffic_fallback():
     # 7. Missing traffic metrics mark CloudWatch as missing without synthetic traffic.
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
-    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-112233-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
     
-    def fake_list_objects(bucket, prefix):
-        return {"Contents": [{"Key": "cur/manifest.json", "LastModified": datetime.utcnow()}]}
+    def fake_head_object(bucket, key):
+        return {"ETag": '"abc123"'}
 
     def fake_get_object(bucket, key):
         return _fake_manifest_bytes()
@@ -357,7 +365,7 @@ def test_cost_puller_traffic_fallback():
         raise Exception("CloudWatch returns empty or fails for traffic")
         
     handler.s3_client = finops_common.FakeS3(
-        list_objects_func=fake_list_objects,
+        head_object_func=fake_head_object,
         get_object_func=fake_get_object,
     )
     handler.cw_client = finops_common.FakeCloudWatch(get_metric_data_func=fake_get_metric_data)
@@ -469,7 +477,15 @@ def test_get_cross_account_session_programming_error_propagates():
 def test_handle_request_remote_session_override():
     from unittest.mock import patch, MagicMock
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-999999999999-telemetry"
-    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-999999999999-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
+    os.environ["CUR_EXPORTS_JSON"] = json.dumps({
+        "999999999999": {
+            "source_account_id": "999999999999",
+            "prefix": "cur",
+            "export_name": "manifest",
+            "allowed_raw_prefix": "cur"
+        }
+    })
 
     def fake_get_caller_identity():
         return {"AccountId": "112233445566"}
@@ -483,15 +499,30 @@ def test_handle_request_remote_session_override():
     mock_ce = MagicMock()
     mock_cw = MagicMock()
 
-    mock_s3.list_objects_v2.return_value = {
-        "Contents": [
-            {
-                "Key": "cur/manifest.json",
-                "LastModified": datetime.utcnow()
-            }
-        ]
+    mock_s3.head_object.return_value = {
+        "ETag": '"abc123"',
+        "ContentLength": 100
     }
-    mock_s3.get_object.return_value = _fake_manifest_bytes()
+    
+    # Remote manifest has different account in ARN
+    remote_manifest = json.dumps({
+        "executionId": "exec-remote",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:999999999999:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/manifest/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
+    
+    mock_s3.get_object.return_value = remote_manifest
 
     def mock_client(service_name):
         if service_name == "s3":
@@ -522,12 +553,13 @@ def test_handle_request_remote_session_override():
         resp = handler.handle_request(event_data, None)
 
     assert resp["status"] == "READY"
-    mock_s3.list_objects_v2.assert_called_with("company-cdo-999999999999-telemetry", "")
+    mock_s3.head_object.assert_called_with("tf2-finops-cur-export-bucket", "cur/manifest/metadata/BILLING_PERIOD=2026-06/manifest-Manifest.json")
     mock_s3.put_object.assert_called()
     mock_cw.get_metric_data.assert_called()
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
     handler.s3_client = None
     handler.ce_client = None
     handler.cw_client = None

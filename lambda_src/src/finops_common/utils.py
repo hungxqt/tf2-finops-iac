@@ -76,3 +76,65 @@ def parse_date(date_str: str) -> datetime:
 
 def config_value(key: str, fallback: str) -> str:
     return os.environ.get(key, fallback)
+
+def parse_and_validate_manifest(manifest_json: dict) -> dict:
+    """Parse Data Exports manifest and return normalized structure. Fail fast on legacy manifest."""
+    # Check for legacy format
+    if "assemblyId" in manifest_json or "reportKeys" in manifest_json:
+        if not all(k in manifest_json for k in ["executionId", "exportArn", "columns", "dataFiles"]):
+            raise InvalidInputError("Legacy CUR manifest format (assemblyId/reportKeys) is not supported. Only AWS Data Exports CUR 2.0 manifest is accepted.")
+            
+    # Check required fields
+    for field in ["executionId", "exportArn", "columns", "dataFiles"]:
+        if field not in manifest_json:
+            raise InvalidInputError(f"Invalid manifest schema: missing required field '{field}'")
+            
+    data_files = manifest_json["dataFiles"]
+    if not isinstance(data_files, list) or not data_files:
+        raise InvalidInputError("Invalid manifest schema: 'dataFiles' must be a non-empty list")
+        
+    columns = manifest_json["columns"]
+    if not isinstance(columns, list):
+        raise InvalidInputError("Invalid manifest schema: 'columns' must be a list")
+        
+    return {
+        "execution_id": manifest_json["executionId"],
+        "export_arn": manifest_json["exportArn"],
+        "columns": columns,
+        "data_files": data_files,
+        "data_file_count": len(data_files),
+        "columns_count": len(columns),
+    }
+
+def validate_data_files(data_files: list, allowed_bucket: str, allowed_prefix: str, billing_period: str) -> None:
+    """Validate that every data file URI points to the allowed bucket, resides under prefix and matches billing period."""
+    if not data_files:
+        raise InvalidInputError("Invalid manifest: dataFiles list is empty")
+        
+    for df in data_files:
+        if not df.startswith("s3://"):
+            raise InvalidInputError(f"Malformed data file URI (must start with s3://): {df}")
+            
+        try:
+            bucket, key = parse_s3_uri(df)
+        except Exception as e:
+            raise InvalidInputError(f"Malformed data file URI: {df}. Error: {e}")
+            
+        if bucket != allowed_bucket:
+            raise UnsafeActionError(
+                f"Cross-bucket data file rejected: bucket {bucket} != allowed bucket {allowed_bucket}"
+            )
+            
+        if allowed_prefix:
+            prefix_check = allowed_prefix.strip("/") + "/"
+            if not key.startswith(prefix_check):
+                raise UnsafeActionError(
+                    f"Data file {df!r} is outside the allowed prefix {allowed_prefix!r}"
+                )
+                
+        billing_period_str = f"BILLING_PERIOD={billing_period}"
+        if billing_period_str not in key:
+            raise UnsafeActionError(
+                f"Data file {df!r} does not match the billing period {billing_period}"
+            )
+

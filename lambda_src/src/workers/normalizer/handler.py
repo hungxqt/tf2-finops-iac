@@ -123,7 +123,66 @@ def _select_detect_request_mode(payload_bytes: bytes, max_inline_bytes: int) -> 
     if len(payload_bytes) <= max_inline_bytes:
         return "RAW_JSON"
     return "S3_POINTER"
-
+def build_dynamic_select_fields(manifest_columns: list) -> str:
+    # manifest_columns can be a list of strings or list of dicts. Normalize it to lowercase strings.
+    normalized_manifest_cols = set()
+    for col in manifest_columns:
+        if isinstance(col, dict):
+            name = col.get("name") or col.get("ColumnName") or col.get("columnName")
+            if name:
+                normalized_manifest_cols.add(name.lower())
+        elif isinstance(col, str):
+            normalized_manifest_cols.add(col.lower())
+            
+    # Check mandatory columns
+    mandatory_columns = [
+        "line_item_usage_start_date",
+        "line_item_usage_account_id",
+        "line_item_product_code",
+        "line_item_usage_type",
+        "line_item_usage_amount",
+        "pricing_unit",
+        "line_item_unblended_cost",
+        "resource_tags_user_environment",
+    ]
+    for col in mandatory_columns:
+        if col.lower() not in normalized_manifest_cols:
+            raise finops_common.InvalidInputError(f"Required column '{col}' is missing from CUR manifest columns.")
+            
+    # All columns we want to query
+    all_target_columns = [
+        "bill_billing_period_start_date",
+        "bill_payer_account_id",
+        "line_item_usage_account_id",
+        "line_item_line_item_type",
+        "line_item_usage_start_date",
+        "line_item_usage_end_date",
+        "line_item_product_code",
+        "line_item_usage_type",
+        "line_item_operation",
+        "line_item_resource_id",
+        "line_item_usage_amount",
+        "pricing_unit",
+        "line_item_unblended_rate",
+        "line_item_unblended_cost",
+        "line_item_currency_code",
+        "product_product_name",
+        "product_region_code",
+        "product_instance_type",
+        "resource_tags_user_environment",
+        "resource_tags_user_owner",
+        "resource_tags_user_team",
+        "resource_tags_user_cost_center"
+    ]
+    
+    select_fields = []
+    for col in all_target_columns:
+        if col.lower() in normalized_manifest_cols:
+            select_fields.append(col)
+        else:
+            select_fields.append(f"NULL AS {col}")
+            
+    return ", ".join(select_fields)
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -348,8 +407,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 + ", ".join(missing_athena_config)
             )
 
-        # Re-read and re-validate the manifest reportKeys so normalizer can
+        # Re-read and re-validate the manifest dataFiles so normalizer can
         # independently confirm they stay within the allowed raw export prefix.
+        manifest_columns = []
         if client and cur_manifest_uri:
             try:
                 m_bucket, m_key = finops_common.parse_s3_uri(cur_manifest_uri)
@@ -359,32 +419,33 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 else:
                     manifest_bytes = manifest_raw
                 manifest_json = json.loads(manifest_bytes.decode("utf-8"))
-                report_keys = manifest_json.get("reportKeys", [])
-                # Validate cross-account reportKeys and prefix containment
-                for rk in report_keys:
-                    if rk.startswith("s3://"):
-                        without_proto = rk[len("s3://"):]
-                        slash_pos = without_proto.find("/")
-                        if slash_pos == -1:
-                            raise finops_common.InvalidInputError(f"Malformed S3 URI in reportKey: {rk}")
-                        rk_bucket = without_proto[:slash_pos]
-                        rk_key = without_proto[slash_pos + 1:]
-                        if rk_bucket != m_bucket:
-                            raise finops_common.UnsafeActionError(
-                                f"Cross-account reportKey rejected: {rk_bucket} != {m_bucket}"
-                            )
-                    else:
-                        rk_key = rk
-                    if cur_raw_export_prefix:
-                        allowed = cur_raw_export_prefix.strip("/") + "/"
-                        if not rk_key.startswith(allowed):
-                            raise finops_common.UnsafeActionError(
-                                f"Manifest reportKey {rk!r} is outside the configured CUR_RAW_EXPORT_PREFIX {cur_raw_export_prefix!r}"
-                            )
+                
+                parsed_manifest = finops_common.parse_and_validate_manifest(manifest_json)
+                manifest_columns = parsed_manifest["columns"]
+                data_files = parsed_manifest["data_files"]
+                
+                # Resolve billing period
+                bp = event.cost_period or ""
+                billing_period_out = exec_time.strftime("%Y-%m")
+                if bp:
+                    m = re.match(r'^(\d{4}-\d{2})', bp.strip())
+                    if m:
+                        billing_period_out = m.group(1)
+                
+                # Validate data files
+                finops_common.validate_data_files(
+                    data_files=data_files,
+                    allowed_bucket="tf2-finops-cur-export-bucket",
+                    allowed_prefix=cur_raw_export_prefix,
+                    billing_period=billing_period_out
+                )
             except (finops_common.UnsafeActionError, finops_common.InvalidInputError):
                 raise
             except Exception as manifest_err:
-                logger.warning("Could not re-validate manifest reportKeys: %s", manifest_err)
+                logger.error("CUR manifest re-validation failed: %s", manifest_err)
+                raise finops_common.InvalidInputError(f"CUR manifest validation failed: {manifest_err}")
+        else:
+            raise finops_common.InvalidInputError("CUR-ready normalizer path requires ingestion.details.cur_manifest_uri")
 
         start_date = event.execution_date
         end_date = event.execution_date
@@ -392,13 +453,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # SQL validation
         validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket)
 
+        # Build select fields dynamically based on manifest columns
+        select_fields = build_dynamic_select_fields(manifest_columns)
+
         query = f"""
-        SELECT bill_billing_period_start_date, bill_payer_account_id, line_item_usage_account_id,
-               line_item_line_item_type, line_item_usage_start_date, line_item_usage_end_date,
-               line_item_product_code, line_item_usage_type, line_item_operation, line_item_resource_id,
-               line_item_usage_amount, pricing_unit, line_item_unblended_rate, line_item_unblended_cost,
-               line_item_currency_code, product_product_name, product_region_code, product_instance_type,
-               resource_tags_user_environment, resource_tags_user_owner, resource_tags_user_team, resource_tags_user_cost_center
+        SELECT {select_fields}
         FROM {database or 'db'}.{table or 'tbl'}
         WHERE line_item_usage_account_id = '{event.account_id}'
           AND line_item_usage_start_date >= '{start_date}'

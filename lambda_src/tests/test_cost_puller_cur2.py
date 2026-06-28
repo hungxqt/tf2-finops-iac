@@ -17,13 +17,24 @@ def _fake_sts_for_account(account_id="112233445566"):
     )
 
 
-def _make_manifest(assembly_id="cur2-asm-2026-06", report_keys=None, prefix="finops-cur-export"):
-    if report_keys is None:
-        report_keys = [f"{prefix}/finops-export/data/BILLING_PERIOD=2026-06/part-00001.snappy.parquet"]
+def _make_manifest(execution_id="exec-12345", data_files=None, prefix="finops-cur-export"):
+    if data_files is None:
+        data_files = [f"s3://tf2-finops-cur-export-bucket/{prefix}/finops-export/data/BILLING_PERIOD=2026-06/part-00001.snappy.parquet"]
     return json.dumps({
-        "assemblyId": assembly_id,
-        "reportKeys": report_keys,
-        "billingPeriod": "2026-06",
+        "executionId": execution_id,
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+        ],
+        "dataFiles": data_files,
     }).encode("utf-8")
 
 
@@ -92,45 +103,49 @@ def test_resolve_billing_period_falls_back_to_exec_date():
     assert result == "2026-06"
 
 
-# ── Manifest reportKey prefix validation ─────────────────────────────────────
+# ── Manifest dataFiles validation ─────────────────────────────────────
 
-def test_validate_manifest_report_keys_valid():
-    """Report keys under allowed prefix are accepted."""
-    handler._validate_manifest_report_keys(
-        ["my-prefix/my-export/data/part.parquet"],
+def test_validate_data_files_valid():
+    """Data files under allowed bucket and prefix, matching billing period, are accepted."""
+    finops_common.validate_data_files(
+        ["s3://tf2-finops-cur-export-bucket/my-prefix/my-export/data/BILLING_PERIOD=2026-06/part.parquet"],
+        allowed_bucket="tf2-finops-cur-export-bucket",
         allowed_prefix="my-prefix",
-        cur_bucket="tf2-finops-cur-export-bucket",
+        billing_period="2026-06",
     )
 
 
-def test_validate_manifest_report_keys_outside_prefix():
-    """Report keys outside the allowed prefix raise UnsafeActionError."""
+def test_validate_data_files_outside_prefix():
+    """Data files outside the allowed prefix raise UnsafeActionError."""
     with pytest.raises(finops_common.UnsafeActionError, match="outside the allowed prefix"):
-        handler._validate_manifest_report_keys(
-            ["some-other-prefix/data/part.parquet"],
+        finops_common.validate_data_files(
+            ["s3://tf2-finops-cur-export-bucket/some-other-prefix/data/BILLING_PERIOD=2026-06/part.parquet"],
+            allowed_bucket="tf2-finops-cur-export-bucket",
             allowed_prefix="my-prefix",
-            cur_bucket="tf2-finops-cur-export-bucket",
+            billing_period="2026-06",
         )
 
 
-def test_validate_manifest_report_keys_cross_account_s3_uri():
-    """Report keys with a different bucket in s3:// URI raise UnsafeActionError."""
-    with pytest.raises(finops_common.UnsafeActionError, match="Cross-account"):
-        handler._validate_manifest_report_keys(
-            ["s3://other-bucket/my-prefix/data/part.parquet"],
+def test_validate_data_files_cross_account_s3_uri():
+    """Data files with a different bucket raise UnsafeActionError."""
+    with pytest.raises(finops_common.UnsafeActionError, match="Cross-bucket"):
+        finops_common.validate_data_files(
+            ["s3://other-bucket/my-prefix/data/BILLING_PERIOD=2026-06/part.parquet"],
+            allowed_bucket="tf2-finops-cur-export-bucket",
             allowed_prefix="my-prefix",
-            cur_bucket="tf2-finops-cur-export-bucket",
+            billing_period="2026-06",
         )
 
 
-def test_validate_manifest_report_keys_no_prefix_check():
-    """When allowed_prefix is empty, no prefix check is applied."""
-    # Should not raise
-    handler._validate_manifest_report_keys(
-        ["anything/data/part.parquet"],
-        allowed_prefix="",
-        cur_bucket="tf2-finops-cur-export-bucket",
-    )
+def test_validate_data_files_wrong_billing_period():
+    """Data files with non-matching billing period raise UnsafeActionError."""
+    with pytest.raises(finops_common.UnsafeActionError, match="does not match the billing period"):
+        finops_common.validate_data_files(
+            ["s3://tf2-finops-cur-export-bucket/my-prefix/data/BILLING_PERIOD=2026-05/part.parquet"],
+            allowed_bucket="tf2-finops-cur-export-bucket",
+            allowed_prefix="my-prefix",
+            billing_period="2026-06",
+        )
 
 
 # ── CUR 2.0 READY path (happy path) ──────────────────────────────────────────
@@ -138,7 +153,8 @@ def test_validate_manifest_report_keys_no_prefix_check():
 def test_cur2_ready_path_returns_ready_with_manifest_metadata():
     """
     With CUR_EXPORTS_JSON configured and manifest key present,
-    cost_puller returns READY with cur_manifest_uri, assembly_id, billing_period,
+    cost_puller returns READY with cur_manifest_uri, manifest_format, execution_id,
+    export_arn, columns, data_files, data_file_count, columns_count, billing_period,
     export_name, source_account_id, and telemetry_delay_event=False.
     """
     account_id = "112233445566"
@@ -184,12 +200,15 @@ def test_cur2_ready_path_returns_ready_with_manifest_metadata():
     details = resp["details"]
     assert "finops-cur-export-bucket" in details["cur_manifest_uri"]
     assert "BILLING_PERIOD=2026-06" in details["cur_manifest_uri"]
-    assert details["assembly_id"] == "cur2-asm-2026-06"
-    assert details["billing_period"] == "2026-06"
-    assert details["export_name"] == "finops-export"
-    assert details["source_account_id"] == account_id
-    assert details["telemetry_delay_event"] is False
-    assert details["delayed_cur"] is False
+    assert details["manifest_format"] == "DATA_EXPORTS"
+    assert details["execution_id"] == "exec-12345"
+    assert details["export_arn"] == "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2"
+    assert len(details["columns"]) == 9
+    assert len(details["data_files"]) == 1
+    assert details["data_file_count"] == 1
+    assert details["columns_count"] == 9
+    assert "assembly_id" not in details
+    assert "report_keys" not in details
 
     # Cleanup
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
@@ -263,16 +282,13 @@ def test_cur2_manifest_absent_triggers_cur_delay():
 
 def test_cur2_report_keys_outside_prefix_rejected():
     """
-    Manifest with report keys outside the configured allowed_raw_prefix is rejected.
+    Manifest with data files outside the configured allowed_raw_prefix is rejected.
     """
     account_id = "112233445566"
     cur_bucket = "tf2-finops-cur-export-bucket"
 
-    # Manifest with reportKey outside the expected prefix
-    bad_manifest = json.dumps({
-        "assemblyId": "cur2-asm-2026-06",
-        "reportKeys": ["malicious-prefix/data/part.parquet"],
-    }).encode("utf-8")
+    # Manifest with dataFile outside the expected prefix
+    bad_manifest = _make_manifest(data_files=["s3://tf2-finops-cur-export-bucket/malicious-prefix/data/BILLING_PERIOD=2026-06/part.parquet"])
 
     os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
     os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
@@ -315,7 +331,6 @@ def test_cur2_bucket_without_account_id_in_name_accepted_when_using_exports_json
     source_account_id rather than bucket-name embedding.
     """
     account_id = "112233445566"
-    # Note: bucket name does NOT contain account_id
     cur_bucket = "tf2-finops-cur-export-bucket"
     manifest_bytes = _make_manifest()
 
@@ -335,7 +350,6 @@ def test_cur2_bucket_without_account_id_in_name_accepted_when_using_exports_json
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = _fake_sts_for_account(account_id)
 
-    # Must NOT raise UnsafeActionError about cross-tenant bucket
     resp = handler.handle_request(
         {
             "run_id": "run-no-acct-in-bucket",
@@ -347,6 +361,135 @@ def test_cur2_bucket_without_account_id_in_name_accepted_when_using_exports_json
         None,
     )
     assert resp["status"] == "READY"
+
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.sts_client = None
+
+
+# ── Edge Case & Legacy Rejection Tests ──────────────────────────────────────────
+
+def test_missing_manifest_fields_fails():
+    """Manifest missing executionId, exportArn, columns, or dataFiles fails."""
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    os.environ["CUR_EXPORTS_JSON"] = _exports_json(account_id=account_id)
+
+    # Missing columns
+    bad_manifest = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/finops-cur-export/finops-export/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
+
+    handler.s3_client = finops_common.FakeS3(
+        head_object_func=lambda b, k: {"ETag": '"abc"'},
+        get_object_func=lambda b, k: bad_manifest,
+    )
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    with pytest.raises(finops_common.InvalidInputError, match="missing required field"):
+        handler.handle_request(
+            {
+                "run_id": "run-missing-fields",
+                "correlation_id": "corr-missing-fields",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+            },
+            None,
+        )
+
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.sts_client = None
+
+
+def test_empty_data_files_fails():
+    """Manifest with empty dataFiles fails."""
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    os.environ["CUR_EXPORTS_JSON"] = _exports_json(account_id=account_id)
+
+    bad_manifest = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [{"name": "col1"}],
+        "dataFiles": []
+    }).encode("utf-8")
+
+    handler.s3_client = finops_common.FakeS3(
+        head_object_func=lambda b, k: {"ETag": '"abc"'},
+        get_object_func=lambda b, k: bad_manifest,
+    )
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    with pytest.raises(finops_common.InvalidInputError, match="must be a non-empty list"):
+        handler.handle_request(
+            {
+                "run_id": "run-empty-data-files",
+                "correlation_id": "corr-empty-data-files",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+            },
+            None,
+        )
+
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.sts_client = None
+
+
+def test_legacy_manifest_fails():
+    """Legacy assemblyId/reportKeys manifest fails."""
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    os.environ["CUR_EXPORTS_JSON"] = _exports_json(account_id=account_id)
+
+    legacy_manifest = json.dumps({
+        "assemblyId": "cur2-asm-2026-06",
+        "reportKeys": ["finops-cur-export/finops-export/data/BILLING_PERIOD=2026-06/part.parquet"],
+    }).encode("utf-8")
+
+    handler.s3_client = finops_common.FakeS3(
+        head_object_func=lambda b, k: {"ETag": '"abc"'},
+        get_object_func=lambda b, k: legacy_manifest,
+    )
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    with pytest.raises(finops_common.InvalidInputError, match="Legacy CUR manifest format.*is not supported"):
+        handler.handle_request(
+            {
+                "run_id": "run-legacy",
+                "correlation_id": "corr-legacy",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+            },
+            None,
+        )
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]

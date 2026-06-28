@@ -456,7 +456,35 @@ def test_normalizer_payload_contract_fields():
             "body": body
         })
 
-    _MANIFEST_BYTES = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
+    _MANIFEST_BYTES = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "bill_payer_account_id", "type": "string"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_line_item_type", "type": "string"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_end_date", "type": "timestamp"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_operation", "type": "string"},
+            {"name": "line_item_resource_id", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_rate", "type": "double"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "line_item_currency_code", "type": "string"},
+            {"name": "product_product_name", "type": "string"},
+            {"name": "product_region_code", "type": "string"},
+            {"name": "product_instance_type", "type": "string"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+            {"name": "resource_tags_user_owner", "type": "string"},
+            {"name": "resource_tags_user_team", "type": "string"},
+            {"name": "resource_tags_user_cost_center", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
 
     handler.s3_client = finops_common.FakeS3(
         put_object_func=fake_put_object,
@@ -662,7 +690,35 @@ def test_normalizer_cur_ready_requires_athena_config():
 def test_normalizer_athena_empty_result_fails():
     os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
     _set_athena_env()
-    _MANIFEST_BYTES_EMPTY = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
+    _MANIFEST_BYTES_EMPTY = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:123456789012:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "bill_payer_account_id", "type": "string"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_line_item_type", "type": "string"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_end_date", "type": "timestamp"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_operation", "type": "string"},
+            {"name": "line_item_resource_id", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_rate", "type": "double"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "line_item_currency_code", "type": "string"},
+            {"name": "product_product_name", "type": "string"},
+            {"name": "product_region_code", "type": "string"},
+            {"name": "product_instance_type", "type": "string"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+            {"name": "resource_tags_user_owner", "type": "string"},
+            {"name": "resource_tags_user_team", "type": "string"},
+            {"name": "resource_tags_user_cost_center", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
     handler.s3_client = finops_common.FakeS3(
         put_object_func=lambda bucket, key, body: None,
         get_object_func=lambda b, k: _MANIFEST_BYTES_EMPTY,
@@ -762,7 +818,35 @@ def test_normalizer_athena_query_integration():
             "body": body
         })
 
-    _MANIFEST_BYTES_ATH = json.dumps({"assemblyId": "asm-2026-06", "reportKeys": []}).encode("utf-8")
+    _MANIFEST_BYTES_ATH = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "bill_payer_account_id", "type": "string"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_line_item_type", "type": "string"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_end_date", "type": "timestamp"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_operation", "type": "string"},
+            {"name": "line_item_resource_id", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_rate", "type": "double"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "line_item_currency_code", "type": "string"},
+            {"name": "product_product_name", "type": "string"},
+            {"name": "product_region_code", "type": "string"},
+            {"name": "product_instance_type", "type": "string"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+            {"name": "resource_tags_user_owner", "type": "string"},
+            {"name": "resource_tags_user_team", "type": "string"},
+            {"name": "resource_tags_user_cost_center", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
     handler.s3_client = finops_common.FakeS3(
         put_object_func=fake_put_object,
         get_object_func=lambda b, k: _MANIFEST_BYTES_ATH,

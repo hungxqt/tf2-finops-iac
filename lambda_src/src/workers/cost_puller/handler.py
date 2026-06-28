@@ -94,32 +94,7 @@ def _build_manifest_key(prefix: str, export_name: str, billing_period: str) -> s
     return f"{export_name}/metadata/BILLING_PERIOD={billing_period}/{export_name}-Manifest.json"
 
 
-def _validate_manifest_report_keys(report_keys: list, allowed_prefix: str, cur_bucket: str) -> None:
-    """Reject manifest report keys that escape the allowed raw export prefix."""
-    if not allowed_prefix:
-        return
-    for rk in report_keys:
-        # report keys may be full S3 URIs or bucket-relative paths
-        if rk.startswith("s3://"):
-            # strip s3://<bucket>/ prefix
-            without_proto = rk[len("s3://"):]
-            slash_pos = without_proto.find("/")
-            if slash_pos == -1:
-                raise finops_common.InvalidInputError(f"Manifest reportKey has no path component: {rk}")
-            rk_bucket = without_proto[:slash_pos]
-            rk_key = without_proto[slash_pos + 1:]
-            if rk_bucket != cur_bucket:
-                raise finops_common.UnsafeActionError(
-                    f"Cross-account reportKey rejected: key bucket {rk_bucket} != allowed bucket {cur_bucket}"
-                )
-        else:
-            rk_key = rk
-        # Ensure the key lives under the allowed_prefix
-        allowed = allowed_prefix.strip("/") + "/"
-        if not rk_key.startswith(allowed):
-            raise finops_common.UnsafeActionError(
-                f"Manifest reportKey {rk!r} is outside the allowed prefix {allowed_prefix!r}"
-            )
+# Deprecated _validate_manifest_report_keys has been removed. Data Exports are validated using finops_common.validate_data_files.
 
 
 def check_cur_freshness(s3_client_inst, cur_bucket: str, cur_prefix: str, exec_time: datetime, threshold_hours: int) -> Tuple[bool, datetime]:
@@ -323,16 +298,13 @@ def handle_request(event_data: dict, context: Any) -> dict:
     # tenant isolation is enforced by CUR_EXPORTS_JSON.source_account_id instead.
     try:
         validate_bucket_and_account(event.account_id, telemetry_bucket)
-        if cur_source_bucket and not using_exports_json:
-            # Only validate account-in-bucket-name when NOT using CUR_EXPORTS_JSON
-            validate_bucket_and_account(event.account_id, cur_source_bucket)
     except finops_common.UnsafeActionError as e:
         logger.error("Security validation failed: %s", e)
         raise e
 
     action = event.action.lower() if event.action else ""
-    if not cur_source_bucket and not using_exports_json and action not in {"simulate-cur-delay", "simulate-cur-delay-no-fallback"}:
-        raise finops_common.ConfigMissingError("CUR_SOURCE_BUCKET is required for CUR manifest discovery")
+    if not using_exports_json and action not in {"simulate-cur-delay", "simulate-cur-delay-no-fallback"}:
+        raise finops_common.ConfigMissingError("CUR_EXPORTS_JSON is required for Data Exports manifest resolution")
 
     # Get Clients
     local_s3, local_ce, local_cw, local_sts = get_clients()
@@ -360,7 +332,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
     if action == "simulate-cur-delay" or action == "simulate-cur-delay-no-fallback":
         cur_delayed = True
         cur_last_modified = exec_time - timedelta(hours=cur_delay_threshold + 1)
-    elif using_exports_json and local_s3:
+    elif local_s3:
+        if not using_exports_json:
+            raise finops_common.ConfigMissingError("CUR_EXPORTS_JSON is required for Data Exports manifest resolution")
         # ── Deterministic CUR 2.0 manifest readiness check ──
         export_name = export_config.get("export_name", "")
         export_prefix = export_config.get("prefix", "")
@@ -389,8 +363,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
             else:
                 logger.warning("head_object error (non-404): %s — treating as CUR delayed.", head_err)
                 cur_delayed = True
-    elif cur_source_bucket and local_s3:
-        cur_delayed, cur_last_modified = check_cur_freshness(local_s3, cur_source_bucket, cur_source_prefix, exec_time, cur_delay_threshold)
     else:
         cur_delayed = False
 
@@ -528,8 +500,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
     # ── CUR-ready manifest validation ──
     manifest_uri = ""
-    assembly_id = ""
-    report_keys = []
+    execution_id = ""
+    export_arn = ""
+    columns = []
+    data_files = []
+    data_file_count = 0
+    columns_count = 0
     manifest_etag = ""
     export_name_out = ""
     source_account_id_out = ""
@@ -538,7 +514,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
     if not cur_delayed:
         logger.info("CUR is available. Discovering / validating CUR manifest.")
 
-        if using_exports_json and local_s3:
+        if not using_exports_json:
+            raise finops_common.ConfigMissingError(
+                "CUR 2.0 configuration (CUR_EXPORTS_JSON) is required for AWS Data Exports CUR 2.0 manifest."
+            )
+
+        if local_s3:
             # Deterministic CUR 2.0 path
             export_name = export_config.get("export_name", "")
             export_prefix = export_config.get("prefix", "")
@@ -564,56 +545,28 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 else:
                     manifest_bytes = manifest_data
                 manifest_json = json.loads(manifest_bytes.decode("utf-8"))
-                if not isinstance(manifest_json, dict) or "assemblyId" not in manifest_json:
-                    raise ValueError("Invalid manifest schema: missing assemblyId")
-                assembly_id = manifest_json.get("assemblyId", "")
-                report_keys = manifest_json.get("reportKeys", [])
-                # Validate all report keys are under the allowed raw prefix
-                _validate_manifest_report_keys(report_keys, allowed_raw_prefix, effective_cur_bucket)
+                
+                # Single Data Exports parser
+                parsed_manifest = finops_common.parse_and_validate_manifest(manifest_json)
+                execution_id = parsed_manifest["execution_id"]
+                export_arn = parsed_manifest["export_arn"]
+                columns = parsed_manifest["columns"]
+                data_files = parsed_manifest["data_files"]
+                data_file_count = parsed_manifest["data_file_count"]
+                columns_count = parsed_manifest["columns_count"]
+
+                # Validate dataFiles
+                finops_common.validate_data_files(
+                    data_files=data_files,
+                    allowed_bucket="tf2-finops-cur-export-bucket",
+                    allowed_prefix=allowed_raw_prefix,
+                    billing_period=billing_period_out
+                )
             except (finops_common.UnsafeActionError, finops_common.InvalidInputError):
                 raise
             except Exception as e:
                 logger.error("Manifest validation failed for %s: %s", manifest_uri, e)
                 raise finops_common.InvalidInputError(f"CUR manifest validation failed: {e}")
-
-        else:
-            # Legacy list-based manifest discovery (CUR_SOURCE_BUCKET without CUR_EXPORTS_JSON)
-            discovered_key = None
-            if local_s3 and cur_source_bucket:
-                try:
-                    res = local_s3.list_objects_v2(cur_source_bucket, cur_source_prefix)
-                    for obj in res.get("Contents", []):
-                        k = obj["Key"]
-                        if k.endswith("manifest.json") or k.endswith("-Manifest.json"):
-                            discovered_key = k
-                            break
-                except Exception as e:
-                    logger.warning("Error listing objects for manifest discovery: %s", e)
-
-            if discovered_key:
-                manifest_uri = f"s3://{cur_source_bucket}/{discovered_key}"
-                try:
-                    manifest_data = local_s3.get_object(cur_source_bucket, discovered_key)
-                    if isinstance(manifest_data, dict) and "Body" in manifest_data:
-                        manifest_bytes = manifest_data["Body"].read()
-                    else:
-                        manifest_bytes = manifest_data
-                    manifest_json = json.loads(manifest_bytes.decode("utf-8"))
-                    if not isinstance(manifest_json, dict) or "assemblyId" not in manifest_json:
-                        raise ValueError("Invalid manifest schema: missing assemblyId")
-                    assembly_id = manifest_json.get("assemblyId", "")
-                    report_keys = manifest_json.get("reportKeys", [])
-                    billing_period_out = _resolve_billing_period(event, exec_time)
-                except Exception as e:
-                    logger.error("Manifest validation failed for %s: %s", manifest_uri, e)
-                    raise finops_common.InvalidInputError(f"CUR manifest validation failed: {e}")
-            else:
-                logger.warning("CUR manifest was not found in the configured source bucket.")
-                response = finops_common.create_response("CUR_DELAY", event.run_id, event.correlation_id, "cost_puller", {
-                    "error": "Billing reports (CUR) manifest was not found in the configured source bucket.",
-                    "delayed_cur": True
-                })
-                return response.to_dict()
 
     # Fetch CloudWatch Utilization Metrics
     resource_ids = []
@@ -755,7 +708,13 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "data_source_type": "S3_POINTER",
             "cur_manifest_uri": manifest_uri,
             "manifest_etag": manifest_etag,
-            "assembly_id": assembly_id,
+            "manifest_format": "DATA_EXPORTS",
+            "execution_id": execution_id,
+            "export_arn": export_arn,
+            "columns": columns,
+            "data_files": data_files,
+            "data_file_count": data_file_count,
+            "columns_count": columns_count,
             "billing_period": billing_period_out,
             "export_name": export_name_out,
             "source_account_id": source_account_id_out,
