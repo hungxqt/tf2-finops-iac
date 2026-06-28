@@ -108,11 +108,6 @@ output "dashboard_athena_named_query_ids" {
   value       = module.dashboard.athena_named_query_ids
 }
 
-output "ecr_repository_url" {
-  description = "The ECR repository URL"
-  value       = module.ai_runtime_lambda.ecr_repository_url
-}
-
 output "request_lambda_function_name" {
   description = "The name of the AI Request Lambda function"
   value       = module.ai_runtime_lambda.request_lambda_function_name
@@ -173,6 +168,7 @@ output "glue_catalog_tables" {
   description = "Map of Glue database and tables"
   value       = module.lakehouse.glue_catalog_tables
 }
+
 
 
 

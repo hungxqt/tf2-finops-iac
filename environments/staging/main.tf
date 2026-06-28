@@ -526,6 +526,7 @@ module "ai_runtime_lambda" {
   ai_request_s3_pointer_prefixes   = ["ai-input/*"]
 }
 
+
 # 6. Compute Lambda Module
 module "compute_lambda" {
   source = "../../modules/compute-lambda"

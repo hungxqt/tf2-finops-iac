@@ -66,7 +66,7 @@ Náº¿u Ä‘Ã¢y lÃ  láº§n Ä‘áº§u tiÃªn thiáº¿t láº­p dá�
      terraform init -migrate-state
      ```
 
-#### Lá»±a chá»n B: DÃ nh cho cÃ¡c thÃ nh viÃªn khÃ¡c tiáº¿p tá»¥c lÃ m viá»‡c (Subsequent Developers)
+#### Lá»±a chá» n B: DÃ nh cho cÃ¡c thÃ nh viÃªn khÃ¡c tiáº¿p tá»¥c lÃ m viá»‡c (Subsequent Developers)
 Náº¿u bootstrap Ä‘Ã£ Ä‘Æ°á»£c cháº¡y trÆ°á»›c Ä‘Ã³ vÃ  cáº¥u hÃ¬nh S3 backend Ä‘Ã£ Ä‘Æ°á»£c kÃ­ch hoáº¡t trong kho lÆ°u trá»¯:
 1. **Khá»Ÿi táº¡o Backend**:
    Khá»Ÿi táº¡o trá»±c tiáº¿p Terraform. Terraform sáº½ tá»± Ä‘á»™ng nháº­n diá»‡n khá»‘i cáº¥u hÃ¬nh S3 backend Ä‘ang hoáº¡t Ä‘á»™ng trong [bootstrap/backend.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/bootstrap/backend.tf) vÃ  káº¿t ná»‘i tá»›i remote state hiá»‡n cÃ³:
@@ -76,32 +76,52 @@ Náº¿u bootstrap Ä‘Ã£ Ä‘Æ°á»£c cháº¡y trÆ°á»›c Ä‘Ã³
    ```
    *LÆ°u Ã½: CÃ¡c thÃ nh viÃªn khÃ¡c khÃ´ng cáº§n cháº¡y `apply` hoáº·c `migrate-state` trong thÆ° má»¥c bootstrap trá»« khi cáº§n thá»±c hiá»‡n thay Ä‘á»•i Ä‘á»‘i vá»›i chÃ­nh háº¡ táº§ng bootstrap.*
 
-### BÆ°á»›c 2.3: ÄÃ³ng gÃ³i cÃ¡c hÃ m Lambda dÆ°á»›i dáº¡ng tá»‡p Zip
-ÄÃ³ng gÃ³i 7 hÃ m adapter Python vÃ o thÆ° má»¥c `.build/lambda/`:
+### BÆ°á»›c 2.3: Ä Ã³ng gÃ³i cÃ¡c hÃ m Lambda dÆ°á»›i dáº¡ng tá»‡p Zip
+Ä Ã³ng gÃ³i 7 hÃ m adapter Python vÃ o thÆ° má»¥c `.build/lambda/`:
 ```powershell
 cd ..
 .\scripts\package-lambdas.ps1
 ```
 
-### BÆ°á»›c 2.4: Triá»ƒn khai cÃ¡c MÃ´i trÆ°á»ng (Environment Compositions)
-Triá»ƒn khai cÃ¡c mÃ´i trÆ°á»ng theo tuáº§n tá»± (Sandbox trÆ°á»›c, sau Ä‘Ã³ lÃ  Staging vÃ  Prod).
+### Bước 2.4: Triển khai Layer Publishing CodeBuild
+Thư mục gốc `codebuild` sở hữu ECR repository chung và pipeline xuất bản image wrapper CodeBuild. Áp dụng root này trước khi triển khai các môi trường chính.
+```powershell
+cd codebuild
+terraform init
+terraform apply
+```
 
-#### Thiáº¿t láº­p Backend vÃ  Biáº¿n cho MÃ´i trÆ°á»ng:
-* **Káº¿t ná»‘i Remote State**: Khá»‘i cáº¥u hÃ¬nh remote state backend Ä‘Ã£ Ä‘Æ°á»£c thiáº¿t láº­p sáºµn trong tá»‡p `backend.tf` cá»§a má»—i mÃ´i trÆ°á»ng (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). Báº¡n chá»‰ cáº§n cháº¡y lá»‡nh `terraform init` Ä‘á»ƒ tá»± Ä‘á»™ng káº¿t ná»‘i vá»›i S3 remote state chung.
-* **Cáº¥u hÃ¬nh Biáº¿n (Variables)**: TrÆ°á»›c khi láº­p káº¿ hoáº¡ch (plan) hoáº·c Ã¡p dá»¥ng (apply), báº¡n pháº£i sao chÃ©p tá»‡p `terraform.tfvars.example` trong thÆ° má»¥c mÃ´i trÆ°á»ng thÃ nh tá»‡p `terraform.tfvars` cá»¥c bá»™ (tá»‡p nÃ y Ä‘Æ°á»£c bá» qua bá»Ÿi git) vÃ  cáº­p nháº­t cÃ¡c giÃ¡ trá»‹ (cháº³ng háº¡n nhÆ° ECR Image URIs vÃ  ACM Certificate ARNs) cho phÃ¹ há»£p vá»›i triá»ƒn khai cá»§a báº¡n.
+### Bước 2.5: Xây dựng Image Wrapper Lambda Web Adapter
+Kích hoạt thủ công dự án CodeBuild với một digest AIOps thượng nguồn hợp lệ:
+```powershell
+aws codebuild start-build   --project-name tf2-finops-ai-wrapper-build   --environment-variables-override name=UPSTREAM_IMAGE_URI,value=200000000012.dkr.ecr.ap-southeast-1.amazonaws.com/tf2/finops-ai-engine@sha256:456c2438cb20d88047915518b209d88047915518b209d88047915518b209d880,type=PLAINTEXT
+```
 
-1. **Triá»ƒn khai Sandbox**:
+### Bước 2.6: Đọc URI Image Wrapper Đã Triển Khai
+Đọc URI image được ghim bằng digest mới nhất từ SSM Parameter Store:
+```powershell
+aws ssm get-parameter --name "/tf2-finops/shared/ai-wrapper/latest-image-uri" --query "Parameter.Value" --output text
+```
+
+### Bước 2.7: Triển khai các Môi trường (Environment Compositions)
+Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó là Staging và Prod).
+
+#### Thiết lập Backend và Biến cho Môi trường:
+* **Kết nối Remote State**: Khối cấu hình remote state backend đã được thiết lập sẵn trong tệp `backend.tf` của mỗi môi trường (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). Bạn chỉ cần chạy lệnh `terraform init` để tự động kết nối với S3 remote state chung.
+* **Cấu hình Biến (Variables)**: Trước khi lập kế hoạch (plan) hoặc áp dụng (apply), bạn phải sao chép tệp `terraform.tfvars.example` trong thư mục môi trường thành tệp `terraform.tfvars` cục bộ (tệp này được bỏ qua bởi git) và cập nhật các giá trị. Bạn BẮT BUỘC phải đặt `request_image_uri` bằng URI của image wrapper đã lấy được từ SSM Parameter Store ở Bước 2.6.
+
+1. **Triển khai Sandbox**:
    ```powershell
-   cd environments/sandbox
-   # Sao chÃ©p tá»‡p biáº¿n máº«u vÃ  cáº­p nháº­t giÃ¡ trá»‹
+   cd ../environments/sandbox
+   # Sao chép tệp biến mẫu và cập nhật giá trị
    cp terraform.tfvars.example terraform.tfvars
-   # Khá»Ÿi táº¡o vÃ  káº¿t ná»‘i tá»›i remote state
+   # Khởi tạo và kết nối tới remote state
    terraform init
-   # Cung cáº¥p biáº¿n alb_certificate_arn báº¯t buá»™c (qua tfvars hoáº·c dÃ²ng lá»‡nh)
+   # Lập kế hoạch và áp dụng
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
    ```
-2. **Triá»ƒn khai Staging**:
+2. **Triển khai Staging**:
    ```powershell
    cd ../staging
    cp terraform.tfvars.example terraform.tfvars
@@ -109,13 +129,13 @@ Triá»ƒn khai cÃ¡c mÃ´i trÆ°á»ng theo tuáº§n tá»± (Sandbox tr�
    terraform plan -out=staging.tfplan
    terraform apply staging.tfplan
    ```
-3. **Triá»ƒn khai Production** (YÃªu cáº§u xem xÃ©t vÃ  phÃª duyá»‡t káº¿ hoáº¡ch trÆ°á»›c):
+3. **Triển khai Production** (Yêu cầu xem xét và phê duyệt kế hoạch trước):
    ```powershell
    cd ../prod
    cp terraform.tfvars.example terraform.tfvars
    terraform init
    terraform plan -out=prod.tfplan
-   # Ãp dá»¥ng cho mÃ´i trÆ°á»ng Production cáº§n Ä‘Æ°á»£c phÃª duyá»‡t vÃ  kÃ­ch hoáº¡t qua GitHub Environments
+   # Áp dụng cho môi trường Production cần được phê duyệt và kích hoạt qua GitHub Environments
    terraform apply prod.tfplan
    ```
 
@@ -470,3 +490,36 @@ Khi image AI Engine không thể vượt qua các probe âm tính (vì container
 ### 11.5 Tài Liệu Tham Khảo Kết Quả Cổng
 
 Kết quả được ghi vào `docs/progress/request_integrity_gate_results_{environment}.json` sau mỗi lần chạy. File này bị git-ignore và chỉ dùng cho tham khảo vận hành cục bộ. Bước CI `terraform-apply.yml` nên gọi script này và thất bại job nếu mã thoát khác không.
+
+---
+
+## 12. Hướng dẫn Xuất bản Image Wrapper bằng CodeBuild
+
+Repository này bao gồm một dự án CodeBuild để xây dựng và xuất bản container image wrapper cho AI Engine. Wrapper này sao chép AWS Lambda Web Adapter vào trong container FastAPI thượng nguồn của AIOps, cho phép nó chạy chính xác trên nền tảng AWS Lambda.
+
+### 12.1 Quy trình Kích hoạt Thủ công
+
+Build này phải được kích hoạt thủ công bởi vận hành viên. Vận hành viên phải cung cấp URI của image thượng nguồn được ghim bằng digest của nó. Các tag thay đổi (như `:latest`) sẽ bị từ chối để đảm bảo tính bất biến của image.
+
+Để kích hoạt build bằng AWS CLI, chạy lệnh sau:
+
+```bash
+aws codebuild start-build \
+  --project-name tf2-finops-ai-wrapper-build \
+  --environment-variables-override name=UPSTREAM_IMAGE_URI,value=200000000012.dkr.ecr.ap-southeast-1.amazonaws.com/tf2/finops-ai-engine@sha256:456c2438cb20d88047915518b209d88047915518b209d88047915518b209d880,type=PLAINTEXT
+```
+
+*(Thay thế `sandbox` bằng `staging` hoặc `prod` tương ứng, và thay thế tên dự án cũng như digest thượng nguồn bằng các giá trị chính xác).*
+
+### 12.2 Cơ chế Bỏ qua Xây dựng lại (Skip Rebuild)
+
+Nếu tag image wrapper được tạo ra (`wrapped-<upstream-digest-short>`) đã tồn tại sẵn trong ECR repository đích, phiên chạy CodeBuild sẽ bỏ qua bước docker build và push, trả về digest hiện tại và cập nhật URI vào SSM Parameter Store.
+
+### 12.3 Ghi nhận trên SSM Parameter Store
+
+Sau khi chạy thành công, CodeBuild sẽ ghi các giá trị sau vào SSM Parameter Store:
+- `/tf2-finops/<env>/ai-wrapper/latest-image-uri`: URI của image wrapper được ghim bằng digest.
+- `/tf2-finops/<env>/ai-wrapper/latest-upstream-image-uri`: URI của image thượng nguồn gốc.
+
+Các tham số này được sử dụng bởi vận hành viên trong quy trình triển khai Terraform được phê duyệt (Reviewed Terraform Deployment) để cập nhật biến `request_image_uri`.
+

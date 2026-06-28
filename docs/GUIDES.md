@@ -83,21 +83,43 @@ cd ..
 .\scripts\package-lambdas.ps1
 ```
 
-### Step 2.4: Deploy the Target Environment (Composition)
+### Step 2.4: Deploy the CodeBuild Publishing Layer
+The `codebuild` root owns the shared ECR repository and CodeBuild wrapper image publishing pipeline. Apply this root before deploying the main environments.
+```powershell
+cd codebuild
+terraform init
+terraform apply
+```
+
+### Step 2.5: Build the Lambda Web Adapter Wrapper Image
+Trigger the manual CodeBuild project with a valid upstream AIOps digest:
+```powershell
+aws codebuild start-build \
+  --project-name tf2-finops-ai-wrapper-build \
+  --environment-variables-override name=UPSTREAM_IMAGE_URI,value=200000000012.dkr.ecr.ap-southeast-1.amazonaws.com/tf2/finops-ai-engine@sha256:456c2438cb20d88047915518b209d88047915518b209d88047915518b209d880,type=PLAINTEXT
+```
+
+### Step 2.6: Read the Deployed Wrapper Image URI
+Read the latest published image digest URI from SSM Parameter Store:
+```powershell
+aws ssm get-parameter --name "/tf2-finops/shared/ai-wrapper/latest-image-uri" --query "Parameter.Value" --output text
+```
+
+### Step 2.7: Deploy the Target Environment (Composition)
 Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
 
 #### Environment Backend and Variable Setup:
 * **Remote State Connection**: The remote state backend block is already pre-configured in `backend.tf` for each environment (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). You only need to run `terraform init` to automatically connect to the shared remote S3 state.
-* **Variable Configuration**: Before planning or applying, you must copy the `terraform.tfvars.example` file in the environment directory to a local `terraform.tfvars` file (which is git-ignored) and update the values (such as ECR Image URIs and ACM Certificate ARNs) as appropriate for your deployment.
+* **Variable Configuration**: Before planning or applying, copy the `terraform.tfvars.example` file in the environment directory to a local `terraform.tfvars` file (which is git-ignored) and update the values. You MUST set `request_image_uri` to the wrapper image URI retrieved from SSM Parameter Store in Step 2.6.
 
 1. **Sandbox Deployment**:
    ```powershell
-   cd environments/sandbox
+   cd ../environments/sandbox
    # Copy variables template and populate it
    cp terraform.tfvars.example terraform.tfvars
    # Initialize and connect to remote state
    terraform init
-   # Provide the required alb_certificate_arn variable (e.g. via tfvars or command line)
+   # Plan and apply
    terraform plan -out=sandbox.tfplan
    terraform apply sandbox.tfplan
    ```
@@ -119,7 +141,7 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
    terraform apply prod.tfplan
    ```
 
-### Step 2.5: Post-Apply Lambda Diagnostics
+### Step 2.8: Post-Apply Lambda Diagnostics
 VPC-attached Lambda functions (both zip-based workers and container-based AI runtimes) require AWS-side provisioning of Hyperplane ENIs and image optimization. This process runs asynchronously after the Terraform apply completes and can take several minutes.
 
 Run the following diagnostics loop (AWS CLI) to check the status of all 9 Lambda functions:
@@ -484,3 +506,36 @@ Results are written to `docs/progress/request_integrity_gate_results_{environmen
   ]
 }
 ```
+
+---
+
+## 12. CodeBuild Wrapper Image Publish Guide
+
+The repository includes a CodeBuild project to build and publish the AI Engine wrapper image. The wrapper copies the AWS Lambda Web Adapter into the upstream AIOps FastAPI container, allowing it to execute properly on the AWS Lambda platform.
+
+### 12.1 Manual Execution Workflow
+
+The build must be triggered manually by an operator. The operator must provide the upstream image URI pinned by its digest. Mutable tags (such as `:latest`) are rejected to guarantee image immutability.
+
+To start a build using the AWS CLI, run:
+
+```bash
+aws codebuild start-build \
+  --project-name tf2-finops-sandbox-ai-wrapper-build \
+  --environment-variables-override name=UPSTREAM_IMAGE_URI,value=200000000012.dkr.ecr.ap-southeast-1.amazonaws.com/tf2/finops-ai-engine@sha256:456c2438cb20d88047915518b209d88047915518b209d88047915518b209d880,type=PLAINTEXT
+```
+
+*(Replace `sandbox` with `staging` or `prod` as appropriate, and replace the `--project-name` and `value` with the correct project name and upstream digest).*
+
+### 12.2 Rebuild Skipping Behavior
+
+If the generated wrapper image tag (`wrapped-<upstream-digest-short>`) already exists in the target ECR repository, the CodeBuild execution will skip the Docker build and push phases, return the existing digest, and write the URIs to SSM Parameter Store.
+
+### 12.3 SSM Parameter Store Recording
+
+After a successful run, CodeBuild writes the following parameters to the SSM Parameter Store:
+- `/tf2-finops/<env>/ai-wrapper/latest-image-uri`: The URI of the wrapper image pinned by digest.
+- `/tf2-finops/<env>/ai-wrapper/latest-upstream-image-uri`: The original upstream image URI.
+
+These parameters are used by operators during standard Reviewed Terraform Deployments to update the `request_image_uri` variable.
+

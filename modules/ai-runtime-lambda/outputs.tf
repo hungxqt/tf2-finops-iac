@@ -1,7 +1,3 @@
-output "ecr_repository_url" {
-  description = "The URL of the ECR repository"
-  value       = aws_ecr_repository.ai_engine.repository_url
-}
 
 output "request_lambda_function_name" {
   description = "The name of the AI Request Lambda function"

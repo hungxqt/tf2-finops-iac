@@ -1,5 +1,3 @@
-data "aws_caller_identity" "current" {}
-
 data "aws_ec2_managed_prefix_list" "cloudfront" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
@@ -43,61 +41,6 @@ resource "aws_acm_certificate" "self_signed" {
   }
 }
 
-# ECR Repository for the AI Engine Images
-# trivy:ignore:AVD-AWS-0033
-# trivy:ignore:AWS-0033
-resource "aws_ecr_repository" "ai_engine" {
-  name                 = "${var.project_name}-${var.environment}-ai-engine"
-  image_tag_mutability = "IMMUTABLE"
-  force_delete         = var.destroyable
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "KMS"
-  }
-
-  tags = var.tags
-}
-
-resource "aws_ecr_repository_policy" "lambda" {
-  repository = aws_ecr_repository.ai_engine.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "LambdaECRImageRetrievalPolicy"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-        Action = [
-          "ecr:BatchGetImage",
-          "ecr:GetDownloadUrlForLayer"
-        ]
-      },
-      {
-        Sid    = "AllowAccountAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action = [
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
-        ]
-      }
-    ]
-  })
-}
 
 # CloudWatch Log Groups
 resource "aws_cloudwatch_log_group" "request" {
@@ -250,7 +193,6 @@ resource "aws_lambda_function" "request" {
 
   depends_on = [
     aws_cloudwatch_log_group.request,
-    aws_ecr_repository_policy.lambda,
     aws_iam_role_policy_attachment.request_vpc,
     aws_iam_role_policy_attachment.request
   ]

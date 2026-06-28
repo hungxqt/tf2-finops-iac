@@ -177,3 +177,4 @@ variable "cur_raw_prefix" {
   description = "S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 Parquet files (e.g. 'finops-cur-export'). Used for IAM scoping and bcm-data-exports bucket policy."
   default     = ""
 }
+
