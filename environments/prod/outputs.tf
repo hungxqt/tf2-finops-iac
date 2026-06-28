@@ -169,6 +169,26 @@ output "glue_catalog_tables" {
   value       = module.lakehouse.glue_catalog_tables
 }
 
+output "codedeploy_app_name" {
+  description = "The name of the CodeDeploy application"
+  value       = module.ai_runtime_lambda.codedeploy_app_name
+}
+
+output "codedeploy_deployment_group_name" {
+  description = "The name of the CodeDeploy deployment group"
+  value       = module.ai_runtime_lambda.codedeploy_deployment_group_name
+}
+
+output "request_lambda_alias_name" {
+  description = "The name of the request Lambda alias"
+  value       = module.ai_runtime_lambda.request_lambda_alias_name
+}
+
+output "request_lambda_latest_version" {
+  description = "The latest published version of the request Lambda function"
+  value       = module.ai_runtime_lambda.request_lambda_latest_version
+}
+
 
 
 

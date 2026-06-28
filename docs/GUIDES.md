@@ -539,3 +539,39 @@ After a successful run, CodeBuild writes the following parameters to the SSM Par
 
 These parameters are used by operators during standard Reviewed Terraform Deployments to update the `request_image_uri` variable.
 
+---
+
+## 13. Sandbox AI Lambda CodeDeploy Rollout Guide
+
+The repository configures CodeDeploy-controlled linear traffic shifting for the AI Engine Request Lambda in `modules/ai-runtime-lambda`, scoped initially to the `sandbox` environment.
+
+### 13.1 Rollout Configuration
+- **Deployment Strategy**: CodeDeploy shifts traffic using the `CodeDeployDefault.LambdaLinear10PercentEvery1Minute` configuration.
+- **Service Role**: AWS CodeDeploy is assigned an IAM role attached to the `AWSCodeDeployRoleForLambda` managed policy.
+- **Target Alias**: The `live` Lambda alias is used. Terraform is configured to ignore version and routing drift on this alias (`lifecycle { ignore_changes = [function_version, routing_config] }`), handing full control of traffic shifting to CodeDeploy.
+
+### 13.2 Automated Rollback Alarms
+The deployment group is associated with four automated CloudWatch alarms that trigger an automatic rollback if they fire during a deployment:
+1. **Lambda Errors**: Fires if `Errors` metric > 0.
+2. **Lambda Throttles**: Fires if `Throttles` metric > 0.
+3. **P99 Duration**: Fires if the P99 execution time exceeds 800 ms.
+4. **ALB Target 5xx**: Fires if the internal ALB target group encounters any `HTTPCode_Target_5XX_Count` > 0.
+
+If any of these alarms are triggered during the traffic-shifting phase, CodeDeploy automatically rolls back the `live` alias traffic to the previous version and fails the deployment.
+
+### 13.3 Manual or CI Scripted Rollout
+To deploy a new image wrapper version via CodeDeploy:
+1. Build and publish the image using CodeBuild to write the digest to SSM.
+2. Run Terraform plan/apply with the new digest. Terraform publishes the new Lambda version but leaves the `live` alias pointing to the old version.
+3. Run the deployment script to trigger and monitor CodeDeploy:
+   ```powershell
+   ./scripts/start-ai-lambda-codedeploy.ps1 `
+     -ApplicationName "finops-watch-sandbox-ai-request" `
+     -DeploymentGroupName "finops-watch-sandbox-ai-request-dg" `
+     -FunctionName "finops-watch-sandbox-ai-request" `
+     -AliasName "live" `
+     -TargetVersion "<new-published-version>"
+   ```
+4. The script polls every 15 seconds, outputting the rollout status. If CodeDeploy rolls back or fails, the script exits with code `1`, causing the CI/CD pipeline to fail.
+
+

@@ -537,6 +537,10 @@ module "ai_runtime_lambda" {
 
   ai_request_s3_pointer_bucket_arn = module.lakehouse.lakehouse_bucket_arn
   ai_request_s3_pointer_prefixes   = ["ai-input/*"]
+
+  enable_codedeploy                 = true
+  codedeploy_deployment_config_name = "CodeDeployDefault.LambdaLinear10PercentEvery1Minute"
+  codedeploy_alarm_actions          = [module.alerting.engineering_topic_arn]
 }
 
 

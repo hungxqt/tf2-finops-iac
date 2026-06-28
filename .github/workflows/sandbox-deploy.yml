@@ -1,10 +1,6 @@
-name: "Terraform Apply"
+name: "Sandbox AI Lambda Deploy"
 
 on:
-  push:
-    branches:
-      - main
-      - develop
   workflow_dispatch:
     inputs:
       request_image_uri:
@@ -18,7 +14,7 @@ permissions:
 
 jobs:
   plan:
-    name: "Generate Terraform Plan"
+    name: "Terraform Plan"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -63,7 +59,7 @@ jobs:
           retention-days: 7
 
   apply:
-    name: "Deploy Infrastructure & CodeDeploy Rollout"
+    name: "Terraform Apply & CodeDeploy Rollout"
     needs: plan
     runs-on: ubuntu-latest
     steps:

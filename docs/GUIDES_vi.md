@@ -523,3 +523,39 @@ Sau khi chạy thành công, CodeBuild sẽ ghi các giá trị sau vào SSM Par
 
 Các tham số này được sử dụng bởi vận hành viên trong quy trình triển khai Terraform được phê duyệt (Reviewed Terraform Deployment) để cập nhật biến `request_image_uri`.
 
+---
+
+## 13. Hướng dẫn Triển khai CodeDeploy Rollout cho AI Lambda trong Sandbox
+
+Kho lưu trữ cấu hình việc chuyển dịch lưu lượng (traffic shifting) tuyến tính do CodeDeploy kiểm soát cho AI Engine Request Lambda trong `modules/ai-runtime-lambda`, ban đầu được cấu hình cho môi trường `sandbox`.
+
+### 13.1 Cấu hình Rollout
+- **Chiến lược Triển khai**: CodeDeploy chuyển dịch lưu lượng bằng cấu hình `CodeDeployDefault.LambdaLinear10PercentEvery1Minute`.
+- **Vai trò Dịch vụ (Service Role)**: AWS CodeDeploy được gán một vai trò IAM được liên kết với policy quản lý `AWSCodeDeployRoleForLambda`.
+- **Alias Đích**: Sử dụng Lambda alias `live`. Terraform được cấu hình để bỏ qua các thay đổi về phiên bản và cấu hình định tuyến trên alias này (`lifecycle { ignore_changes = [function_version, routing_config] }`), giao quyền kiểm soát hoàn toàn việc chuyển dịch lưu lượng cho CodeDeploy.
+
+### 13.2 Các Cảnh báo Tự động Hoàn tác (Automated Rollback Alarms)
+Nhóm triển khai (deployment group) được liên kết với bốn cảnh báo CloudWatch tự động để kích hoạt hoàn tác tự động nếu chúng phát cảnh báo trong quá trình triển khai:
+1. **Lỗi Lambda (Lambda Errors)**: Báo động nếu chỉ số `Errors` > 0.
+2. **Nghẽn Lambda (Lambda Throttles)**: Báo động nếu chỉ số `Throttles` > 0.
+3. **Độ trễ P99 (P99 Duration)**: Báo động nếu thời gian thực thi P99 vượt quá 800 ms.
+4. **Lỗi ALB Target 5xx**: Báo động nếu nhóm mục tiêu của ALB nội bộ gặp bất kỳ lỗi `HTTPCode_Target_5XX_Count` > 0.
+
+Nếu bất kỳ cảnh báo nào trong số này được kích hoạt trong giai đoạn chuyển dịch lưu lượng, CodeDeploy sẽ tự động hoàn tác lưu lượng của alias `live` về phiên bản trước đó và đánh dấu đợt triển khai là thất bại.
+
+### 13.3 Triển khai Thủ công hoặc qua Script CI
+Để triển khai phiên bản image wrapper mới qua CodeDeploy:
+1. Xây dựng và xuất bản image bằng CodeBuild để ghi digest vào SSM.
+2. Chạy Terraform plan/apply với digest mới. Terraform sẽ xuất bản phiên bản Lambda mới nhưng vẫn giữ alias `live` trỏ tới phiên bản cũ.
+3. Chạy script triển khai để kích hoạt và giám sát CodeDeploy:
+   ```powershell
+   ./scripts/start-ai-lambda-codedeploy.ps1 `
+     -ApplicationName "finops-watch-sandbox-ai-request" `
+     -DeploymentGroupName "finops-watch-sandbox-ai-request-dg" `
+     -FunctionName "finops-watch-sandbox-ai-request" `
+     -AliasName "live" `
+     -TargetVersion "<new-published-version>"
+   ```
+4. Script sẽ thực hiện thăm dò cứ sau 15 giây, xuất ra trạng thái triển khai. Nếu CodeDeploy hoàn tác hoặc thất bại, script sẽ thoát với mã lỗi `1`, làm cho pipeline CI/CD thất bại.
+
+

@@ -204,6 +204,13 @@ resource "aws_lambda_alias" "request" {
   description      = "Alias for live deployment"
   function_name    = aws_lambda_function.request.function_name
   function_version = aws_lambda_function.request.version
+
+  lifecycle {
+    ignore_changes = [
+      function_version,
+      routing_config
+    ]
+  }
 }
 
 
@@ -450,5 +457,156 @@ resource "terraform_data" "destroy_guard" {
   lifecycle {
     prevent_destroy = true
   }
+}
+
+# CodeDeploy Role for Lambda Deployment
+resource "aws_iam_role" "codedeploy" {
+  count = var.enable_codedeploy ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-codedeploy-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "codedeploy.amazonaws.com"
+      }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy" {
+  count      = var.enable_codedeploy ? 1 : 0
+  role       = aws_iam_role.codedeploy[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda"
+}
+
+# CloudWatch Rollback Alarms
+# checkov:skip=CKV_AWS_119: "Alarm actions are configured dynamically via variables and may be empty in non-production environments to avoid unnecessary notifications"
+resource "aws_cloudwatch_metric_alarm" "request_errors" {
+  count               = var.enable_codedeploy ? 1 : 0
+  alarm_name          = "${var.project_name}-${var.environment}-ai-request-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Lambda errors for AI Request function"
+  alarm_actions       = var.codedeploy_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.request.function_name
+    Resource     = "${aws_lambda_function.request.function_name}:${aws_lambda_alias.request.name}"
+  }
+
+  tags = var.tags
+}
+
+# checkov:skip=CKV_AWS_119: "Alarm actions are configured dynamically via variables and may be empty in non-production environments to avoid unnecessary notifications"
+resource "aws_cloudwatch_metric_alarm" "request_throttles" {
+  count               = var.enable_codedeploy ? 1 : 0
+  alarm_name          = "${var.project_name}-${var.environment}-ai-request-throttles"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Lambda throttles for AI Request function"
+  alarm_actions       = var.codedeploy_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.request.function_name
+    Resource     = "${aws_lambda_function.request.function_name}:${aws_lambda_alias.request.name}"
+  }
+
+  tags = var.tags
+}
+
+# checkov:skip=CKV_AWS_119: "Alarm actions are configured dynamically via variables and may be empty in non-production environments to avoid unnecessary notifications"
+resource "aws_cloudwatch_metric_alarm" "request_p99_duration" {
+  count               = var.enable_codedeploy ? 1 : 0
+  alarm_name          = "${var.project_name}-${var.environment}-ai-request-p99-duration"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  extended_statistic  = "p99"
+  threshold           = var.deployment_p99_latency_threshold_ms
+  alarm_description   = "P99 duration threshold exceeded for AI Request function"
+  alarm_actions       = var.codedeploy_alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.request.function_name
+    Resource     = "${aws_lambda_function.request.function_name}:${aws_lambda_alias.request.name}"
+  }
+
+  tags = var.tags
+}
+
+# checkov:skip=CKV_AWS_119: "Alarm actions are configured dynamically via variables and may be empty in non-production environments to avoid unnecessary notifications"
+resource "aws_cloudwatch_metric_alarm" "alb_target_5xx" {
+  count               = var.enable_codedeploy ? 1 : 0
+  alarm_name          = "${var.project_name}-${var.environment}-ai-request-alb-5xx"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "ALB target 5xx errors for AI Target Group"
+  alarm_actions       = var.codedeploy_alarm_actions
+
+  dimensions = {
+    TargetGroup  = aws_lb_target_group.ai.arn_suffix
+    LoadBalancer = aws_lb.ai.arn_suffix
+  }
+
+  tags = var.tags
+}
+
+# CodeDeploy Application and Deployment Group
+resource "aws_codedeploy_app" "request" {
+  count            = var.enable_codedeploy ? 1 : 0
+  compute_platform = "Lambda"
+  name             = "${var.project_name}-${var.environment}-ai-request"
+  tags             = var.tags
+}
+
+resource "aws_codedeploy_deployment_group" "request" {
+  count                  = var.enable_codedeploy ? 1 : 0
+  app_name               = aws_codedeploy_app.request[0].name
+  deployment_group_name  = "${var.project_name}-${var.environment}-ai-request-dg"
+  service_role_arn       = aws_iam_role.codedeploy[0].arn
+  deployment_config_name = var.codedeploy_deployment_config_name
+
+  auto_rollback_configuration {
+    enabled = true
+    events  = ["DEPLOYMENT_FAILURE", "ALARM_TO_REVERT"]
+  }
+
+  alarm_configuration {
+    enabled = true
+    alarms = concat(
+      [
+        aws_cloudwatch_metric_alarm.request_errors[0].alarm_name,
+        aws_cloudwatch_metric_alarm.request_throttles[0].alarm_name,
+        aws_cloudwatch_metric_alarm.request_p99_duration[0].alarm_name,
+        aws_cloudwatch_metric_alarm.alb_target_5xx[0].alarm_name
+      ],
+      var.codedeploy_extra_alarm_names
+    )
+    ignore_poll_alarm_failure = false
+  }
+
+  tags = var.tags
 }
 

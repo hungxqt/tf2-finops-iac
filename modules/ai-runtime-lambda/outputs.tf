@@ -35,3 +35,23 @@ output "alb_security_group_id" {
   description = "The ID of the security group for the internal ALB"
   value       = aws_security_group.alb.id
 }
+
+output "codedeploy_app_name" {
+  description = "The name of the CodeDeploy application"
+  value       = var.enable_codedeploy ? aws_codedeploy_app.request[0].name : null
+}
+
+output "codedeploy_deployment_group_name" {
+  description = "The name of the CodeDeploy deployment group"
+  value       = var.enable_codedeploy ? aws_codedeploy_deployment_group.request[0].deployment_group_name : null
+}
+
+output "request_lambda_alias_name" {
+  description = "The name of the request Lambda alias"
+  value       = aws_lambda_alias.request.name
+}
+
+output "request_lambda_latest_version" {
+  description = "The latest published version of the request Lambda function"
+  value       = aws_lambda_function.request.version
+}

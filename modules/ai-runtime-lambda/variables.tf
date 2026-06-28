@@ -126,3 +126,33 @@ variable "ai_request_s3_pointer_prefixes" {
   description = "S3 key prefixes under ai_request_s3_pointer_bucket_arn that the AI Request Lambda may read. Defaults to ai-input/*."
   default     = ["ai-input/*"]
 }
+
+variable "enable_codedeploy" {
+  type        = bool
+  description = "Enable CodeDeploy rollout for the request Lambda"
+  default     = true
+}
+
+variable "codedeploy_deployment_config_name" {
+  type        = string
+  description = "CodeDeploy deployment config name"
+  default     = "CodeDeployDefault.LambdaLinear10PercentEvery10Minutes"
+}
+
+variable "codedeploy_extra_alarm_names" {
+  type        = list(string)
+  description = "List of extra CloudWatch alarm names to trigger rollback"
+  default     = []
+}
+
+variable "codedeploy_alarm_actions" {
+  type        = list(string)
+  description = "List of alarm actions (e.g. SNS topics) for deployment alarms"
+  default     = []
+}
+
+variable "deployment_p99_latency_threshold_ms" {
+  type        = number
+  description = "Latency threshold in ms for the P99 duration alarm"
+  default     = 800
+}
