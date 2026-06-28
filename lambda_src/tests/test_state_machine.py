@@ -300,7 +300,7 @@ def check_asl_file(asl_path, is_template=True):
 
     # Assert escalation path in iterator (G1 fix)
     assert iter_states["WriteEscalationAuditForAnomaly"]["Next"] == "SendEscalationAlertForAnomaly"
-    assert iter_states["SendEscalationAlertForAnomaly"]["Next"] == "SendPendingStatusMessageForAnomaly"
+    assert iter_states["SendEscalationAlertForAnomaly"]["Next"] == "AnomalyEscalated"
 
     # Assert CacheRollbackPayload item includes contract-required fields (G1 fix: in iterator)
     cache_item = iter_states["CacheRollbackPayloadForAnomaly"]["Parameters"]["Item"]
@@ -315,3 +315,80 @@ def test_state_machine_asl_contract():
     
     asl_doc_path = os.path.join(os.path.dirname(__file__), "../../docs/statemachine.json")
     check_asl_file(asl_doc_path, is_template=False)
+
+
+def check_reachability(states, start_at):
+    visited = set()
+    queue = [start_at]
+    visited.add(start_at)
+    
+    while queue:
+        current = queue.pop(0)
+        state_def = states.get(current)
+        if not state_def:
+            continue
+            
+        next_states = []
+        if "Next" in state_def:
+            next_states.append(state_def["Next"])
+            
+        if "Default" in state_def:
+            next_states.append(state_def["Default"])
+            
+        if "Choices" in state_def:
+            for choice in state_def["Choices"]:
+                if "Next" in choice:
+                    next_states.append(choice["Next"])
+                    
+        if "Catch" in state_def:
+            for catch_block in state_def["Catch"]:
+                if "Next" in catch_block:
+                    next_states.append(catch_block["Next"])
+                    
+        for ns in next_states:
+            if ns not in visited:
+                visited.add(ns)
+                queue.append(ns)
+                
+    unreachable = set(states.keys()) - visited
+    return unreachable
+
+
+def test_state_machine_reachability():
+    def load_asl(asl_path, is_template=True):
+        with open(asl_path, "r", encoding="utf-8") as f:
+            raw_content = f.read()
+        if is_template:
+            processed_content = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw_content)
+            processed_content = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed_content)
+        else:
+            processed_content = raw_content
+        return json.loads(processed_content)
+
+    for asl_path, is_template in [
+        (os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json"), True),
+        (os.path.join(os.path.dirname(__file__), "../../docs/statemachine.json"), False)
+    ]:
+        asl = load_asl(asl_path, is_template)
+        states = asl["States"]
+        start_at = asl["StartAt"]
+        
+        # 1. Walk root graph
+        unreachable_root = check_reachability(states, start_at)
+        assert not unreachable_root, f"Unreachable root states found in {asl_path}: {unreachable_root}"
+        
+        # 2. Recursively validate ProcessDetectedAnomalies.Iterator
+        map_state = states.get("ProcessDetectedAnomalies")
+        assert map_state is not None, f"ProcessDetectedAnomalies state missing from {asl_path}"
+        assert map_state.get("Type") == "Map", f"ProcessDetectedAnomalies must be of Type Map in {asl_path}"
+        iterator = map_state.get("Iterator")
+        assert iterator is not None, f"ProcessDetectedAnomalies missing Iterator in {asl_path}"
+        
+        iter_states = iterator.get("States")
+        iter_start_at = iterator.get("StartAt")
+        assert iter_states is not None, f"Iterator missing States in {asl_path}"
+        assert iter_start_at is not None, f"Iterator missing StartAt in {asl_path}"
+        
+        unreachable_iter = check_reachability(iter_states, iter_start_at)
+        assert not unreachable_iter, f"Unreachable iterator states found in {asl_path}: {unreachable_iter}"
+

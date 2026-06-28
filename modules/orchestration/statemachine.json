@@ -365,7 +365,16 @@
         "Message.$": "States.Format('CUR billing export delayed beyond 4 hours for Run ID: {}', $.run_id)"
       },
       "ResultPath": "$.cur_delay_alert_result",
-      "Next": "WriteCURDelayAudit"
+      "Next": "WriteCURDelayAudit",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.alert_error",
+          "Next": "WriteAlertDeliveryFailureAudit"
+        }
+      ]
     },
     "WriteCURDelayAudit": {
       "Type": "Task",
@@ -1410,7 +1419,7 @@
               "Message.$": "States.Format('Containment verification requires escalation. Run ID: {}, Anomaly: {}, Correlation: {}', $.run_id, $.anomaly.anomaly_id, $.correlation_id)"
             },
             "ResultPath": "$.escalation_alert_result",
-            "Next": "SendPendingStatusMessageForAnomaly",
+            "Next": "AnomalyEscalated",
             "Retry": [
               {
                 "ErrorEquals": [
@@ -1427,7 +1436,7 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.escalation_alert_error",
-                "Next": "SendPendingStatusMessageForAnomaly"
+                "Next": "AnomalyPlatformFailed"
               }
             ]
           },
@@ -1689,7 +1698,7 @@
             "States.ALL"
           ],
           "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
+          "Next": "WriteContainmentFailureAudit"
         }
       ]
     },
@@ -1790,7 +1799,16 @@
         "Message.$": "States.Format('CDO daily workflow failed closed. Run ID: {}, Error: {}, Cause: {}', $.run_id, $.error.Error, $.error.Cause)"
       },
       "ResultPath": "$.fail_closed_alert_result",
-      "Next": "MarkRunFailed"
+      "Next": "MarkRunFailed",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.alert_error",
+          "Next": "WriteAlertDeliveryFailureAudit"
+        }
+      ]
     },
     "WriteAlertDeliveryFailureAudit": {
       "Type": "Task",

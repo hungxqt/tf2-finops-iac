@@ -923,7 +923,7 @@ class TestVerifyBranching:
     def test_escalation_path_chain(self):
         iter_states = _get_map_iterator_states()
         assert iter_states["WriteEscalationAuditForAnomaly"]["Next"] == "SendEscalationAlertForAnomaly"
-        assert iter_states["SendEscalationAlertForAnomaly"]["Next"] == "SendPendingStatusMessageForAnomaly"
+        assert iter_states["SendEscalationAlertForAnomaly"]["Next"] == "AnomalyEscalated"
 
     def test_notify_ai_rollback_path_format(self):
         """NotifyAIRollbackForAnomaly must use States.Format path for /v1/audit/{id}/rollback."""
