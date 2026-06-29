@@ -83,16 +83,6 @@ variable "destroyable" {
   description = "Set to true to make dashboard data S3 bucket destroyable (Sandbox exceptions)"
 }
 
-variable "dashboard_api_vpc_origin_alb_arn" {
-  type        = string
-  description = "The ARN of the private internal ALB for the AI engine API"
-}
-
-variable "dashboard_api_origin_domain_name" {
-  type        = string
-  description = "The domain name of the private internal ALB for the AI engine API"
-}
-
 variable "dashboard_replica_kms_key_arn" {
   type        = string
   description = "The ARN of the KMS key in the replica region"

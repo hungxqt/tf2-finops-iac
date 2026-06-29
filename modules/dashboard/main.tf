@@ -552,20 +552,7 @@ resource "aws_wafv2_web_acl" "cloudfront" {
   tags = var.tags
 }
 
-resource "aws_cloudfront_vpc_origin" "api" {
-  vpc_origin_endpoint_config {
-    arn                    = var.dashboard_api_vpc_origin_alb_arn
-    name                   = "${var.project_name}-${var.environment}-vpc-origin"
-    http_port              = 80
-    https_port             = 443
-    origin_protocol_policy = "https-only"
 
-    origin_ssl_protocols {
-      items    = ["TLSv1.2"]
-      quantity = 1
-    }
-  }
-}
 
 resource "aws_cloudfront_distribution" "dashboard" {
   # checkov:skip=CKV_AWS_310: "Origin failover is enabled via origin_group"
@@ -627,14 +614,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
     }
   }
 
-  origin {
-    domain_name = var.dashboard_api_origin_domain_name
-    origin_id   = "VpcOrigin-API"
 
-    vpc_origin_config {
-      vpc_origin_id = aws_cloudfront_vpc_origin.api.id
-    }
-  }
 
   enabled             = true
   is_ipv6_enabled     = true
@@ -699,37 +679,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
     }
   }
 
-  ordered_cache_behavior {
-    path_pattern     = "/v1/*"
-    allowed_methods  = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
-    cached_methods   = ["GET", "HEAD"]
-    target_origin_id = "VpcOrigin-API"
 
-    forwarded_values {
-      query_string = true
-      cookies {
-        forward = "none"
-      }
-      headers = ["*"]
-    }
-
-    viewer_protocol_policy = "redirect-to-https"
-    min_ttl                = 0
-    default_ttl            = 0
-    max_ttl                = 0
-
-    lambda_function_association {
-      event_type   = "viewer-request"
-      lambda_arn   = aws_lambda_function.edge_viewer_auth.qualified_arn
-      include_body = false
-    }
-
-    lambda_function_association {
-      event_type   = "origin-request"
-      lambda_arn   = aws_lambda_function.edge_origin_sigv4.qualified_arn
-      include_body = true
-    }
-  }
 
   restrictions {
     geo_restriction {
@@ -1146,10 +1096,7 @@ data "archive_file" "dashboard_auth" {
     filename = "viewer_auth.py"
   }
 
-  source {
-    content  = file("${path.module}/../../lambda_src/edge/dashboard_auth/origin_sigv4.py")
-    filename = "origin_sigv4.py"
-  }
+
 
   source {
     content  = <<EOF
@@ -1183,24 +1130,7 @@ resource "aws_lambda_function" "edge_viewer_auth" {
   tags = var.tags
 }
 
-resource "aws_lambda_function" "edge_origin_sigv4" {
-  # checkov:skip=CKV_AWS_50: "Lambda@Edge does not support X-Ray active tracing"
-  # checkov:skip=CKV_AWS_115: "Lambda@Edge does not support reserved concurrency"
-  # checkov:skip=CKV_AWS_116: "Lambda@Edge does not support DLQs"
-  # checkov:skip=CKV_AWS_117: "Lambda@Edge must not be deployed inside a VPC"
-  # checkov:skip=CKV_AWS_272: "Code signing is not configured for edge authentication handlers"
-  provider         = aws.us_east_1
-  function_name    = "${var.project_name}-${var.environment}-edge-origin-sigv4"
-  description      = "Lambda@Edge for dashboard origin requests using SigV4 signing"
-  role             = aws_iam_role.edge_auth.arn
-  handler          = "origin_sigv4.handler"
-  runtime          = "python3.12"
-  filename         = data.archive_file.dashboard_auth.output_path
-  source_code_hash = data.archive_file.dashboard_auth.output_base64sha256
-  publish          = true
 
-  tags = var.tags
-}
 
 resource "terraform_data" "destroy_guard" {
   count = var.destroyable ? 0 : 1

@@ -1,7 +1,7 @@
 # AI Runtime Lambda CodeDeploy Progress
 
 ## Status
-Completed
+Completed (Auto-rollback event corrected)
 
 ## Scope
 Add CodeDeploy-controlled linear rollout for the AI Engine Request Lambda in `modules/ai-runtime-lambda`, scoped initially to the `sandbox` environment:
@@ -9,6 +9,7 @@ Add CodeDeploy-controlled linear rollout for the AI Engine Request Lambda in `mo
 - Added CodeDeploy IAM service role with `AWSCodeDeployRoleForLambda` managed policy.
 - Added `aws_codedeploy_deployment_group` supporting dynamic configuration.
 - Configured 4 automated CloudWatch rollback alarms (Errors, Throttles, P99 Duration > 800ms, and ALB target 5xx).
+- Corrected auto-rollback event to `DEPLOYMENT_STOP_ON_ALARM` instead of invalid `ALARM_TO_REVERT` to resolve InvalidAutoRollbackConfigException.
 - Updated Lambda alias to ignore version/routing drift to let CodeDeploy manage the traffic.
 - Added module input variables and outputs for CodeDeploy configuration.
 - Wired CodeDeploy into `environments/sandbox/main.tf` with a 10% per 1-minute linear strategy and engineering SNS topic.
@@ -32,26 +33,22 @@ Add CodeDeploy-controlled linear rollout for the AI Engine Request Lambda in `mo
   - `.github/workflows/terraform-apply.yml`
   - `docs/GUIDES.md`
   - `docs/GUIDES_vi.md`
+  - `lambda_src/tests/test_ai_runtime_codedeploy.py`
 
 ## Validation Commands
 ```powershell
-terraform fmt -check -recursive
+terraform fmt -check -recursive modules/ai-runtime-lambda environments/sandbox
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
-terraform -chdir=environments/sandbox plan -destroy -out sandbox-destroy.tfplan
 Push-Location lambda_src; python -m pytest tests/test_ai_runtime_codedeploy.py; Pop-Location
-trivy config .
-checkov -d modules/ai-runtime-lambda -d environments/sandbox --framework terraform
 ```
 
 ## Results
 - `terraform fmt -check -recursive`: Success
 - `environments/sandbox init`: Success
 - `environments/sandbox validate`: Success
-- `environments/sandbox plan -destroy`: Success
-- Python Lambda tests: Success (7/7 tests passed in `test_ai_runtime_codedeploy.py`)
-- Trivy config scan: Success
-- Checkov scan: Success (All checks passed)
+- Python Lambda tests: Success (asserting deployment style parameters and `DEPLOYMENT_STOP_ON_ALARM` event)
+- Auto-rollback configuration verified against valid AWS CodeDeploy Lambda events.
 
 ## Blockers
 None

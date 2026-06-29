@@ -22,6 +22,11 @@ def test_codedeploy_app_and_group_exist():
     assert "resource \"aws_codedeploy_deployment_group\" \"request\"" in content
     assert "deployment_config_name = var.codedeploy_deployment_config_name" in content
 
+    # Assert deployment style is Blue/Green with traffic control
+    assert "deployment_style {" in content
+    assert "deployment_type   = \"BLUE_GREEN\"" in content
+    assert "deployment_option = \"WITH_TRAFFIC_CONTROL\"" in content
+
 def test_codedeploy_role_exists():
     content = get_module_main_tf()
     assert "resource \"aws_iam_role\" \"codedeploy\"" in content
@@ -38,7 +43,8 @@ def test_rollback_alarms_and_auto_rollback():
     # Check for the auto rollback config
     assert "auto_rollback_configuration {" in content
     assert '"DEPLOYMENT_FAILURE"' in content
-    assert '"ALARM_TO_REVERT"' in content
+    assert '"DEPLOYMENT_STOP_ON_ALARM"' in content
+    assert '"ALARM_TO_REVERT"' not in content
 
     # Verify alarms are declared
     assert "aws_cloudwatch_metric_alarm\" \"request_errors\"" in content

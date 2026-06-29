@@ -589,9 +589,14 @@ resource "aws_codedeploy_deployment_group" "request" {
   service_role_arn       = aws_iam_role.codedeploy[0].arn
   deployment_config_name = var.codedeploy_deployment_config_name
 
+  deployment_style {
+    deployment_type   = "BLUE_GREEN"
+    deployment_option = "WITH_TRAFFIC_CONTROL"
+  }
+
   auto_rollback_configuration {
     enabled = true
-    events  = ["DEPLOYMENT_FAILURE", "ALARM_TO_REVERT"]
+    events  = ["DEPLOYMENT_FAILURE", "DEPLOYMENT_STOP_ON_ALARM"]
   }
 
   alarm_configuration {

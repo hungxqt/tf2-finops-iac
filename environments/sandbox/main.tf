@@ -644,8 +644,6 @@ module "dashboard" {
   enable_quicksight                   = false
   dashboard_kms_key_arn               = module.lakehouse.data_kms_key_arn
   dashboard_replica_kms_key_arn       = aws_kms_key.replica.arn
-  dashboard_api_vpc_origin_alb_arn    = module.ai_runtime_lambda.alb_arn
-  dashboard_api_origin_domain_name    = module.ai_runtime_lambda.alb_dns_name
   dashboard_data_prefix               = "summaries/"
   s3_logging_bucket_id                = module.lakehouse.logging_bucket_name
   dashboard_assets_replica_bucket_arn = aws_s3_bucket.dashboard_assets_replica.arn

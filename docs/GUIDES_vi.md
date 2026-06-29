@@ -208,9 +208,9 @@ terraform output
 
 ### Bước 3.1: Triển khai Dashboard & Bàn giao Tài nguyên (Asset Handoff)
 Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard đã sẵn sàng. Quy trình bàn giao tuân theo các quy tắc sau:
-1. **Vai trò của Terraform**: Terraform khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution với VPC Origin và liên kết Lambda@Edge, Cognito Identity & User Pools, các Athena named queries và vai trò IAM).
+1. **Vai trò của Terraform**: Terraform khởi tạo các tài nguyên AWS nền tảng (S3 buckets, CloudFront distribution không bao gồm cấu hình VPC Origin/origin Lambda@Edge, Cognito Identity & User Pools, các Athena named queries và vai trò IAM).
 2. **Cổng Xác thực (Authenticated Front Door)**: Tất cả tài nguyên tĩnh và tệp tóm tắt JSON (dưới `/${dashboard_data_prefix}*`) được phục vụ qua CloudFront và bảo vệ bởi hàm Lambda@Edge viewer-request sử dụng xác thực Cognito PKCE.
-3. **Định tuyến API qua VPC Origin**: Các yêu cầu gửi tới `/v1/*` được ký bằng AWS SigV4 thông qua Lambda@Edge origin-request trước khi chuyển tiếp tới private internal ALB, đồng thời loại bỏ các cookie Cognito.
+3. **Không định tuyến API trực tiếp (Đã tắt)**: Việc định tuyến proxy API `/v1/*` trực tiếp qua CloudFront đã bị tắt do AWS không hỗ trợ liên kết các hàm Lambda@Edge origin-request với các phân phối CloudFront sử dụng VPC Origin. Các truy vấn AI trực tiếp và hành động ngăn chặn (containment) tiếp tục chạy an toàn qua tích hợp `VpcAlbCallerLambda`.
 4. **Tải lên Tài nguyên Static (Asset Upload)**: Các tài nguyên static của frontend (ứng dụng giao diện UI) phải được tải lên riêng biệt vào S3 bucket chứa static assets (được cấu hình trong giá trị đầu ra `dashboard_asset_bucket_name`).
 5. **Nhóm Cognito (Cognito Groups)**: Người dùng cần được thêm vào các nhóm Cognito tương ứng (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) để kiểm soát quyền hạn.
 6. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi dữ liệu chi phí phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).

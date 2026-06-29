@@ -58,21 +58,6 @@ output "edge_auth_viewer_lambda_qualified_arn" {
   value       = aws_lambda_function.edge_viewer_auth.qualified_arn
 }
 
-output "edge_auth_origin_lambda_qualified_arn" {
-  description = "The qualified ARN of the origin request authentication Lambda@Edge function"
-  value       = aws_lambda_function.edge_origin_sigv4.qualified_arn
-}
-
-output "vpc_origin_id" {
-  description = "The ID of the CloudFront VPC origin"
-  value       = aws_cloudfront_vpc_origin.api.id
-}
-
-output "api_origin_id" {
-  description = "The origin ID used for the VPC ALB API origin"
-  value       = "VpcOrigin-API"
-}
-
 output "cognito_group_names" {
   description = "The names of the Cognito user groups created"
   value = [

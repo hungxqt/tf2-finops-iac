@@ -25,20 +25,34 @@ def test_cognito_identity_pool_token_check():
 
 def test_cloudfront_behaviors():
     main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    outputs_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/outputs.tf"))
+    
     with open(main_tf_path, "r", encoding="utf-8") as f:
         content = f.read()
+    with open(outputs_tf_path, "r", encoding="utf-8") as f:
+        outputs_content = f.read()
         
-    # Assert aws_cloudfront_vpc_origin exists
-    assert "resource \"aws_cloudfront_vpc_origin\" \"api\"" in content
-    assert "VpcOrigin-API" in content
+    # Assert aws_cloudfront_vpc_origin does not exist
+    assert "resource \"aws_cloudfront_vpc_origin\" \"api\"" not in content
+    assert "VpcOrigin-API" not in content
+    
+    # Assert edge_origin_sigv4 is not present in main.tf
+    assert "resource \"aws_lambda_function\" \"edge_origin_sigv4\"" not in content
+    assert "aws_lambda_function.edge_origin_sigv4.qualified_arn" not in content
     
     # Assert viewer request Lambda@Edge is associated
     assert "aws_lambda_function.edge_viewer_auth.qualified_arn" in content
-    assert "aws_lambda_function.edge_origin_sigv4.qualified_arn" in content
     
-    # Verify ordered cache behaviors have correct configuration
-    assert "/v1/*" in content
+    # Verify ordered cache behaviors for v1 do not exist
+    assert "/v1/*" not in content
+    
+    # Verify viewer request Lambda@Edge auth still protects static/data behaviors
     assert "dashboard_data_prefix" in content
+    
+    # Assert VPC origin/origin signing outputs do not exist
+    assert "edge_auth_origin_lambda_qualified_arn" not in outputs_content
+    assert "vpc_origin_id" not in outputs_content
+    assert "api_origin_id" not in outputs_content
 
 def test_s3_replication_kms():
     main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))

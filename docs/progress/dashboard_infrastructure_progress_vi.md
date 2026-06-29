@@ -1,10 +1,10 @@
 # Tiáº¿n Ä‘á»™ Dashboard Infrastructure
 
 ## Tráº¡ng thÃ¡i
-Hoàn thành (Đã thắt chặt bảo mật; đã tách publish Frontend)
+Hoàn thành (Đã gỡ bỏ API Proxy qua VPC Origin do giới hạn tương thích Lambda@Edge)
 
 ## Pháº¡m vi
-Khắc phục và thắt chặt bảo mật cho hạ tầng lưu trữ Dashboard, định tuyến API, và truy cập dữ liệu bằng AWS S3, CloudFront VPC Origin, Cognito PKCE, và Lambda@Edge. Cập nhật mới nhất rollback việc Terraform publish frontend assets để UI shell được build/upload độc lập, trong khi Terraform vẫn giữ `dashboard_runtime_config.json`.
+Khắc phục và thắt chặt bảo mật cho hạ tầng lưu trữ Dashboard, định tuyến API, và truy cập dữ liệu bằng AWS S3, Cognito PKCE, và Lambda@Edge. VPC Origin và proxy API qua origin-request Lambda@Edge đã bị loại bỏ do giới hạn của AWS đối với việc liên kết origin-request Lambda@Edge với các phân phối CloudFront sử dụng VPC Origin; các cuộc gọi AI tiếp tục chạy qua VpcAlbCallerLambda.
 
 ## CÃ¡c file Ä‘Ã£ thay Ä‘á»•i
 * `modules/dashboard/main.tf` (Thay Ä‘á»•i)
@@ -26,7 +26,7 @@ Khắc phục và thắt chặt bảo mật cho hạ tầng lưu trữ Dashboard
 * `environments/prod/main.tf` (Thay Ä‘á»•i)
 * `environments/prod/outputs.tf` (Thay Ä‘á»•i)
 * `lambda_src/edge/dashboard_auth/viewer_auth.py` (Táº¡o má»›i)
-* `lambda_src/edge/dashboard_auth/origin_sigv4.py` (Táº¡o má»›i)
+* `lambda_src/edge/dashboard_auth/origin_sigv4.py` (Tạo mới - hiện không còn sử dụng/đã xóa khỏi TF)
 * `lambda_src/tests/test_dashboard_infrastructure.py` (Thay Ä‘á»•i)
 * `lambda_src/tests/test_dashboard_static_assets.py` (Táº¡o má»›i)
 * `scripts/package-lambdas.ps1` (Thay Ä‘á»•i)
@@ -37,7 +37,7 @@ terraform fmt -check -recursive modules/dashboard modules/ai-runtime-lambda envi
 powershell -ExecutionPolicy Bypass -File ./scripts/package-lambdas.ps1
 cd lambda_src
 python -m pytest tests/test_dashboard_infrastructure.py
-python -m py_compile lambda_src\edge\dashboard_auth\viewer_auth.py lambda_src\edge\dashboard_auth\origin_sigv4.py
+python -m py_compile lambda_src\edge\dashboard_auth\viewer_auth.py
 terraform fmt -check -recursive modules/dashboard
 terraform -chdir=environments/prod validate
 cd lambda_src
@@ -49,12 +49,12 @@ terraform -chdir=environments/prod validate
 ```
 
 ## Káº¿t quáº£
-* ÄÃ£ kháº¯c phá»¥c lá»—i bá» qua xÃ¡c thá»±c vÃ  luá»“ng OAuth khÃ´ng an toÃ n: loáº¡i bá» implicit flow; báº¯t buá»™c Cognito Code + PKCE táº¡i CloudFront edge qua Lambda@Edge.
-* CÃ¡c Ä‘Æ°á»ng dáº«n S3 data vÃ  API Ä‘Æ°á»£c báº£o vá»‡ dÆ°á»›i CloudFront edge authentication (viewer-request kiá»ƒm tra cookies vÃ  xÃ¡c thá»±c claims/UserInfo vá»›i Cognito).
-* Äá»‹nh tuyáº¿n tá»›i private ALB qua CloudFront VPC Origin, táº¯t cache cho request `/v1/*`, vÃ  loáº¡i bá» Cognito cookies trÆ°á»›c khi chuyá»ƒn tiáº¿p.
+* Ä Ã£ kháº¯c phá»¥c lá»—i bá»  qua xÃ¡c thá»±c vÃ  luá»“ng OAuth khÃ´ng an toÃ n: loáº¡i bá»  implicit flow; báº¯t buá»™c Cognito Code + PKCE táº¡i CloudFront edge qua Lambda@Edge.
+* CÃ¡c Ä‘Æ°á» ng dáº«n S3 data vÃ  API Ä‘Æ°á»£c báº£o vá»‡ dÆ°á»›i CloudFront edge authentication (viewer-request kiá»ƒm tra cookies vÃ  xÃ¡c thá»±c claims/UserInfo vá»›i Cognito).
+* Proxy API trực tiếp qua VPC Origin và ký SigV4 ở Lambda@Edge origin-request đã bị loại bỏ/tắt vì CloudFront không hỗ trợ liên kết các hàm Lambda@Edge origin-request với các phân phối sử dụng VPC Origin. Các cuộc gọi AI tiếp tục chạy qua VpcAlbCallerLambda.
 * S3 replication Ä‘Æ°á»£c tháº¯t cháº·t: báº­t KMS source selection vÃ  destination KMS key encryption cho assets vÃ  data replica buckets.
-* ÄÃ£ giáº£m blast radius khi teardown sandbox báº±ng `force_destroy = var.destroyable` cho bucket `dashboard_assets`.
-* ÄÃ£ xá»­ lÃ½ provider drift báº±ng cÃ¡ch cáº­p nháº­t module version constraints yÃªu cáº§u AWS provider `>= 5.100`.
+* Ä Ã£ giáº£m blast radius khi teardown sandbox báº±ng `force_destroy = var.destroyable` cho bucket `dashboard_assets`.
+* Ä Ã£ xá»­ lÃ½ provider drift báº±ng cÃ¡ch cáº­p nháº­t module version constraints yÃªu cáº§u AWS provider `>= 5.100`.
 * Cookie xÃ¡c thá»±c Lambda@Edge Ä‘Ã£ Ä‘Æ°á»£c tháº¯t cháº·t: access token vÃ  ID token cookies dÃ¹ng `Secure`, `HttpOnly`, `SameSite=Strict`, vÃ  `Max-Age` giá»›i háº¡n.
 * Báº£o vá»‡ CSRF cho OAuth callback Ä‘Ã£ Ä‘Æ°á»£c tháº¯t cháº·t: state mang nonce vÃ  redirect path Ä‘Ã£ sanitize, callback kiá»ƒm tra nonce vá»›i cookie ngáº¯n háº¡n `Cognito-CSRF-Nonce`.
 * Cookie táº¡m cho PKCE vÃ  CSRF dÃ¹ng thá»i háº¡n ngáº¯n vÃ  `SameSite=Lax` Ä‘á»ƒ redirect tá»« Cognito Hosted UI hoÃ n táº¥t Ä‘Ãºng, trong khi session cookies váº«n giá»¯ `SameSite=Strict`.
