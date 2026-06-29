@@ -246,6 +246,13 @@ resource "aws_cloudwatch_log_group" "sfn" {
   tags              = var.tags
 }
 
+resource "aws_cloudwatch_log_group" "feedback_sfn" {
+  name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-human-feedback"
+  retention_in_days = 365
+  kms_key_id        = var.cloudwatch_log_kms_key_arn
+  tags              = var.tags
+}
+
 # Step Functions Standard State Machine:
 resource "aws_sfn_state_machine" "workflow" {
   name     = "${var.project_name}-${var.environment}-workflow"
@@ -271,6 +278,28 @@ resource "aws_sfn_state_machine" "workflow" {
 
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+
+  tracing_configuration {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
+resource "aws_sfn_state_machine" "feedback" {
+  name     = "${var.project_name}-${var.environment}-human-feedback"
+  role_arn = aws_iam_role.step_functions.arn
+
+  definition = jsonencode(jsondecode(templatefile("${path.module}/feedback_statemachine.json", {
+    vpc_alb_caller_lambda_arn = var.lambda_function_arns["vpc_alb_caller"]
+    audit_writer_lambda_arn   = var.lambda_function_arns["audit_writer"]
+  })))
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.feedback_sfn.arn}:*"
     include_execution_data = true
     level                  = "ALL"
   }

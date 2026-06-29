@@ -33,6 +33,11 @@ output "state_machine_arn" {
   value       = module.orchestration.state_machine_arn
 }
 
+output "feedback_state_machine_arn" {
+  description = "The ARN of the asynchronous human feedback Step Functions State Machine"
+  value       = module.orchestration.feedback_state_machine_arn
+}
+
 output "scheduler_arn" {
   description = "The ARN of the EventBridge Scheduler schedule"
   value       = module.orchestration.scheduler_arn
