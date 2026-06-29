@@ -223,6 +223,10 @@ Với tính năng hỗ trợ nhiều tài khoản phân tích mục tiêu (analy
 Do đó, bạn phải seed một dòng dữ liệu cho mỗi AWS Account ID của tài khoản liên kết đích được phân tích, chứ không chỉ cho tài khoản quản trị thực thi.
 Xem tài liệu hướng dẫn chi tiết [ACCOUNT_POLICY_SEEDING_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING_vi.md) để biết thêm thông tin cấu trúc item, chuỗi lệnh PowerShell và cách khắc phục sự cố xác minh.
 
+### Bước 3.3: Hướng dẫn Vận hành Chạy Thủ công Step Functions (Manual Step Functions Execution Runbook)
+Khi cấu hình `scheduler_enabled = false`, hoặc khi cần thực hiện các lượt chạy kiểm thử (ad-hoc) và xác minh, quy trình Orchestrator Step Functions có thể được kích hoạt thủ công.
+Xem tài liệu hướng dẫn vận hành chi tiết tại [MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md) để nắm rõ các điều kiện tiên quyết, định dạng payload đầu vào (cho cả chạy đơn tài khoản và đa tài khoản), chuỗi lệnh PowerShell thực thi và cách theo dõi trạng thái lượt chạy.
+
 
 ---
 

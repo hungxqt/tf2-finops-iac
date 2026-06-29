@@ -182,7 +182,7 @@ To destroy the sandbox environment for cleanups or testing teardowns:
    ```
 
 > [!WARNING]
-> **AWS Object Lock Teardown Limitation**: 
+> **AWS Object Lock Teardown Limitation**:
 > If the sandbox audit bucket already contains compliance-mode retained object versions, AWS enforces a hard restriction that prevents deleting these versions until their retention period expires. In this case, Terraform will fail to delete the audit bucket itself. Compliance-mode object lock is disabled for *newly created* sandbox audit buckets to make teardowns possible, but if retention was previously enabled and objects exist, they must expire before full teardown can succeed.
 >
 > **AWS Lambda VPC ENI Teardown Delay**:
@@ -224,6 +224,12 @@ Before running or enabling the Orchestrator Step Functions workflow (either manu
 With the multi-account analysis targets capability, the orchestrator runs in the management/CDO account but fans out over target linked member accounts specified in `analysis_target_account_ids` (configured via `telemetry_member_account_ids` in each environment root).
 Therefore, you must seed a row for each target linked/member AWS Account ID being analyzed, not only the executing management account.
 Refer to the dedicated [ACCOUNT_POLICY_SEEDING.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING.md) guide for detailed item schema specifications, PowerShell command sequences, and verification troubleshooting steps.
+
+
+### Step 3.3: Manual Step Functions Execution Runbook
+When scheduled runs are disabled (`scheduler_enabled = false`), or for ad hoc and verification runs, the Orchestrator Step Functions workflow can be triggered manually.
+Refer to the dedicated [MANUAL_STEP_FUNCTIONS_EXECUTION.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/MANUAL_STEP_FUNCTIONS_EXECUTION.md) guide for prerequisites, execution payloads (single-account and multi-account), PowerShell command sequences, and execution monitoring.
+
 
 
 ---
