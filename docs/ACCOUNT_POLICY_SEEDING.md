@@ -6,7 +6,7 @@ This guide describes the operator procedure for seeding the `account-policy` Dyn
 
 ## 1. Overview
 
-The `LoadAccountPolicy` step in the Step Functions orchestrator retrieves mapping context from DynamoDB using the executing AWS Account ID as the primary key. If this table is unseeded, or if the account ID does not match, the workflow will fail.
+The `LoadAccountPolicy` step in the Step Functions orchestrator retrieves mapping context from DynamoDB using the linked analysis AWS Account ID currently being analyzed as the primary key. Because the orchestrator loops over all target accounts defined in `analysis_target_account_ids` (configured via `telemetry_member_account_ids`), all analyzed linked accounts must have their policies seeded in this table. If the table is unseeded for any target account, the workflow execution for that target will fail.
 
 ### Item Schema
 The table expects items conforming to the following JSON schema format:
@@ -89,8 +89,8 @@ If `get-item` returns an empty response (i.e., no item found matching the execut
 This occurs because the `ResultSelector` block relies on these exact fields to extract execution context.
 
 ### Account ID Matching
-* **Manual Executions**: If you trigger the Step Functions state machine manually, ensure that the execution input contains the seeded `"account_id"` value.
-* **Scheduled Executions**: The EventBridge Scheduler triggers the state machine using input containing the deploying/current AWS account ID. The seeded row's primary key must match this value exactly.
+* **Manual Executions**: If you trigger the Step Functions state machine manually, ensure that the execution input contains either a single `"account_id"` or `"analysis_targets"` representing the accounts you want to analyze. These account IDs must be seeded.
+* **Scheduled Executions**: The EventBridge Scheduler triggers the state machine using input containing `management_account_id` and `analysis_targets` (which is a list of linked account IDs). Ensure that every account ID present in the `analysis_targets` list has a corresponding seeded row in the table.
 
 ### Guardrails
 * **`scheduler_enabled`**: Keep `scheduler_enabled = false` in your Terraform configurations until the DynamoDB row has been successfully seeded and verified via consistent read. This prevents scheduled runs from launching in a misconfigured state.

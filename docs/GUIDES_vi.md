@@ -218,8 +218,11 @@ Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard
 
 
 ### Bước 3.2: Khởi tạo dữ liệu bảng DynamoDB Account Policy (Account Policy Seeding)
-Trước khi chạy hoặc kích hoạt quy trình Orchestrator Step Functions (chạy thủ công hoặc thông qua trình lập lịch EventBridge), bạn phải khởi tạo dữ liệu (seed) cho bảng DynamoDB `account-policy` của môi trường với AWS Account ID và ngữ cảnh tương thích tương ứng.
+Trước khi chạy hoặc kích hoạt quy trình Orchestrator Step Functions (chạy thủ công hoặc thông qua trình lập lịch EventBridge), bạn phải khởi tạo dữ liệu (seed) cho bảng DynamoDB `account-policy` của môi trường.
+Với tính năng hỗ trợ nhiều tài khoản phân tích mục tiêu (analysis targets), orchestrator sẽ chạy trên tài khoản quản trị (management/CDO account) nhưng phân nhánh và chạy song song trên các tài khoản liên kết (linked member accounts) được chỉ định trong `analysis_target_account_ids` (được cấu hình qua `telemetry_member_account_ids` ở gốc môi trường).
+Do đó, bạn phải seed một dòng dữ liệu cho mỗi AWS Account ID của tài khoản liên kết đích được phân tích, chứ không chỉ cho tài khoản quản trị thực thi.
 Xem tài liệu hướng dẫn chi tiết [ACCOUNT_POLICY_SEEDING_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING_vi.md) để biết thêm thông tin cấu trúc item, chuỗi lệnh PowerShell và cách khắc phục sự cố xác minh.
+
 
 ---
 

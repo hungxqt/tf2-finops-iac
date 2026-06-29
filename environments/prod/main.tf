@@ -582,6 +582,7 @@ module "orchestration" {
   scheduler_kms_key_arn        = module.lakehouse.data_kms_key_arn
   tags                         = var.tags
   destroyable                  = var.destroyable
+  analysis_target_account_ids  = var.telemetry_member_account_ids
 }
 
 # 8. Observability Module

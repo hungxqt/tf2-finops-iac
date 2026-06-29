@@ -44,11 +44,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
             payload = event_data
             
         account_id = payload.get("account_id") or event_data.get("account_id") or ""
+        management_account_id = payload.get("management_account_id") or event_data.get("management_account_id") or ""
         run_id = payload.get("run_id") or event_data.get("run_id") or f"run-{uuid.uuid4()}"
         correlation_id = payload.get("correlation_id") or event_data.get("correlation_id") or str(uuid.uuid4())
         execution_date = payload.get("execution_date") or event_data.get("execution_date") or _utc_date()
         cost_period = payload.get("cost_period") or event_data.get("cost_period") or execution_date[:7]
-        tenant_id = payload.get("tenant_id") or event_data.get("tenant_id") or _default_tenant_id(account_id)
         
         is_ad_hoc = False
         if "is_ad_hoc" in payload:
@@ -64,6 +64,43 @@ def handle_request(event_data: dict, context: Any) -> dict:
         ai_retry = payload.get("ai_retry") or event_data.get("ai_retry") or {"count": 0, "max": 6}
         ce_retry = payload.get("ce_retry") or event_data.get("ce_retry") or {"count": 0, "max": 3}
         
+        # Schedulers / manual targets
+        analysis_targets = payload.get("analysis_targets") or event_data.get("analysis_targets")
+        
+        # Manual run fallback
+        if not analysis_targets:
+            if account_id:
+                analysis_targets = [{"account_id": account_id}]
+                if not management_account_id:
+                    management_account_id = account_id
+            else:
+                analysis_targets = []
+        else:
+            # Normalize to list of dicts with account_id
+            normalized_targets = []
+            for target in analysis_targets:
+                if isinstance(target, dict) and "account_id" in target:
+                    normalized_targets.append(target)
+                elif isinstance(target, str):
+                    normalized_targets.append({"account_id": target})
+                else:
+                    normalized_targets.append({"account_id": str(target)})
+            analysis_targets = normalized_targets
+
+        # Validate that scheduled runs contain at least one analysis target.
+        # Scheduled run check: is_ad_hoc is False, or trigger_type is scheduled, or similar
+        trigger_type = payload.get("trigger_type") or event_data.get("trigger_type") or ""
+        is_scheduled = (trigger_type == "scheduled") or (not is_ad_hoc and not account_id)
+        
+        if is_scheduled and not analysis_targets:
+            raise ValueError("Scheduled run contains no analysis targets")
+            
+        if not analysis_targets:
+            raise ValueError("No analysis targets or account_id provided for execution")
+
+        tenant_id_account = account_id or management_account_id or (analysis_targets[0]["account_id"] if analysis_targets else "")
+        tenant_id = payload.get("tenant_id") or event_data.get("tenant_id") or _default_tenant_id(tenant_id_account)
+        
         details = {
             "run_id": run_id,
             "correlation_id": correlation_id,
@@ -76,7 +113,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "ai_retry": ai_retry,
             "ce_retry": ce_retry,
             "force_dry_run": False,
-            "account_id": account_id
+            "account_id": account_id or management_account_id,
+            "management_account_id": management_account_id,
+            "analysis_targets": analysis_targets
         }
         
         response = finops_common.create_response("OK", run_id, correlation_id, "state", details)

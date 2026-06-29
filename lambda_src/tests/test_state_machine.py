@@ -30,9 +30,19 @@ def check_asl_file(asl_path, is_template=True):
     asl = json.loads(processed_content)
     
     assert "States" in asl, "ASL missing 'States' key"
-    states = asl["States"]
-    # G1 fix: per-anomaly states are now inside the Map iterator
-    iter_states = _get_iter_states(states)
+    top_states = asl["States"]
+    
+    # Assert ProcessAnalysisTargets Map state exists at top level
+    assert "ProcessAnalysisTargets" in top_states, f"ProcessAnalysisTargets Map state missing from top-level states in {asl_path}"
+    account_map = top_states["ProcessAnalysisTargets"]
+    assert account_map["Type"] == "Map", f"ProcessAnalysisTargets must be of Type Map in {asl_path}"
+    
+    # Get the account-level states (the per-account states that were previously top-level)
+    states = account_map["Iterator"]["States"]
+    
+    # Get the anomaly-level states inside the nested ProcessDetectedAnomalies
+    map_state = states.get("ProcessDetectedAnomalies", {})
+    iter_states = map_state.get("Iterator", {}).get("States", {})
     
     # Assert no detection polling states remain and no /v1/status detection path exists
     polling_states = ["WaitForAIResult", "PollAIResult", "CheckDBResultExists", "FormatAIResult", "AIResultDecision"]
@@ -44,8 +54,11 @@ def check_asl_file(asl_path, is_template=True):
         assert "status" not in resource.lower(), f"State '{state_name}' has status in resource path: {resource}"
         
     # Assert required top-level states exist
+    assert "PrepareRunContext" in top_states, f"PrepareRunContext missing from top-level states in {asl_path}"
+    assert "ProcessAnalysisTargets" in top_states, f"ProcessAnalysisTargets missing from top-level states in {asl_path}"
+    
+    # Assert required account-level states exist
     required_states = [
-        "PrepareRunContext",
         "CheckAdHocQuota",
         "CheckErrorBudgetLock",
         "CheckTelemetryQuality",
@@ -55,7 +68,6 @@ def check_asl_file(asl_path, is_template=True):
         "InvokeDetect",
         "EvaluateDetectResponse",
         "SetAIFailClosedError",
-        # G1 fix: per-anomaly states are inside the Map iterator, not top-level
         "ProcessDetectedAnomalies",
         "SummarizeAnomalyResults",
         "EvaluateAnomalySummary",
@@ -94,7 +106,7 @@ def check_asl_file(asl_path, is_template=True):
         assert s in iter_states, f"Required iterator state '{s}' missing from Map iterator in {asl_path}"
         
     # Assert PrepareRunContext receives full input and defaults is_ad_hoc
-    prep_state = states["PrepareRunContext"]
+    prep_state = top_states["PrepareRunContext"]
     assert prep_state["Parameters"].get("input.$") == "$", f"PrepareRunContext must receive full input using input.$ = $ in {asl_path}"
     assert "account_id.$" not in prep_state["Parameters"], "PrepareRunContext should not map individual parameters"
     assert "is_ad_hoc.$" not in prep_state["Parameters"], "PrepareRunContext should not map individual parameters"
@@ -370,25 +382,125 @@ def test_state_machine_reachability():
         (os.path.join(os.path.dirname(__file__), "../../docs/statemachine.json"), False)
     ]:
         asl = load_asl(asl_path, is_template)
-        states = asl["States"]
+        top_states = asl["States"]
         start_at = asl["StartAt"]
         
         # 1. Walk root graph
-        unreachable_root = check_reachability(states, start_at)
+        unreachable_root = check_reachability(top_states, start_at)
         assert not unreachable_root, f"Unreachable root states found in {asl_path}: {unreachable_root}"
         
-        # 2. Recursively validate ProcessDetectedAnomalies.Iterator
-        map_state = states.get("ProcessDetectedAnomalies")
-        assert map_state is not None, f"ProcessDetectedAnomalies state missing from {asl_path}"
-        assert map_state.get("Type") == "Map", f"ProcessDetectedAnomalies must be of Type Map in {asl_path}"
-        iterator = map_state.get("Iterator")
-        assert iterator is not None, f"ProcessDetectedAnomalies missing Iterator in {asl_path}"
+        # 2. Walk ProcessAnalysisTargets Map iterator
+        target_map = top_states.get("ProcessAnalysisTargets")
+        assert target_map is not None, f"ProcessAnalysisTargets state missing from {asl_path}"
+        assert target_map.get("Type") == "Map", f"ProcessAnalysisTargets must be of Type Map in {asl_path}"
+        iterator = target_map.get("Iterator")
+        assert iterator is not None, f"ProcessAnalysisTargets missing Iterator in {asl_path}"
         
-        iter_states = iterator.get("States")
-        iter_start_at = iterator.get("StartAt")
-        assert iter_states is not None, f"Iterator missing States in {asl_path}"
-        assert iter_start_at is not None, f"Iterator missing StartAt in {asl_path}"
+        account_states = iterator.get("States")
+        account_start_at = iterator.get("StartAt")
+        assert account_states is not None, f"Iterator missing States in {asl_path}"
+        assert account_start_at is not None, f"Iterator missing StartAt in {asl_path}"
         
-        unreachable_iter = check_reachability(iter_states, iter_start_at)
-        assert not unreachable_iter, f"Unreachable iterator states found in {asl_path}: {unreachable_iter}"
+        unreachable_account = check_reachability(account_states, account_start_at)
+        assert not unreachable_account, f"Unreachable account iterator states found in {asl_path}: {unreachable_account}"
+        
+        # 3. Walk ProcessDetectedAnomalies Map iterator inside account states
+        anomaly_map = account_states.get("ProcessDetectedAnomalies")
+        assert anomaly_map is not None, f"ProcessDetectedAnomalies state missing from {asl_path}"
+        assert anomaly_map.get("Type") == "Map", f"ProcessDetectedAnomalies must be of Type Map in {asl_path}"
+        anomaly_iterator = anomaly_map.get("Iterator")
+        assert anomaly_iterator is not None, f"ProcessDetectedAnomalies missing Iterator in {asl_path}"
+        
+        anomaly_states = anomaly_iterator.get("States")
+        anomaly_start_at = anomaly_iterator.get("StartAt")
+        assert anomaly_states is not None, f"Anomaly iterator missing States in {asl_path}"
+        assert anomaly_start_at is not None, f"Anomaly iterator missing StartAt in {asl_path}"
+        
+        unreachable_anomaly = check_reachability(anomaly_states, anomaly_start_at)
+        assert not unreachable_anomaly, f"Unreachable anomaly iterator states found in {asl_path}: {unreachable_anomaly}"
+
+
+def test_state_machine_explicit_targets():
+    asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
+    with open(asl_template_path, "r", encoding="utf-8") as f:
+        raw_content = f.read()
+    processed_content = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw_content)
+    processed_content = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed_content)
+    asl = json.loads(processed_content)
+    
+    top_states = asl["States"]
+    
+    # 1. ProcessAnalysisTargets exists and is reachable
+    assert "ProcessAnalysisTargets" in top_states
+    
+    target_map = top_states["ProcessAnalysisTargets"]
+    assert target_map["Type"] == "Map"
+    assert target_map["ItemsPath"] == "$.analysis_targets"
+    assert target_map["MaxConcurrency"] == 1
+    
+    # 2. child account context resolves $.account_id before LoadAccountPolicy
+    item_selector = target_map["ItemSelector"]
+    assert item_selector.get("account_id.$") == "$$.Map.Item.Value.account_id", \
+        "Child account context must resolve account_id from $$.Map.Item.Value.account_id"
+    assert item_selector.get("management_account_id.$") == "$.management_account_id"
+    
+    # Check that StartAt of ProcessAnalysisTargets is LoadAccountPolicy
+    iterator = target_map["Iterator"]
+    assert iterator["StartAt"] == "LoadAccountPolicy"
+    
+    # 3. nested account Map and existing anomaly Map do not conflict
+    account_states = iterator["States"]
+    assert "ProcessDetectedAnomalies" in account_states
+    anomaly_map = account_states["ProcessDetectedAnomalies"]
+    assert anomaly_map["Type"] == "Map"
+    
+    # Check that the two map states are distinct and have different ItemsPaths
+    assert target_map["ItemsPath"] != anomaly_map["ItemsPath"]
+    assert anomaly_map["ItemsPath"] == "$.ai_detect_response.anomalies_list"
+
+
+def test_state_machine_no_duplicate_state_names():
+    def collect_state_names(state_machine_dict):
+        state_names = []
+        if "States" in state_machine_dict:
+            for state_name, state_def in state_machine_dict["States"].items():
+                state_names.append(state_name)
+                # Recursively check inside Map states / ItemProcessor / Parallel branches
+                if isinstance(state_def, dict):
+                    # Check for older "Iterator"
+                    if "Iterator" in state_def:
+                        state_names.extend(collect_state_names(state_def["Iterator"]))
+                    # Check for newer "ItemProcessor"
+                    if "ItemProcessor" in state_def:
+                        state_names.extend(collect_state_names(state_def["ItemProcessor"]))
+                    # Check for Parallel "Branches"
+                    if "Branches" in state_def:
+                        for branch in state_def["Branches"]:
+                            state_names.extend(collect_state_names(branch))
+        return state_names
+
+    # Check both files
+    for file_path in [
+        os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json"),
+        os.path.join(os.path.dirname(__file__), "../../docs/statemachine.json")
+    ]:
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        # Clean placeholders so it is valid json
+        processed = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw)
+        processed = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed)
+        asl = json.loads(processed)
+        
+        all_names = collect_state_names(asl)
+        # Check for duplicates
+        seen = set()
+        duplicates = set()
+        for name in all_names:
+            if name in seen:
+                duplicates.add(name)
+            else:
+                seen.add(name)
+        assert not duplicates, f"Duplicate state names found in {file_path}: {duplicates}"
+
+
 

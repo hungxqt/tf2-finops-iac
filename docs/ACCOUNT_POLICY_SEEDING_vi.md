@@ -6,7 +6,7 @@ Tài liệu này hướng dẫn quy trình dành cho người vận hành (opera
 
 ## 1. Tổng quan
 
-Bước `LoadAccountPolicy` trong Orchestrator Step Functions sẽ truy vấn thông tin ánh xạ ngữ cảnh từ DynamoDB bằng cách sử dụng AWS Account ID đang thực thi làm khóa chính. Nếu bảng này chưa được seed, hoặc nếu Account ID không khớp, quy trình (workflow) sẽ bị lỗi.
+Bước `LoadAccountPolicy` trong Orchestrator Step Functions sẽ truy vấn thông tin ánh xạ ngữ cảnh từ DynamoDB bằng cách sử dụng AWS Account ID của tài khoản liên kết (linked account) đang được phân tích làm khóa chính. Vì bộ điều phối (orchestrator) lặp qua tất cả các tài khoản đích được định nghĩa trong `analysis_target_account_ids` (được cấu hình qua `telemetry_member_account_ids`), tất cả các tài khoản liên kết được phân tích phải được seed policy trong bảng này. Nếu bảng này chưa được seed cho bất kỳ tài khoản đích nào, quy trình cho tài khoản đó sẽ thất bại.
 
 ### Cấu trúc DynamoDB Item
 Bảng yêu cầu các bản ghi (item) tuân thủ cấu trúc định dạng JSON sau:
@@ -89,8 +89,8 @@ Nếu lệnh `get-item` trả về kết quả rỗng (không tìm thấy item k
 Lỗi này xảy ra vì khối `ResultSelector` của Task yêu cầu chính xác các trường này để trích xuất ngữ cảnh vận hành.
 
 ### Đồng bộ Account ID
-* **Chạy Thủ công**: Nếu bạn kích hoạt Step Functions State Machine thủ công, hãy đảm bảo dữ liệu đầu vào (input) của lần chạy có chứa giá trị `"account_id"` đã được seed trong DynamoDB.
-* **Chạy Tự động qua Scheduler**: Trình lập lịch EventBridge Scheduler sẽ kích hoạt State Machine bằng cách truyền đầu vào chứa AWS Account ID hiện tại đang triển khai. Khóa chính của dòng dữ liệu được seed phải khớp chính xác với Account ID này.
+* **Chạy Thủ công**: Nếu bạn kích hoạt Step Functions State Machine thủ công, hãy đảm bảo dữ liệu đầu vào (input) của lần chạy có chứa giá trị đơn lẻ `"account_id"` hoặc danh sách `"analysis_targets"` đại diện cho các tài khoản bạn muốn phân tích. Các Account ID này phải được seed sẵn.
+* **Chạy Tự động qua Scheduler**: Trình lập lịch EventBridge Scheduler sẽ kích hoạt State Machine bằng cách truyền đầu vào chứa `management_account_id` và `analysis_targets` (là một danh sách các linked account ID). Hãy đảm bảo mỗi Account ID có trong danh sách `analysis_targets` đều đã có dòng dữ liệu tương ứng được seed trong bảng.
 
 ### Biện pháp Phòng ngừa (Guardrails)
 * **`scheduler_enabled`**: Hãy cấu hình `scheduler_enabled = false` trong các tệp Terraform của bạn cho đến khi dòng dữ liệu DynamoDB được seed thành công và xác minh qua cơ chế consistent read. Điều này giúp ngăn chặn các lịch chạy tự động bắt đầu khi hệ thống chưa được cấu hình đúng.

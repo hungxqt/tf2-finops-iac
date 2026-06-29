@@ -610,6 +610,7 @@ module "orchestration" {
   tags                         = var.tags
   destroyable                  = var.destroyable
   cur_retry_interval_seconds   = 60
+  analysis_target_account_ids  = var.telemetry_member_account_ids
 }
 
 # 8. Observability Module

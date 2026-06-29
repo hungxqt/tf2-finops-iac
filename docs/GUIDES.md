@@ -220,8 +220,11 @@ Once the Terraform plan is applied, the dashboard infrastructure is ready. The h
 
 
 ### Step 3.2: Account Policy DynamoDB Seeding
-Before running or enabling the Orchestrator Step Functions workflow (either manually or via the EventBridge scheduler), you must seed the environment's `account-policy` DynamoDB table with the deploying AWS Account ID and mapping context.
+Before running or enabling the Orchestrator Step Functions workflow (either manually or via the EventBridge scheduler), you must seed the environment's `account-policy` DynamoDB table.
+With the multi-account analysis targets capability, the orchestrator runs in the management/CDO account but fans out over target linked member accounts specified in `analysis_target_account_ids` (configured via `telemetry_member_account_ids` in each environment root).
+Therefore, you must seed a row for each target linked/member AWS Account ID being analyzed, not only the executing management account.
 Refer to the dedicated [ACCOUNT_POLICY_SEEDING.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING.md) guide for detailed item schema specifications, PowerShell command sequences, and verification troubleshooting steps.
+
 
 ---
 

@@ -109,3 +109,24 @@ def test_no_automatic_execution_trigger():
                     
                     # If found anywhere else, assert it's not invoking it automatically
                     assert False, f"Potential automatic start-execution call found in non-documentation file: {file_path}"
+
+
+def test_scheduler_target_input_content():
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    orchestration_main_tf = os.path.join(base_dir, "modules/orchestration/main.tf")
+    with open(orchestration_main_tf, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Assert scheduler target input structure
+    assert "management_account_id = data.aws_caller_identity.current.account_id" in content
+    assert "analysis_targets      = var.analysis_target_account_ids" in content
+    
+    # Find the target block input block
+    target_match = re.search(r'target\s+\{.*?input\s*=\s*jsonencode\(\{(.*?)\}\)', content, re.DOTALL)
+    assert target_match, "Scheduler target JSON input block not found in modules/orchestration/main.tf"
+    input_content = target_match.group(1)
+    
+    # Assert scheduler input no longer uses management account as the analysis account_id
+    assert not re.search(r'\baccount_id\s*=', input_content), "Target input must not specify 'account_id = ...'"
+
+
