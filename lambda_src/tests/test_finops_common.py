@@ -73,3 +73,23 @@ def test_parse_date():
 
     with pytest.raises(ValueError):
         finops_common.parse_date("invalid-date")
+
+
+def test_dynamodb_client_signatures():
+    import inspect
+    from finops_common import DynamoDBClient, RealDynamoDB, FakeDynamoDB
+
+    base_sig = inspect.signature(DynamoDBClient.put_item)
+    real_sig = inspect.signature(RealDynamoDB.put_item)
+    fake_sig = inspect.signature(FakeDynamoDB.put_item)
+
+    # Check that they all have the same parameters
+    assert list(base_sig.parameters.keys()) == ["self", "table_name", "item", "condition_expression"]
+    assert list(real_sig.parameters.keys()) == ["self", "table_name", "item", "condition_expression"]
+    assert list(fake_sig.parameters.keys()) == ["self", "table_name", "item", "condition_expression"]
+
+    # Verify that condition_expression is optional and defaults to None
+    assert base_sig.parameters["condition_expression"].default is None
+    assert real_sig.parameters["condition_expression"].default is None
+    assert fake_sig.parameters["condition_expression"].default is None
+

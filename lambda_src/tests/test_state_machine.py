@@ -503,4 +503,37 @@ def test_state_machine_no_duplicate_state_names():
         assert not duplicates, f"Duplicate state names found in {file_path}: {duplicates}"
 
 
+def test_state_machine_tenant_context_propagation():
+    asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
+    with open(asl_template_path, "r", encoding="utf-8") as f:
+        raw_content = f.read()
+    processed_content = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw_content)
+    processed_content = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed_content)
+    asl = json.loads(processed_content)
+    
+    top_states = asl["States"]
+    
+    # ProcessAnalysisTargets Map state
+    assert "ProcessAnalysisTargets" in top_states
+    target_map = top_states["ProcessAnalysisTargets"]
+    
+    # ProcessAnalysisTargets.ItemSelector includes tenant_id.$ = $$.Map.Item.Value.tenant_id
+    item_selector = target_map["ItemSelector"]
+    assert item_selector.get("tenant_id.$") == "$$.Map.Item.Value.tenant_id"
+    
+    # A simulated Map child context resolves CheckRunState and CheckErrorBudgetLock parameters without missing $.tenant_id.
+    iterator_states = target_map["Iterator"]["States"]
+    
+    # Check CheckRunState
+    assert "CheckRunState" in iterator_states
+    check_run_state_params = iterator_states["CheckRunState"]["Parameters"]
+    assert check_run_state_params.get("tenant_id.$") == "$.tenant_id"
+    
+    # Check CheckErrorBudgetLock
+    assert "CheckErrorBudgetLock" in iterator_states
+    check_error_budget_params = iterator_states["CheckErrorBudgetLock"]["Parameters"]
+    assert check_error_budget_params.get("tenant_id.$") == "$.tenant_id"
+
+
+
 

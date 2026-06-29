@@ -23,11 +23,13 @@ rg -n "MANUAL_STEP_FUNCTIONS_EXECUTION|start-execution|account-policy|analysis_t
 git diff --check
 
 # Chạy xác thực bộ test Python pytest cục bộ
-Push-Location lambda_src; python -m pytest tests/test_state.py::test_state_prepare_manual_fallback tests/test_state.py::test_state_prepare_scheduled_multi_account tests/test_scheduler_configuration.py::test_no_automatic_execution_trigger -q -p no:cacheprovider; Pop-Location
+Push-Location lambda_src; python -m pytest tests/test_state.py tests/test_scheduler_configuration.py -q -p no:cacheprovider; Pop-Location
 ```
 
 ## Kết quả
-- **Tài liệu hướng dẫn song ngữ**: Khởi tạo thành công tài liệu hướng dẫn vận hành tiếng Anh và tiếng Việt cho việc chạy thủ công Step Functions.
+- **Tài liệu hướng dẫn song ngữ**: Khởi tạo thành công tài liệu hướng dẫn vận hành tiếng Anh và tiếng Việt cho việc chạy thủ công Step Functions, đồng thời cập nhật các tài liệu này sử dụng payload đầu vào dạng phẳng (flat payloads) chuẩn hóa.
+- **Tương thích ngược Double-Wrap**: Cải tiến `PrepareRunContext` để tự động unwrap một lớp bọc cũ `{ "operation": "prepare", "input": { "operation": "prepare", "input": { ... } } }`, tránh các lỗi "Scheduled run contains no analysis targets".
+- **Độ bao phủ kiểm thử (Test Coverage)**: Bổ sung ca kiểm thử chi tiết trong `lambda_src/tests/test_state.py` cho cấu trúc payload double-wrapped cũ.
 - **Tài liệu hóa điều kiện tiên quyết**: Nêu rõ yêu cầu về triển khai môi trường, quyền CLI, trạng thái scheduler, các hàm Lambda hoạt động, seed dữ liệu DynamoDB và sự sẵn sàng của dữ liệu telemetry.
 - **Cung cấp câu lệnh**: Hướng dẫn chi tiết cách dùng Terraform Output và AWS CLI để truy vấn ARN, tạo file payload, kích hoạt lượt chạy, theo dõi trạng thái và kiểm tra nhật ký chạy.
 - **Mẫu Payload**: Cung cấp cấu trúc file JSON đầu vào cho cả chế độ chạy đơn tài khoản và đa tài khoản.
@@ -39,4 +41,4 @@ Push-Location lambda_src; python -m pytest tests/test_state.py::test_state_prepa
 Không có.
 
 ## Bước tiếp theo
-Nhà vận hành có thể bắt đầu sử dụng tài liệu vận hành này để chạy thử nghiệm và xác minh trên môi trường sandbox hoặc staging.
+Nhà vận hành có thể bắt đầu sử dụng tài liệu vận hành này để chạy thử nghiệm và xác minh trên môi trường sandbox hoặc staging bằng payload dạng phẳng gọn gàng hơn, đồng thời hệ thống vẫn tương thích hoàn toàn với các định dạng payload cũ.

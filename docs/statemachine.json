@@ -43,6 +43,7 @@
       "MaxConcurrency": 1,
       "ItemSelector": {
         "account_id.$": "$$.Map.Item.Value.account_id",
+        "tenant_id.$": "$$.Map.Item.Value.tenant_id",
         "management_account_id.$": "$.management_account_id",
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
@@ -110,6 +111,7 @@
         "run_id.$": "$.run_id",
         "correlation_id.$": "$.correlation_id",
         "account_id.$": "$.account_id",
+        "tenant_id.$": "$.tenant_id",
         "cost_period.$": "$.cost_period",
         "execution_date.$": "$.execution_date"
       },

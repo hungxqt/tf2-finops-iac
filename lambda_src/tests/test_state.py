@@ -165,7 +165,10 @@ def test_state_prepare_scheduled_multi_account():
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
     assert resp["management_account_id"] == "111111111111"
-    assert resp["analysis_targets"] == [{"account_id": "222222222222"}, {"account_id": "333333333333"}]
+    assert resp["analysis_targets"] == [
+        {"account_id": "222222222222", "tenant_id": handler._default_tenant_id("222222222222")},
+        {"account_id": "333333333333", "tenant_id": handler._default_tenant_id("333333333333")}
+    ]
     assert resp["account_id"] == "111111111111"
     assert resp["is_ad_hoc"] is False
 
@@ -180,9 +183,29 @@ def test_state_prepare_manual_fallback():
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
     assert resp["management_account_id"] == "444444444444"
-    assert resp["analysis_targets"] == [{"account_id": "444444444444"}]
+    assert resp["analysis_targets"] == [{"account_id": "444444444444", "tenant_id": resp["tenant_id"]}]
     assert resp["account_id"] == "444444444444"
     assert resp["is_ad_hoc"] is True
+
+def test_state_prepare_legacy_double_wrapped():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "operation": "prepare",
+            "input": {
+                "management_account_id": "093490087544",
+                "analysis_targets": ["336805808730"],
+                "trigger_type": "scheduled",
+                "is_ad_hoc": False
+            }
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "093490087544"
+    assert resp["analysis_targets"] == [{"account_id": "336805808730", "tenant_id": handler._default_tenant_id("336805808730")}]
+    assert resp["account_id"] == "093490087544"
+    assert resp["is_ad_hoc"] is False
 
 def test_state_prepare_scheduled_missing_targets_fails():
     event_data = {
@@ -401,3 +424,61 @@ def test_state_error_budget_sandbox_no_automatic_lock():
     del os.environ["ERROR_BUDGET_TABLE_NAME"]
     del os.environ["RUN_STATE_TABLE_NAME"]
     handler.ddb_client = None
+
+
+def test_state_prepare_propagation_details():
+    # 1. State Lambda scheduled multi-account prepare returns each target with deterministic per-account tenant_id.
+    event_data_multi = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": ["222222222222", "333333333333"],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp_multi = handler.handle_request(event_data_multi, None)
+    assert resp_multi["status"] == "OK"
+    targets = resp_multi["analysis_targets"]
+    assert len(targets) == 2
+    assert targets[0]["account_id"] == "222222222222"
+    assert targets[0]["tenant_id"] == handler._default_tenant_id("222222222222")
+    assert targets[1]["account_id"] == "333333333333"
+    assert targets[1]["tenant_id"] == handler._default_tenant_id("333333333333")
+
+    # 2. Manual single-account fallback still gets one target with matching tenant_id.
+    event_data_manual = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "444444444444",
+            "tenant_id": "my-special-tenant",
+            "is_ad_hoc": True
+        }
+    }
+    resp_manual = handler.handle_request(event_data_manual, None)
+    assert resp_manual["status"] == "OK"
+    assert resp_manual["tenant_id"] == "my-special-tenant"
+    assert resp_manual["analysis_targets"] == [{"account_id": "444444444444", "tenant_id": "my-special-tenant"}]
+
+    # 3. Explicit target-level tenant_id is preserved.
+    event_data_explicit = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": [
+                {"account_id": "222222222222", "tenant_id": "explicit-tenant-2"},
+                "333333333333"
+            ],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp_explicit = handler.handle_request(event_data_explicit, None)
+    assert resp_explicit["status"] == "OK"
+    explicit_targets = resp_explicit["analysis_targets"]
+    assert len(explicit_targets) == 2
+    assert explicit_targets[0]["account_id"] == "222222222222"
+    assert explicit_targets[0]["tenant_id"] == "explicit-tenant-2"
+    assert explicit_targets[1]["account_id"] == "333333333333"
+    assert explicit_targets[1]["tenant_id"] == handler._default_tenant_id("333333333333")
+

@@ -24,7 +24,22 @@ This progress document outlines the implementation of the explicit multi-account
 - **Documentation Updates**:
   - Updated `ACCOUNT_POLICY_SEEDING.md` and `GUIDES.md` to specify that operators must seed a policy row for each linked analysis account, not just the executing management account.
 
-## 2. Status
-
 - **Status**: Completed / 100% Green.
-- **Tests**: All 341 tests passing successfully.
+- **Tests**: All 346 tests passing successfully.
+
+## 3. Tenant Context Propagation Fix
+
+- **Root Cause**: The step function Map state was not passing `tenant_id` down inside each item context. Consequently, states like `CheckErrorBudgetLock` (which relies on `$.tenant_id`) encountered JSONPath lookup failures because `tenant_id` was absent from the item scope, or incorrectly read from the root execution level instead of the specific linked account tenant.
+- **Files Changed**:
+  - `lambda_src/src/workers/state/handler.py`: Modified target normalization to inject `tenant_id` (either explicit or derived from `_default_tenant_id(account_id)`) per analysis target, and avoided broadcasting management `tenant_id` to linked accounts.
+  - `modules/orchestration/statemachine.json`: Added `tenant_id.$ = $$.Map.Item.Value.tenant_id` to `ProcessAnalysisTargets.ItemSelector` and passed it to `CheckRunState`.
+  - `docs/statemachine.json`: Regenerated using render script.
+  - `lambda_src/tests/test_state.py` & `test_state_machine.py`: Added regression tests verifying per-account tenant isolation, manual fallback mapping, and ASL parameter resolution.
+- **Validation Commands**:
+  - `python scripts/render-static-asl.py`
+  - `terraform fmt -check -recursive`
+  - `terraform -chdir=environments/sandbox init -backend=false`
+  - `Push-Location lambda_src; python -m pytest; Pop-Location`
+- **Results**: All 346 tests pass successfully. Terraform validation passes. State machine JSON is rendered correctly.
+- **Next Step**: Deploy changes through Terraform CI/CD to sandbox/staging/prod environments, and trigger test executions to verify end-to-end integration.
+
