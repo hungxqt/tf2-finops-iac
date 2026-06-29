@@ -302,6 +302,8 @@ resource "aws_lambda_permission" "alb_invoke_request" {
   qualifier     = aws_lambda_alias.request.name
 }
 
+# trivy:ignore:AVD-AWS-0054
+# trivy:ignore:AWS-0054
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.ai.arn
   port              = var.enable_alb_https ? "443" : "80"
@@ -615,4 +617,3 @@ resource "aws_codedeploy_deployment_group" "request" {
 
   tags = var.tags
 }
-

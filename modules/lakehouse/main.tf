@@ -939,6 +939,7 @@ resource "terraform_data" "destroy_guard" {
 
 resource "aws_s3_bucket" "cur_export" {
   # checkov:skip=CKV_AWS_144: "CUR export landing bucket does not need cross-region replication (raw source only)"
+  # checkov:skip=CKV2_AWS_62: "CUR export landing bucket is polled by cost_puller and does not need event notifications"
   count         = var.create_cur_export_bucket ? 1 : 0
   bucket        = var.cur_export_bucket_name != "" ? var.cur_export_bucket_name : "tf2-finops-cur-export-bucket"
   force_destroy = var.destroyable
@@ -1082,4 +1083,3 @@ data "aws_iam_policy_document" "cur_export" {
     ]
   }
 }
-
