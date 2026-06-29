@@ -75,7 +75,6 @@ SCHEDULED_WORKFLOW_INPUT = {
     "cur_retry": {"count": 0, "max": 4},
     "ce_retry": {"count": 0, "max": 3},
     "ai_retry": {"count": 0, "max": 6},
-    "retry_after_seconds": 3600,
 }
 
 # ---------------------------------------------------------------------------

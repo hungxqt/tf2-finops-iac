@@ -1283,3 +1283,59 @@ class TestRollbackCacheContract:
         assert "anomaly_id" in sig.parameters
         assert "correlation_id" in sig.parameters
 
+
+class TestStepFunctionRetryCleanup:
+    """Validate that retry_after_seconds is fully removed and wait states are preserved."""
+
+    def test_evaluate_error_budget_lock_resolves_without_retry_after_seconds(self):
+        # Prove EvaluateErrorBudgetLock resolves against the real prepared scheduled context plus error_budget_check, without retry_after_seconds
+        ctx = dict(POST_PREPARE_RUN_CONTEXT)
+        ctx["error_budget_check"] = {
+            "locked": False,
+            "force_dry_run": False
+        }
+        # Inject standard retries if not already present
+        if "ce_retry" not in ctx:
+            ctx["ce_retry"] = {"count": 0, "max": 3}
+        asl = _load_asl_template()
+        params = asl["States"]["EvaluateErrorBudgetLock"]["Parameters"]
+        resolved = _resolve_parameters(ctx, params)
+        
+        assert "run_id" in resolved
+        assert "error_budget_locked" in resolved
+        assert "force_dry_run" in resolved
+        assert "ce_retry" in resolved
+        assert "cur_retry" in resolved
+        assert "ai_retry" in resolved
+        
+        # retry_after_seconds must not be present in resolved output or parameters
+        assert "retry_after_seconds" not in resolved
+        assert "retry_after_seconds.$" not in params
+        assert "retry_after_seconds" not in params
+
+    def test_static_asl_no_retry_after_seconds(self):
+        # Assert retry_after_seconds is absent from both ASL files
+        for path in [ASL_TEMPLATE, ASL_DOC]:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            assert "retry_after_seconds" not in content, f"retry_after_seconds found in {path}"
+
+    def test_keep_existing_wait_state_and_retry_counts(self):
+        # Verify wait states rely on existing variables and constants
+        asl = _load_asl_template()
+        
+        wait_cur = asl["States"]["WaitForCURExport"]
+        assert wait_cur["Type"] == "Wait"
+        # Since it uses a template variable in modules/orchestration/statemachine.json, and _load_asl_template maps bare template vars to '6'
+        assert wait_cur["Seconds"] == 6
+        
+        wait_ce = asl["States"]["WaitForCostExplorer"]
+        assert wait_ce["Type"] == "Wait"
+        assert wait_ce["Seconds"] == 300
+
+        # Also assert the raw template actually contains ${cur_retry_interval_seconds}
+        with open(ASL_TEMPLATE, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "${cur_retry_interval_seconds}" in content
+
+
