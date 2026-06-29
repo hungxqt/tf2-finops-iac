@@ -38,6 +38,11 @@ output "scheduler_arn" {
   value       = module.orchestration.scheduler_arn
 }
 
+output "scheduler_state" {
+  description = "The state of the EventBridge Scheduler schedule"
+  value       = module.orchestration.scheduler_state
+}
+
 output "lambda_function_names" {
   description = "Map of Lambda function names"
   value       = module.compute_lambda.lambda_function_names

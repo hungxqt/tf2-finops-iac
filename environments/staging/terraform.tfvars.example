@@ -40,4 +40,7 @@ traffic_metric_identifiers  = ["my-alb-identifier"]
 # Enable HTTPS for the internal ALB (must remain true in staging)
 enable_alb_https = true
 
+# Prevent Post-Apply Step Functions Execution
+scheduler_enabled = false
+
 

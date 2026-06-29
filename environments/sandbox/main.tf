@@ -598,6 +598,7 @@ module "orchestration" {
   project_name                 = var.project_name
   environment                  = var.environment
   scheduler_expression         = "rate(24 hours)"
+  scheduler_enabled            = var.scheduler_enabled
   lambda_function_arns         = module.compute_lambda.lambda_alias_arns
   ddb_kms_key_arn              = module.lakehouse.ddb_kms_key_arn
   sqs_kms_key_arn              = module.lakehouse.data_kms_key_arn

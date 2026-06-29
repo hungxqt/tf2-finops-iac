@@ -78,3 +78,10 @@ variable "destroyable" {
   type        = bool
   description = "Set to true to make orchestration DynamoDB tables destroyable (Sandbox exceptions)"
 }
+
+variable "scheduler_enabled" {
+  type        = bool
+  description = "Whether to enable the EventBridge Scheduler schedule. If false, the schedule state is DISABLED."
+  default     = false
+}
+

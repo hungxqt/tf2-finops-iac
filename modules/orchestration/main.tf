@@ -288,6 +288,7 @@ resource "aws_scheduler_schedule" "run_workflow" {
   description = "Triggers the Step Functions workflow on a schedule"
   group_name  = "default"
   kms_key_arn = var.scheduler_kms_key_arn
+  state       = var.scheduler_enabled ? "ENABLED" : "DISABLED"
 
   schedule_expression = var.scheduler_expression
 

@@ -111,6 +111,7 @@ Deploy environments sequentially (Sandbox first, followed by Staging and Prod).
 #### Environment Backend and Variable Setup:
 * **Remote State Connection**: The remote state backend block is already pre-configured in `backend.tf` for each environment (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). You only need to run `terraform init` to automatically connect to the shared remote S3 state.
 * **Variable Configuration**: Before planning or applying, copy the `terraform.tfvars.example` file in the environment directory to a local `terraform.tfvars` file (which is git-ignored) and update the values. You MUST set `request_image_uri` to the wrapper image URI retrieved from SSM Parameter Store in Step 2.6.
+* **EventBridge Scheduler Activation Guard**: By default, the EventBridge Scheduler daily run schedule is disabled (`scheduler_enabled = false`) to prevent automated Step Functions executions immediately after initial infrastructure apply. Verify that the outputs show `scheduler_state = "DISABLED"`. Activating scheduled daily runs requires a separate, reviewed and approved plan setting `scheduler_enabled = true`.
 
 1. **Sandbox Deployment**:
    ```powershell
@@ -217,6 +218,10 @@ Once the Terraform plan is applied, the dashboard infrastructure is ready. The h
 5. **Cognito Groups**: Users should be added to the created Cognito groups (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) to control authorization.
 6. **Data Generation**: Cost-data writers must publish JSON summaries to the configured prefix (e.g., `summaries/`) inside the dashboard data S3 bucket (configured in the output `dashboard_data_bucket_name`).
 
+
+### Step 3.2: Account Policy DynamoDB Seeding
+Before running or enabling the Orchestrator Step Functions workflow (either manually or via the EventBridge scheduler), you must seed the environment's `account-policy` DynamoDB table with the deploying AWS Account ID and mapping context.
+Refer to the dedicated [ACCOUNT_POLICY_SEEDING.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING.md) guide for detailed item schema specifications, PowerShell command sequences, and verification troubleshooting steps.
 
 ---
 

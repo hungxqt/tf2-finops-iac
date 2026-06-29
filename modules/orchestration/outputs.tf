@@ -8,6 +8,11 @@ output "scheduler_arn" {
   value       = aws_scheduler_schedule.run_workflow.arn
 }
 
+output "scheduler_state" {
+  description = "The state of the EventBridge Scheduler schedule (ENABLED or DISABLED)"
+  value       = aws_scheduler_schedule.run_workflow.state
+}
+
 output "dynamodb_table_names" {
   description = "Map of DynamoDB table names created"
   value = {

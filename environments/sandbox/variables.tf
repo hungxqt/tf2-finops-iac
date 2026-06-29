@@ -184,3 +184,9 @@ variable "enable_alb_https" {
   default     = true
 }
 
+variable "scheduler_enabled" {
+  type        = bool
+  description = "Whether to enable the EventBridge Scheduler schedule (triggers daily workflow runs). If false, the schedule state is DISABLED."
+  default     = false
+}
+

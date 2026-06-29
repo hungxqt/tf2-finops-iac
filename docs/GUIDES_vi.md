@@ -109,6 +109,7 @@ Triển khai các môi trường theo tuần tự (Sandbox trước, sau đó l�
 #### Thiết lập Backend và Biến cho Môi trường:
 * **Kết nối Remote State**: Khối cấu hình remote state backend đã được thiết lập sẵn trong tệp `backend.tf` của mỗi môi trường (`sandbox/terraform.tfstate`, `staging/terraform.tfstate`, `prod/terraform.tfstate`). Bạn chỉ cần chạy lệnh `terraform init` để tự động kết nối với S3 remote state chung.
 * **Cấu hình Biến (Variables)**: Trước khi lập kế hoạch (plan) hoặc áp dụng (apply), bạn phải sao chép tệp `terraform.tfvars.example` trong thư mục môi trường thành tệp `terraform.tfvars` cục bộ (tệp này được bỏ qua bởi git) và cập nhật các giá trị. Bạn BẮT BUỘC phải đặt `request_image_uri` bằng URI của image wrapper đã lấy được từ SSM Parameter Store ở Bước 2.6.
+* **Cơ chế kích hoạt EventBridge Scheduler (Activation Guard)**: Theo mặc định, lịch trình chạy hàng ngày của EventBridge Scheduler sẽ bị vô hiệu hóa (`scheduler_enabled = false`) để tránh tự động thực thi Step Functions ngay sau khi áp dụng hạ tầng ban đầu. Xác nhận rằng outputs hiển thị `scheduler_state = "DISABLED"`. Việc kích hoạt lịch trình chạy hàng ngày yêu cầu một bản thay đổi kế hoạch riêng biệt được phê duyệt với `scheduler_enabled = true`.
 
 1. **Triển khai Sandbox**:
    ```powershell
@@ -215,6 +216,10 @@ Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard
 5. **Nhóm Cognito (Cognito Groups)**: Người dùng cần được thêm vào các nhóm Cognito tương ứng (`finops-finance-readonly`, `finops-engineering-operator`, `finops-cdo-admin`) để kiểm soát quyền hạn.
 6. **Sinh dữ liệu (Data Generation)**: Các công cụ ghi dữ liệu chi phí phải tải các tệp tóm tắt JSON lên tiền tố đã cấu hình (ví dụ: `summaries/`) trong S3 bucket chứa dữ liệu dashboard (được cấu hình trong giá trị đầu ra `dashboard_data_bucket_name`).
 
+
+### Bước 3.2: Khởi tạo dữ liệu bảng DynamoDB Account Policy (Account Policy Seeding)
+Trước khi chạy hoặc kích hoạt quy trình Orchestrator Step Functions (chạy thủ công hoặc thông qua trình lập lịch EventBridge), bạn phải khởi tạo dữ liệu (seed) cho bảng DynamoDB `account-policy` của môi trường với AWS Account ID và ngữ cảnh tương thích tương ứng.
+Xem tài liệu hướng dẫn chi tiết [ACCOUNT_POLICY_SEEDING_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING_vi.md) để biết thêm thông tin cấu trúc item, chuỗi lệnh PowerShell và cách khắc phục sự cố xác minh.
 
 ---
 
