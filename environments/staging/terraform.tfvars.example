@@ -30,12 +30,22 @@ private_hosted_zone_id = ""
 private_dns_name       = ""
 sigv4_service_name     = "ai-engine"
 
+# Set to true to make S3 buckets, KMS keys, ECR, etc. destroyable (Sandbox exceptions)
+destroyable = false
+
 # CUR and CE Ingestion parameters
 cur_source_bucket          = "company-cdo-123456789012-telemetry"
 cur_source_prefix          = "cdo-01/"
 cur_delay_threshold_hours  = 36
 ce_lookback_window_days    = 30
 traffic_metric_identifiers  = ["my-alb-identifier"]
+
+# Member accounts telemetry ingestion parameters
+telemetry_member_account_ids           = ["123456789012"]
+telemetry_member_role_name             = "cdo-telemetry-ingestion-role"
+cur_source_bucket_arn                  = "arn:aws:s3:::company-cdo-123456789012-telemetry"
+create_member_telemetry_ingestion_role = false
+trusted_cost_puller_role_arns          = []
 
 # Enable HTTPS for the internal ALB (must remain true in staging)
 enable_alb_https = true

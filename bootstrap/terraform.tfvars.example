@@ -4,3 +4,13 @@ github_repository = "hungxqt/tf2-finops-iac"
 
 # ARN of the replica S3 bucket for Terraform state replication
 state_replica_bucket_arn = "arn:aws:s3:::tf2-finops-state-replica"
+
+tags = {
+  Environment = "bootstrap"
+  Project     = "tf2-finops"
+  ManagedBy   = "Terraform"
+}
+
+# Flag to indicate if the bootstrap resources can be destroyed
+destroyable = false
+
