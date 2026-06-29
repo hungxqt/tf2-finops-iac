@@ -330,10 +330,20 @@ resource "aws_scheduler_schedule" "run_workflow" {
     role_arn = aws_iam_role.scheduler.arn
 
     input = jsonencode({
-      account_id   = data.aws_caller_identity.current.account_id
-      is_ad_hoc    = false
-      trigger_type = "scheduled"
+      management_account_id = data.aws_caller_identity.current.account_id
+      analysis_targets      = var.analysis_target_account_ids
+      is_ad_hoc             = false
+      trigger_type          = "scheduled"
     })
+  }
+}
+
+resource "terraform_data" "config_validation" {
+  lifecycle {
+    precondition {
+      condition     = !(var.scheduler_enabled && length(var.analysis_target_account_ids) == 0)
+      error_message = "EventBridge Scheduler is enabled but analysis_target_account_ids (telemetry_member_account_ids) is empty. At least one analysis target account ID is required when scheduler_enabled is true."
+    }
   }
 }
 

@@ -13,7 +13,7 @@
         "ai_poll_interval": "10"
       },
       "ResultPath": "$",
-      "Next": "LoadAccountPolicy",
+      "Next": "ProcessAnalysisTargets",
       "Retry": [
         {
           "ErrorEquals": [
@@ -32,10 +32,32 @@
             "States.ALL"
           ],
           "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
+          "Next": "RunFailed"
         }
       ]
     },
+    "ProcessAnalysisTargets": {
+      "Type": "Map",
+      "Comment": "Process each analysis target account sequentially",
+      "ItemsPath": "$.analysis_targets",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "account_id.$": "$$.Map.Item.Value.account_id",
+        "management_account_id.$": "$.management_account_id",
+        "run_id.$": "$.run_id",
+        "correlation_id.$": "$.correlation_id",
+        "cost_period.$": "$.cost_period",
+        "execution_date.$": "$.execution_date",
+        "is_ad_hoc.$": "$.is_ad_hoc",
+        "ai_contract_version.$": "$.ai_contract_version",
+        "cur_retry.$": "$.cur_retry",
+        "ai_retry.$": "$.ai_retry",
+        "ce_retry.$": "$.ce_retry",
+        "force_dry_run.$": "$.force_dry_run"
+      },
+      "Iterator": {
+        "StartAt": "LoadAccountPolicy",
+        "States": {
     "LoadAccountPolicy": {
       "Type": "Task",
       "Resource": "arn:aws:states:::dynamodb:getItem",
@@ -121,12 +143,12 @@
         {
           "Variable": "$.state.status",
           "StringEquals": "COMPLETED",
-          "Next": "DuplicateIgnored"
+          "Next": "AccountDuplicateIgnored"
         },
         {
           "Variable": "$.state.status",
           "StringEquals": "IN_PROGRESS",
-          "Next": "DuplicateIgnored"
+          "Next": "AccountDuplicateIgnored"
         }
       ],
       "Default": "CheckAdHocQuotaDecision"
@@ -1877,7 +1899,7 @@
         "execution_date.$": "$.execution_date"
       },
       "ResultPath": "$.completion",
-      "Next": "RunCompleted",
+      "Next": "AccountRunCompleted",
       "Retry": [
         {
           "ErrorEquals": [
@@ -1912,7 +1934,7 @@
         "execution_date.$": "$.execution_date"
       },
       "ResultPath": "$.completion",
-      "Next": "RunFailed",
+      "Next": "AccountRunFailed",
       "Retry": [
         {
           "ErrorEquals": [
@@ -1931,14 +1953,35 @@
             "States.ALL"
           ],
           "ResultPath": "$.failure_error",
+          "Next": "AccountRunFailed"
+        }
+      ]
+    },
+    "AccountRunCompleted": {
+      "Type": "Succeed"
+    },
+    "AccountDuplicateIgnored": {
+      "Type": "Succeed"
+    },
+    "AccountRunFailed": {
+      "Type": "Fail",
+      "Error": "FinOpsWorkflowFailed",
+      "Cause": "Workflow failed or failed closed."
+    }
+        }
+      },
+      "Next": "RunCompleted",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
           "Next": "RunFailed"
         }
       ]
     },
     "RunCompleted": {
-      "Type": "Succeed"
-    },
-    "DuplicateIgnored": {
       "Type": "Succeed"
     },
     "RunFailed": {

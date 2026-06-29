@@ -85,3 +85,9 @@ variable "scheduler_enabled" {
   default     = false
 }
 
+variable "analysis_target_account_ids" {
+  type        = list(string)
+  description = "List of linked/member AWS account IDs to analyze"
+  default     = []
+}
+

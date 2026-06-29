@@ -33,6 +33,19 @@ ORCHESTRATION_MAIN_TF = os.path.join(BASE_DIR, "modules/orchestration/main.tf")
 COMPUTE_LAMBDA_TF = os.path.join(BASE_DIR, "modules/compute-lambda/main.tf")
 
 
+def _merge_nested_states(asl: dict) -> dict:
+    if "States" in asl:
+        top_states = asl["States"]
+        if "ProcessAnalysisTargets" in top_states:
+            target_map = top_states["ProcessAnalysisTargets"]
+            account_states = target_map.get("Iterator", {}).get("States", {})
+            merged = {}
+            merged.update(account_states)
+            merged.update(top_states)
+            asl["States"] = merged
+    return asl
+
+
 def _load_asl_template() -> dict:
     with open(ASL_TEMPLATE, "r", encoding="utf-8") as fh:
         raw = fh.read()
@@ -40,12 +53,12 @@ def _load_asl_template() -> dict:
     raw = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw)
     # Replace bare numeric placeholders: ${var} -> 6
     raw = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', raw)
-    return json.loads(raw)
+    return _merge_nested_states(json.loads(raw))
 
 
 def _load_asl_doc() -> dict:
     with open(ASL_DOC, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+        return _merge_nested_states(json.load(fh))
 
 
 def _resolve_path(ctx: dict, path: str):
@@ -147,7 +160,8 @@ class TestComponentInventory:
             "ProcessDetectedAnomalies", "SummarizeAnomalyResults", "EvaluateAnomalySummary",
             "FailClosed", "SendFailClosedAlert",
             "MarkRunComplete", "MarkRunFailed",
-            "RunCompleted", "RunFailed", "DuplicateIgnored",
+            "RunCompleted", "RunFailed",
+            "AccountRunCompleted", "AccountRunFailed", "AccountDuplicateIgnored",
             "CURRetryExceeded", "WaitForCURExport",
         ]
         for state in required_parent:

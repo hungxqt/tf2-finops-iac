@@ -152,6 +152,52 @@ def test_state_prepare_defaulting():
     assert resp["is_ad_hoc"] is False  # Defaults to False
 
 
+def test_state_prepare_scheduled_multi_account():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": ["222222222222", "333333333333"],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "111111111111"
+    assert resp["analysis_targets"] == [{"account_id": "222222222222"}, {"account_id": "333333333333"}]
+    assert resp["account_id"] == "111111111111"
+    assert resp["is_ad_hoc"] is False
+
+def test_state_prepare_manual_fallback():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "444444444444",
+            "is_ad_hoc": True
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "444444444444"
+    assert resp["analysis_targets"] == [{"account_id": "444444444444"}]
+    assert resp["account_id"] == "444444444444"
+    assert resp["is_ad_hoc"] is True
+
+def test_state_prepare_scheduled_missing_targets_fails():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": [],
+            "trigger_type": "scheduled"
+        }
+    }
+    with pytest.raises(ValueError, match="Scheduled run contains no analysis targets"):
+        handler.handle_request(event_data, None)
+
+
+
 def test_state_check_quota():
     # 1. Quota ok
     event_data = {

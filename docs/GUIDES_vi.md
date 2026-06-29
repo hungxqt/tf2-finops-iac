@@ -203,7 +203,6 @@ terraform output
 * `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda (chạy bằng container image, xử lý việc nhập bất thường bất đồng bộ).
 * `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
-* `feedback_state_machine_arn`: ARN của Human Feedback State Machine bất đồng bộ cho các review submission từ Slack/dashboard đến `POST /v1/feedback`.
 * `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, và rollback cache.
 * `synchronous_ai_endpoints`: Các endpoint `/v1/detect`, `/v1/decide`, và `/v1/verify` là các hoạt động đồng bộ được gọi qua `VpcAlbCallerLambda` và Route 53 private DNS alias. `/v1/status/{id}` chỉ dành cho remediation audit/status, không dùng cho việc polling phát hiện. Không có hàng đợi SQS detect hoặc vòng lặp polling trong luồng mặc định; SQS được giới hạn cho việc thử lại cảnh báo và thông báo hoàn thành audit `finops-watch-rollback`.
 
@@ -219,8 +218,15 @@ Sau khi mã nguồn Terraform được áp dụng (apply), hạ tầng Dashboard
 
 
 ### Bước 3.2: Khởi tạo dữ liệu bảng DynamoDB Account Policy (Account Policy Seeding)
-Trước khi chạy hoặc kích hoạt quy trình Orchestrator Step Functions (chạy thủ công hoặc thông qua trình lập lịch EventBridge), bạn phải khởi tạo dữ liệu (seed) cho bảng DynamoDB `account-policy` của môi trường với AWS Account ID và ngữ cảnh tương thích tương ứng.
+Trước khi chạy hoặc kích hoạt quy trình Orchestrator Step Functions (chạy thủ công hoặc thông qua trình lập lịch EventBridge), bạn phải khởi tạo dữ liệu (seed) cho bảng DynamoDB `account-policy` của môi trường.
+Với tính năng hỗ trợ nhiều tài khoản phân tích mục tiêu (analysis targets), orchestrator sẽ chạy trên tài khoản quản trị (management/CDO account) nhưng phân nhánh và chạy song song trên các tài khoản liên kết (linked member accounts) được chỉ định trong `analysis_target_account_ids` (được cấu hình qua `telemetry_member_account_ids` ở gốc môi trường).
+Do đó, bạn phải seed một dòng dữ liệu cho mỗi AWS Account ID của tài khoản liên kết đích được phân tích, chứ không chỉ cho tài khoản quản trị thực thi.
 Xem tài liệu hướng dẫn chi tiết [ACCOUNT_POLICY_SEEDING_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/ACCOUNT_POLICY_SEEDING_vi.md) để biết thêm thông tin cấu trúc item, chuỗi lệnh PowerShell và cách khắc phục sự cố xác minh.
+
+### Bước 3.3: Hướng dẫn Vận hành Chạy Thủ công Step Functions (Manual Step Functions Execution Runbook)
+Khi cấu hình `scheduler_enabled = false`, hoặc khi cần thực hiện các lượt chạy kiểm thử (ad-hoc) và xác minh, quy trình Orchestrator Step Functions có thể được kích hoạt thủ công.
+Xem tài liệu hướng dẫn vận hành chi tiết tại [MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md) để nắm rõ các điều kiện tiên quyết, định dạng payload đầu vào (cho cả chạy đơn tài khoản và đa tài khoản), chuỗi lệnh PowerShell thực thi và cách theo dõi trạng thái lượt chạy.
+
 
 ---
 
@@ -378,47 +384,13 @@ Fields: boto3_equivalent, ttl_epoch (TTL 90 ngày)
 
 ---
 
-## 9. Workflow Human Feedback
-
-Human feedback được xử lý bằng một Step Functions workflow bất đồng bộ riêng, không nằm trong daily FinOps detection workflow. Backend Slack hoặc dashboard nên start `feedback_state_machine_arn` sau khi SRE/Engineer xác nhận kết quả detection.
-
-### 9.1 Start Feedback Execution
-
-Dùng Terraform output `feedback_state_machine_arn` và truyền payload theo telemetry-contract section 15 trong trường `human_feedback`:
-
-```powershell
-aws stepfunctions start-execution `
-  --state-machine-arn "<feedback_state_machine_arn>" `
-  --name "feedback-ANM-2026-0628A-U12345678" `
-  --input '{
-    "run_id": "feedback-2026-06-28-001",
-    "correlation_id": "22222222-2222-4222-8222-222222222222",
-    "account_id": "123456789012",
-    "cost_period": "2026-06-01/2026-06-28",
-    "execution_date": "2026-06-28",
-    "tenant_id": "11111111-1111-4111-8111-111111111111",
-    "ai_contract_version": "v1",
-    "human_feedback": {
-      "anomaly_id": "ANM-2026-0628A",
-      "reviewer_id": "U12345678",
-      "verdict": "FALSE_POSITIVE",
-      "reason": "Known load test confirmed by service owner.",
-      "reviewed_at": "2026-06-28T09:30:00.000Z"
-    }
-  }'
-```
-
-Các giá trị `verdict` hợp lệ là `TRUE_POSITIVE`, `FALSE_POSITIVE`, và `BENIGN_EVENT`. Workflow validate các trường này, gọi `POST /v1/feedback` qua `VpcAlbCallerLambda`, và ghi audit evidence cho cả trường hợp thành công hoặc lỗi delivery.
-
----
-
-## 10. Bảo trì tài liệu hướng dẫn
+## 9. Bảo trì tài liệu hướng dẫn
 Tài liệu hướng dẫn dành cho nhà phát triển này phải luôn được cập nhật. Các agent và người đóng góp trong tương lai phải cập nhật cả `docs/GUIDES.md` và `docs/GUIDES_vi.md` trong cùng một thay đổi bất kỳ khi nào có quy trình làm việc của developer/operator, chuỗi lệnh, quy trình xác thực (validation path), script, CI job, bước triển khai (deployment step) hoặc thủ tục bàn giao (handoff procedure) mới được thêm vào hoặc thay đổi.
 
 
 ---
 
-## 11. Xác Minh Quy Trình Step Functions
+## 10. Xác Minh Quy Trình Step Functions
 
 Bộ kiểm tra `test_step_function_payload_contract.py` cung cấp **lớp xác minh cục bộ, không cần AWS** chứng minh:
 
@@ -477,7 +449,7 @@ Helper `_resolve_path(ctx, path)` trong file kiểm tra giải quyết:
 
 ---
 
-## 12. Cổng Kiểm Tra Tính Toàn Vẹn Yêu Cầu AI
+## 11. Cổng Kiểm Tra Tính Toàn Vẹn Yêu Cầu AI
 
 Script `scripts/test-ai-request-integrity.ps1` là một **cổng triển khai sau khi apply** xác nhận tính toàn vẹn yêu cầu của đường dẫn `VpcAlbCallerLambda` → ALB nội bộ riêng tư → AI Request Lambda trước khi thăng cấp container image sang môi trường tiếp theo.
 
@@ -533,7 +505,7 @@ Kết quả được ghi vào `docs/progress/request_integrity_gate_results_{env
 
 ---
 
-## 13. Hướng dẫn Xuất bản Image Wrapper bằng CodeBuild
+## 12. Hướng dẫn Xuất bản Image Wrapper bằng CodeBuild
 
 Repository này bao gồm một dự án CodeBuild để xây dựng và xuất bản container image wrapper cho AI Engine. Wrapper này sao chép AWS Lambda Web Adapter vào trong container FastAPI thượng nguồn của AIOps, cho phép nó chạy chính xác trên nền tảng AWS Lambda.
 
@@ -565,7 +537,7 @@ Các tham số này được sử dụng bởi vận hành viên trong quy trìn
 
 ---
 
-## 14. Hướng dẫn Triển khai CodeDeploy Rollout cho AI Lambda trong Sandbox
+## 13. Hướng dẫn Triển khai CodeDeploy Rollout cho AI Lambda trong Sandbox
 
 Kho lưu trữ cấu hình việc chuyển dịch lưu lượng (traffic shifting) tuyến tính do CodeDeploy kiểm soát cho AI Engine Request Lambda trong `modules/ai-runtime-lambda`, ban đầu được cấu hình cho môi trường `sandbox`.
 
