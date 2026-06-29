@@ -71,11 +71,8 @@ Use this payload to analyze a single target account:
 ```powershell
 $InputJson = @'
 {
-  "operation": "prepare",
-  "input": {
-    "account_id": "444444444444",
-    "is_ad_hoc": true
-  }
+  "account_id": "444444444444",
+  "is_ad_hoc": true
 }
 '@
 $InputJson | Set-Content -Path .\manual_input.json -Encoding utf8
@@ -86,13 +83,10 @@ Use this payload to analyze multiple linked member accounts managed by a central
 ```powershell
 $InputJson = @'
 {
-  "operation": "prepare",
-  "input": {
-    "management_account_id": "111111111111",
-    "analysis_targets": ["222222222222", "333333333333"],
-    "trigger_type": "scheduled",
-    "is_ad_hoc": false
-  }
+  "management_account_id": "111111111111",
+  "analysis_targets": ["222222222222", "333333333333"],
+  "trigger_type": "scheduled",
+  "is_ad_hoc": false
 }
 '@
 $InputJson | Set-Content -Path .\manual_input.json -Encoding utf8

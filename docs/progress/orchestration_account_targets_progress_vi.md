@@ -24,7 +24,22 @@ Tài liệu này ghi nhận quá trình triển khai kế hoạch hỗ trợ ph�
 - **Cập nhật Tài liệu**:
   - Cập nhật hướng dẫn `ACCOUNT_POLICY_SEEDING_vi.md` và `GUIDES_vi.md` để yêu cầu người vận hành seed dữ liệu policy cho tất cả các phân tích tài khoản liên kết đích, thay vì chỉ mỗi tài khoản quản trị.
 
-## 2. Trạng thái hiện tại
-
 - **Trạng thái**: Hoàn thành / 100% Thành công.
-- **Kiểm thử**: Tất cả 341 bài test đều vượt qua thành công.
+- **Kiểm thử**: Tất cả 346 bài test đều vượt qua thành công.
+
+## 3. Sửa lỗi Lan truyền Ngữ cảnh Tenant (Tenant Context Propagation)
+
+- **Nguyên nhân Gốc rễ**: Trạng thái Map trong Step Functions đã không truyền trường `tenant_id` vào ngữ cảnh (context) của từng mục (item) tài khoản liên kết. Do đó, các trạng thái như `CheckErrorBudgetLock` (vốn phụ thuộc vào `$.tenant_id`) đã gặp lỗi truy vấn JSONPath vì `tenant_id` bị thiếu trong phạm vi của item hoặc bị đọc sai từ tenant của tài khoản quản trị gốc thay vì tài khoản liên kết cụ thể.
+- **Các Tệp thay đổi**:
+  - `lambda_src/src/workers/state/handler.py`: Cập nhật chuẩn hóa mục tiêu để nhúng `tenant_id` (chỉ định sẵn hoặc suy diễn tự động qua `_default_tenant_id(account_id)`) cho mỗi phân tích tài khoản mục tiêu, tránh broadcast tenant_id quản trị sang tài khoản liên kết.
+  - `modules/orchestration/statemachine.json`: Thêm `tenant_id.$ = $$.Map.Item.Value.tenant_id` vào `ProcessAnalysisTargets.ItemSelector` và truyền nó vào `CheckRunState`.
+  - `docs/statemachine.json`: Kết xuất lại từ kịch bản render.
+  - `lambda_src/tests/test_state.py` & `test_state_machine.py`: Thêm kiểm thử hồi quy xác nhận độc lập tenant theo tài khoản, ánh xạ chạy thủ công tương thích ngược, và kiểm thử độ phân giải tham số ASL.
+- **Lệnh Xác thực**:
+  - `python scripts/render-static-asl.py`
+  - `terraform fmt -check -recursive`
+  - `terraform -chdir=environments/sandbox init -backend=false`
+  - `Push-Location lambda_src; python -m pytest; Pop-Location`
+- **Kết quả**: Tất cả 346 bài kiểm thử đều vượt qua thành công. Xác thực Terraform hoàn tất. File JSON của State machine được xuất chính xác.
+- **Bước tiếp theo**: Triển khai các thay đổi thông qua quy trình CI/CD Terraform vào các môi trường sandbox/staging/prod, và chạy kiểm thử để xác thực tích hợp đầu cuối.
+

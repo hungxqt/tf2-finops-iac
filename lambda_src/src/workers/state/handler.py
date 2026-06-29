@@ -35,6 +35,18 @@ def get_ddb_client():
 def handle_request(event_data: dict, context: Any) -> dict:
     logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
     
+    # Unwrap one legacy nested wrapper if present:
+    # { "operation": "prepare", "input": { "operation": "prepare", "input": { ... } } }
+    if isinstance(event_data, dict):
+        outer_op = (event_data.get("operation") or event_data.get("action") or "").lower()
+        outer_input = event_data.get("input")
+        if outer_op == "prepare" and isinstance(outer_input, dict):
+            inner_op = (outer_input.get("operation") or outer_input.get("action") or "").lower()
+            inner_input = outer_input.get("input")
+            if inner_op == "prepare" and isinstance(inner_input, dict):
+                logger.info("Detected legacy double-wrapped payload, unwrapping one level.")
+                event_data = outer_input
+
     operation = event_data.get("operation") or event_data.get("action") or ""
     op = operation.lower()
     
@@ -67,25 +79,61 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # Schedulers / manual targets
         analysis_targets = payload.get("analysis_targets") or event_data.get("analysis_targets")
         
+        is_manual_fallback = False
         # Manual run fallback
         if not analysis_targets:
             if account_id:
                 analysis_targets = [{"account_id": account_id}]
+                is_manual_fallback = True
                 if not management_account_id:
                     management_account_id = account_id
             else:
                 analysis_targets = []
-        else:
-            # Normalize to list of dicts with account_id
-            normalized_targets = []
-            for target in analysis_targets:
-                if isinstance(target, dict) and "account_id" in target:
-                    normalized_targets.append(target)
-                elif isinstance(target, str):
-                    normalized_targets.append({"account_id": target})
-                else:
-                    normalized_targets.append({"account_id": str(target)})
-            analysis_targets = normalized_targets
+
+        # Get first target account id safely
+        first_target_acc = ""
+        if analysis_targets:
+            first_tgt = analysis_targets[0]
+            if isinstance(first_tgt, dict):
+                first_target_acc = first_tgt.get("account_id") or ""
+            else:
+                first_target_acc = str(first_tgt)
+
+        tenant_id_account = account_id or management_account_id or first_target_acc
+        tenant_id = payload.get("tenant_id") or event_data.get("tenant_id") or _default_tenant_id(tenant_id_account)
+
+        # Normalize to list of dicts with account_id and tenant_id
+        normalized_targets = []
+        for target in analysis_targets:
+            if isinstance(target, dict):
+                new_tgt = target.copy()
+                acc_id = new_tgt.get("account_id")
+                if not acc_id:
+                    acc_id = ""
+                new_tgt["account_id"] = acc_id
+                
+                # Check for explicit target-level tenant_id, or fallback
+                tgt_tenant = new_tgt.get("tenant_id")
+                if not tgt_tenant:
+                    if is_manual_fallback:
+                        # Matches the root tenant_id
+                        tgt_tenant = tenant_id
+                    else:
+                        tgt_tenant = _default_tenant_id(acc_id)
+                new_tgt["tenant_id"] = tgt_tenant
+                normalized_targets.append(new_tgt)
+            elif isinstance(target, str):
+                normalized_targets.append({
+                    "account_id": target,
+                    "tenant_id": _default_tenant_id(target)
+                })
+            else:
+                acc_str = str(target)
+                normalized_targets.append({
+                    "account_id": acc_str,
+                    "tenant_id": _default_tenant_id(acc_str)
+                })
+        analysis_targets = normalized_targets
 
         # Validate that scheduled runs contain at least one analysis target.
         # Scheduled run check: is_ad_hoc is False, or trigger_type is scheduled, or similar
@@ -97,9 +145,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
             
         if not analysis_targets:
             raise ValueError("No analysis targets or account_id provided for execution")
-
-        tenant_id_account = account_id or management_account_id or (analysis_targets[0]["account_id"] if analysis_targets else "")
-        tenant_id = payload.get("tenant_id") or event_data.get("tenant_id") or _default_tenant_id(tenant_id_account)
         
         details = {
             "run_id": run_id,

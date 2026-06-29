@@ -6,7 +6,7 @@ class DynamoDBClient:
     def get_item(self, table_name: str, key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         raise NotImplementedError()
 
-    def put_item(self, table_name: str, item: Dict[str, Any]) -> None:
+    def put_item(self, table_name: str, item: Dict[str, Any], condition_expression: Optional[str] = None) -> None:
         raise NotImplementedError()
 
     def update_item(self, table_name: str, key: Dict[str, Any], update_expression: str, expression_attribute_values: Dict[str, Any]) -> None:
@@ -56,10 +56,13 @@ class RealDynamoDB(DynamoDBClient):
         response = table.get_item(Key=key)
         return response.get("Item")
 
-    def put_item(self, table_name: str, item: Dict[str, Any]) -> None:
+    def put_item(self, table_name: str, item: Dict[str, Any], condition_expression: Optional[str] = None) -> None:
         db = boto3.resource("dynamodb")
         table = db.Table(table_name)
-        table.put_item(Item=item)
+        kwargs = {"Item": item}
+        if condition_expression is not None:
+            kwargs["ConditionExpression"] = condition_expression
+        table.put_item(**kwargs)
 
     def update_item(self, table_name: str, key: Dict[str, Any], update_expression: str, expression_attribute_values: Dict[str, Any]) -> None:
         db = boto3.resource("dynamodb")
@@ -146,7 +149,12 @@ class FakeDynamoDB(DynamoDBClient):
 
     def put_item(self, table_name: str, item: Dict[str, Any], condition_expression: Optional[str] = None) -> None:
         if self.put_item_func:
-            self.put_item_func(table_name, item)
+            import inspect
+            sig = inspect.signature(self.put_item_func)
+            if "condition_expression" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                self.put_item_func(table_name, item, condition_expression=condition_expression)
+            else:
+                self.put_item_func(table_name, item)
             return
         # Use table-isolated storage
         if table_name not in self.items:

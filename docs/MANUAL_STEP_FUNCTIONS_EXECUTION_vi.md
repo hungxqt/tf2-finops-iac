@@ -71,11 +71,8 @@ Sử dụng payload này để phân tích một tài khoản đích duy nhất:
 ```powershell
 $InputJson = @'
 {
-  "operation": "prepare",
-  "input": {
-    "account_id": "444444444444",
-    "is_ad_hoc": true
-  }
+  "account_id": "444444444444",
+  "is_ad_hoc": true
 }
 '@
 $InputJson | Set-Content -Path .\manual_input.json -Encoding utf8
@@ -86,13 +83,10 @@ Sử dụng payload này để phân tích nhiều tài khoản liên kết (mem
 ```powershell
 $InputJson = @'
 {
-  "operation": "prepare",
-  "input": {
-    "management_account_id": "111111111111",
-    "analysis_targets": ["222222222222", "333333333333"],
-    "trigger_type": "scheduled",
-    "is_ad_hoc": false
-  }
+  "management_account_id": "111111111111",
+  "analysis_targets": ["222222222222", "333333333333"],
+  "trigger_type": "scheduled",
+  "is_ad_hoc": false
 }
 '@
 $InputJson | Set-Content -Path .\manual_input.json -Encoding utf8
