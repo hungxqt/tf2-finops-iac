@@ -226,22 +226,22 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group_rule" "alb_ingress_https" {
   type              = "ingress"
-  from_port         = 443
-  to_port           = 443
+  from_port         = var.enable_alb_https ? 443 : 80
+  to_port           = var.enable_alb_https ? 443 : 80
   protocol          = "tcp"
   cidr_blocks       = [var.vpc_cidr_block]
   security_group_id = aws_security_group.alb.id
-  description       = "Allow HTTPS from within the VPC"
+  description       = var.enable_alb_https ? "Allow HTTPS from within the VPC" : "Allow HTTP from within the VPC"
 }
 
 resource "aws_security_group_rule" "alb_ingress_cloudfront" {
   type              = "ingress"
-  from_port         = 443
-  to_port           = 443
+  from_port         = var.enable_alb_https ? 443 : 80
+  to_port           = var.enable_alb_https ? 443 : 80
   protocol          = "tcp"
   prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   security_group_id = aws_security_group.alb.id
-  description       = "Allow HTTPS from CloudFront origin-facing IPs"
+  description       = var.enable_alb_https ? "Allow HTTPS from CloudFront origin-facing IPs" : "Allow HTTP from CloudFront origin-facing IPs"
 }
 
 # trivy:ignore:AVD-AWS-0104
@@ -304,10 +304,10 @@ resource "aws_lambda_permission" "alb_invoke_request" {
 
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.ai.arn
-  port              = "443"
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = local.is_dummy_cert ? aws_acm_certificate.self_signed[0].arn : var.alb_certificate_arn
+  port              = var.enable_alb_https ? "443" : "80"
+  protocol          = var.enable_alb_https ? "HTTPS" : "HTTP"
+  ssl_policy        = var.enable_alb_https ? "ELBSecurityPolicy-TLS13-1-2-2021-06" : null
+  certificate_arn   = var.enable_alb_https ? (local.is_dummy_cert ? aws_acm_certificate.self_signed[0].arn : var.alb_certificate_arn) : null
 
   default_action {
     type             = "forward"

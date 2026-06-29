@@ -78,6 +78,7 @@ locals {
       memory_size = 256
       env = {
         ALB_BASE_URL              = var.alb_base_url
+        ALLOW_INSECURE_ALB_HTTP   = tostring(var.allow_insecure_alb_http)
         SIGV4_SERVICE_NAME        = var.sigv4_service_name
         REQUEST_TIMEOUT_SECONDS   = "60"
         IDEMPOTENCY_TABLE_NAME    = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
@@ -110,6 +111,19 @@ resource "aws_vpc_security_group_egress_rule" "lambda_https" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "Allow HTTPS outbound traffic from Lambda"
+}
+
+# Allow outbound HTTP (port 80) from Lambda to internal ALB (Sandbox override)
+# trivy:ignore:AVD-AWS-0104
+# trivy:ignore:AWS-0104
+resource "aws_vpc_security_group_egress_rule" "lambda_http" {
+  count             = var.allow_insecure_alb_http ? 1 : 0
+  security_group_id = aws_security_group.lambda.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  description       = "Allow HTTP outbound traffic from Lambda (Sandbox override)"
 }
 
 # Ingress rule for VPC Endpoint Security Group allowing ingress from Lambda security group

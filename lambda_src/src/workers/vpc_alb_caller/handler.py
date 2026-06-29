@@ -130,8 +130,15 @@ def validate_path(path: str) -> str:
 
 def validate_alb_base_url(alb_base_url: str) -> str:
     parsed = urlparse(alb_base_url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise ConfigMissingError("ALB_BASE_URL must be an HTTPS URL with a host")
+    allow_insecure = os.environ.get("ALLOW_INSECURE_ALB_HTTP", "false").lower() == "true"
+    allowed_schemes = ["https"]
+    if allow_insecure:
+        allowed_schemes.append("http")
+
+    if parsed.scheme not in allowed_schemes or not parsed.netloc:
+        raise ConfigMissingError(
+            "ALB_BASE_URL must be an HTTPS URL (or HTTP if ALLOW_INSECURE_ALB_HTTP=true) with a host"
+        )
     if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
         raise ConfigMissingError("ALB_BASE_URL must not include a path, query, or fragment")
     return f"{parsed.scheme}://{parsed.netloc}"

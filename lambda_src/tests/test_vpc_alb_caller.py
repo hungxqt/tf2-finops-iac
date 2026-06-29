@@ -852,3 +852,24 @@ class TestStaticWAFPolicy:
         assert 'variable "ai_request_s3_pointer_prefixes"' in content, (
             "modules/ai-runtime-lambda/variables.tf must declare ai_request_s3_pointer_prefixes"
         )
+
+
+def test_vpc_alb_caller_alb_base_url_scheme_validation(monkeypatch):
+    """Test ALB_BASE_URL scheme validation and ALLOW_INSECURE_ALB_HTTP environment flag."""
+    # 1. By default, HTTPS URL should pass validation
+    assert handler.validate_alb_base_url("https://internal-ai-alb.us-east-1.elb.amazonaws.com") == "https://internal-ai-alb.us-east-1.elb.amazonaws.com"
+
+    # 2. By default, HTTP URL should fail validation
+    with pytest.raises(ConfigMissingError, match="ALB_BASE_URL must be an HTTPS URL"):
+        handler.validate_alb_base_url("http://internal-ai-alb.us-east-1.elb.amazonaws.com")
+
+    # 3. If ALLOW_INSECURE_ALB_HTTP is set to true, HTTP URL should pass validation
+    monkeypatch.setenv("ALLOW_INSECURE_ALB_HTTP", "true")
+    assert handler.validate_alb_base_url("http://internal-ai-alb.us-east-1.elb.amazonaws.com") == "http://internal-ai-alb.us-east-1.elb.amazonaws.com"
+    # HTTPS should still pass
+    assert handler.validate_alb_base_url("https://internal-ai-alb.us-east-1.elb.amazonaws.com") == "https://internal-ai-alb.us-east-1.elb.amazonaws.com"
+
+    # 4. Invalid URLs (e.g. including a path) should still fail
+    with pytest.raises(ConfigMissingError, match="ALB_BASE_URL must not include a path"):
+        handler.validate_alb_base_url("http://internal-ai-alb.us-east-1.elb.amazonaws.com/v1")
+

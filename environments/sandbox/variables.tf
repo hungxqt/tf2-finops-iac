@@ -178,3 +178,9 @@ variable "cur_raw_prefix" {
   default     = ""
 }
 
+variable "enable_alb_https" {
+  type        = bool
+  description = "Enable HTTPS for the internal ALB. If false, HTTP port 80 is used (Sandbox only)."
+  default     = true
+}
+

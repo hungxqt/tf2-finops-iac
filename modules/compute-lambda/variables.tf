@@ -167,3 +167,9 @@ variable "cur_raw_export_prefix" {
   description = "S3 prefix under CUR_SOURCE_BUCKET where AWS Data Exports writes raw CUR 2.0 files. Used by the normalizer to validate that manifest reportKeys stay within the allowed prefix."
   default     = ""
 }
+
+variable "allow_insecure_alb_http" {
+  type        = bool
+  description = "Allow insecure HTTP for the ALB_BASE_URL (sandbox only)"
+  default     = false
+}

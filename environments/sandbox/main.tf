@@ -541,6 +541,7 @@ module "ai_runtime_lambda" {
   enable_codedeploy                 = true
   codedeploy_deployment_config_name = "CodeDeployDefault.LambdaLinear10PercentEvery1Minute"
   codedeploy_alarm_actions          = [module.alerting.engineering_topic_arn]
+  enable_alb_https                  = var.enable_alb_https
 }
 
 
@@ -567,7 +568,8 @@ module "compute_lambda" {
   cloudwatch_log_kms_key_arn = module.lakehouse.data_kms_key_arn
   lambda_env_kms_key_arn     = module.lakehouse.data_kms_key_arn
   sqs_kms_key_arn            = module.lakehouse.data_kms_key_arn
-  alb_base_url               = var.private_hosted_zone_id != "" && var.private_dns_name != "" ? "https://${var.private_dns_name}" : "https://${module.ai_runtime_lambda.alb_dns_name}"
+  allow_insecure_alb_http    = !var.enable_alb_https
+  alb_base_url               = "${var.enable_alb_https ? "https" : "http"}://${var.private_hosted_zone_id != "" && var.private_dns_name != "" ? var.private_dns_name : module.ai_runtime_lambda.alb_dns_name}"
   sigv4_service_name         = var.sigv4_service_name
   tags                       = var.tags
 

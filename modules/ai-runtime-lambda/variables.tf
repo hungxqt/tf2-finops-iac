@@ -156,3 +156,9 @@ variable "deployment_p99_latency_threshold_ms" {
   description = "Latency threshold in ms for the P99 duration alarm"
   default     = 800
 }
+
+variable "enable_alb_https" {
+  type        = bool
+  description = "Enable HTTPS for the internal ALB. If set to false, HTTP on port 80 is used (Sandbox only)."
+  default     = true
+}

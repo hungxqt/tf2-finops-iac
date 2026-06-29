@@ -37,3 +37,7 @@ cur_delay_threshold_hours  = 36
 ce_lookback_window_days    = 30
 traffic_metric_identifiers  = ["my-alb-identifier"]
 
+# Enable HTTPS for the internal ALB (must remain true in staging)
+enable_alb_https = true
+
+

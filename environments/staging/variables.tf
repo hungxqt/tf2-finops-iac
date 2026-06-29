@@ -154,4 +154,14 @@ variable "trusted_cost_puller_role_arns" {
   default     = []
 }
 
+variable "enable_alb_https" {
+  type        = bool
+  description = "Enable HTTPS for the internal ALB. Must be true in staging."
+  default     = true
+  validation {
+    condition     = var.enable_alb_https == true
+    error_message = "HTTP mode (enable_alb_https = false) is allowed only in sandbox; staging and prod must remain HTTPS."
+  }
+}
+
 

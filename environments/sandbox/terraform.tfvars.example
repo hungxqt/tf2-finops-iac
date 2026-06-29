@@ -80,3 +80,7 @@ cur_exports_json = <<-EOT
   }
 }
 EOT
+
+# Enable HTTPS for the internal ALB (default: true; set to false for Sandbox HTTP mode)
+enable_alb_https = true
+
