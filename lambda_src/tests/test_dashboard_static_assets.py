@@ -24,15 +24,22 @@ def test_dashboard_ui_covers_doc06_operational_surfaces():
     index = read(DASHBOARD_MODULE / "resources" / "index.html")
     app = read(DASHBOARD_MODULE / "resources" / "assets" / "app.js")
 
-    assert "Manual Approval" in index
-    assert "Alert Routing" in index
-    assert "Audit Diff" in index
-    assert "Access Settings" in index
-    assert "renderApprovals" in app
-    assert "renderAlertPreviews" in app
-    assert "renderAuditDiffs" in app
-    assert "renderAdminSettings" in app
-    assert "/v1/verify" in app
-    assert "/v1/audit/" in app
+    assert "TF2 FinOps Watch Dashboard" in index
+    assert "Manual Approval" in app
+    assert "Alert Routing" in app
+    assert "Audit Diff" in app
+    assert "Access Settings" in app
+    assert "Read-only first" in app
+    assert "Handled by Step Functions" in app
+    assert "/v1/" not in app
     assert "rollback_script" not in app.lower()
     assert "aws cli" not in app.lower()
+
+
+def test_dashboard_frontend_source_exists():
+    frontend = DASHBOARD_MODULE / "frontend"
+
+    assert (frontend / "package.json").exists()
+    assert (frontend / "vite.config.ts").exists()
+    assert (frontend / "src" / "App.tsx").exists()
+    assert (frontend / "src" / "schema.ts").exists()
