@@ -354,6 +354,7 @@ resource "aws_s3_bucket_versioning" "cloudfront_logs" {
 }
 
 # trivy:ignore:AVD-AWS-0132
+# trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "cloudfront_logs" {
   bucket = aws_s3_bucket.cloudfront_logs.id
   rule {
@@ -1139,5 +1140,4 @@ resource "terraform_data" "destroy_guard" {
     prevent_destroy = true
   }
 }
-
 
