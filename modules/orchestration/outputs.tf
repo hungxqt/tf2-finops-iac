@@ -3,6 +3,11 @@ output "state_machine_arn" {
   value       = aws_sfn_state_machine.workflow.arn
 }
 
+output "feedback_state_machine_arn" {
+  description = "The ARN of the asynchronous human feedback Step Functions State Machine"
+  value       = aws_sfn_state_machine.feedback.arn
+}
+
 output "scheduler_arn" {
   description = "The ARN of the EventBridge Scheduler schedule"
   value       = aws_scheduler_schedule.run_workflow.arn

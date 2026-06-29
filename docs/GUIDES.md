@@ -205,6 +205,7 @@ terraform output
 * `worker_lambda_function_name`: AI Engine Worker Lambda function name (container-based, processes asynchronous anomaly ingestion).
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
+* `feedback_state_machine_arn`: Asynchronous Human Feedback State Machine ARN for Slack/dashboard review submissions to `POST /v1/feedback`.
 * `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
 * `synchronous_ai_endpoints`: The endpoints `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous operations called via `VpcAlbCallerLambda` and Route 53 private DNS alias. `/v1/status/{id}` is for remediation audit/status only, not for detection polling. There is no detection SQS or polling loop in the default path; SQS is restricted to alert retry and `finops-watch-rollback` audit completion notifications.
 
@@ -379,12 +380,46 @@ Fields: boto3_equivalent, ttl_epoch (90-day TTL)
 
 ---
 
-## 9. Guide Maintenance
+## 9. Human Feedback Workflow
+
+Human feedback is handled by a separate asynchronous Step Functions workflow, not by the daily FinOps detection workflow. Slack or dashboard backends should start `feedback_state_machine_arn` after an SRE/Engineer confirms a detection result.
+
+### 9.1 Start a Feedback Execution
+
+Use the `feedback_state_machine_arn` Terraform output and pass the telemetry-contract section 15 payload under `human_feedback`:
+
+```powershell
+aws stepfunctions start-execution `
+  --state-machine-arn "<feedback_state_machine_arn>" `
+  --name "feedback-ANM-2026-0628A-U12345678" `
+  --input '{
+    "run_id": "feedback-2026-06-28-001",
+    "correlation_id": "22222222-2222-4222-8222-222222222222",
+    "account_id": "123456789012",
+    "cost_period": "2026-06-01/2026-06-28",
+    "execution_date": "2026-06-28",
+    "tenant_id": "11111111-1111-4111-8111-111111111111",
+    "ai_contract_version": "v1",
+    "human_feedback": {
+      "anomaly_id": "ANM-2026-0628A",
+      "reviewer_id": "U12345678",
+      "verdict": "FALSE_POSITIVE",
+      "reason": "Known load test confirmed by service owner.",
+      "reviewed_at": "2026-06-28T09:30:00.000Z"
+    }
+  }'
+```
+
+Accepted `verdict` values are `TRUE_POSITIVE`, `FALSE_POSITIVE`, and `BENIGN_EVENT`. The workflow validates these fields, calls `POST /v1/feedback` through `VpcAlbCallerLambda`, and writes audit evidence for success or delivery failure.
+
+---
+
+## 10. Guide Maintenance
 This developer guide must be kept current. Future agents and contributors must update both `docs/GUIDES.md` and `docs/GUIDES_vi.md` in the same change whenever a developer/operator workflow, command sequence, validation path, script, CI job, deployment step, or handoff procedure is added or changed.
 
 ---
 
-## 10. Step Functions Workflow Verification
+## 11. Step Functions Workflow Verification
 
 The `test_step_function_payload_contract.py` suite provides a **repo-local, no-AWS verification layer** that proves:
 
@@ -443,7 +478,7 @@ This is sufficient for all `Parameters` (JSONPath `key.$`) and `Choice` variable
 
 ---
 
-## 11. AI Request Integrity Deployment Gate
+## 12. AI Request Integrity Deployment Gate
 
 The `scripts/test-ai-request-integrity.ps1` script is a **post-apply deployment gate** that validates request integrity of the deployed `VpcAlbCallerLambda` → private internal ALB → AI Request Lambda path before promoting a container image to the next environment.
 
@@ -514,7 +549,7 @@ Results are written to `docs/progress/request_integrity_gate_results_{environmen
 
 ---
 
-## 12. CodeBuild Wrapper Image Publish Guide
+## 13. CodeBuild Wrapper Image Publish Guide
 
 The repository includes a CodeBuild project to build and publish the AI Engine wrapper image. The wrapper copies the AWS Lambda Web Adapter into the upstream AIOps FastAPI container, allowing it to execute properly on the AWS Lambda platform.
 
@@ -546,7 +581,7 @@ These parameters are used by operators during standard Reviewed Terraform Deploy
 
 ---
 
-## 13. Sandbox AI Lambda CodeDeploy Rollout Guide
+## 14. Sandbox AI Lambda CodeDeploy Rollout Guide
 
 The repository configures CodeDeploy-controlled linear traffic shifting for the AI Engine Request Lambda in `modules/ai-runtime-lambda`, scoped initially to the `sandbox` environment.
 

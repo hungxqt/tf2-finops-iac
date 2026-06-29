@@ -6,6 +6,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(ROOT, "modules", "orchestration", "statemachine.json")
 OUTPUT = os.path.join(ROOT, "docs", "statemachine.json")
+FEEDBACK_TEMPLATE = os.path.join(ROOT, "modules", "orchestration", "feedback_statemachine.json")
+FEEDBACK_OUTPUT = os.path.join(ROOT, "docs", "feedback-statemachine.json")
 
 replacements = [
     ("${state_lambda_arn}", "arn:aws:lambda:ap-southeast-1:123456789012:function:tf2-finops-sandbox-state"),
@@ -24,20 +26,24 @@ replacements = [
     ("${ai_engine_contract_version}", "v1"),
 ]
 
-with open(TEMPLATE, "r", encoding="utf-8") as f:
-    lines = f.readlines()
+for template_path, output_path in [
+    (TEMPLATE, OUTPUT),
+    (FEEDBACK_TEMPLATE, FEEDBACK_OUTPUT),
+]:
+    with open(template_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-out = []
-for line in lines:
-    for old, new in replacements:
-        line = line.replace(old, new)
-    out.append(line)
+    out = []
+    for line in lines:
+        for old, new in replacements:
+            line = line.replace(old, new)
+        out.append(line)
 
-with open(OUTPUT, "w", encoding="utf-8", newline="") as f:
-    f.writelines(out)
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
+        f.writelines(out)
 
-with open(OUTPUT, "r", encoding="utf-8") as f:
-    doc = json.load(f)
+    with open(output_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
 
-print(f"States ({len(doc['States'])}): {list(doc['States'].keys())[:6]} ...")
+    print(f"{os.path.relpath(output_path, ROOT)} states ({len(doc['States'])}): {list(doc['States'].keys())[:6]} ...")
 print("Done")
