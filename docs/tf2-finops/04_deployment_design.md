@@ -182,7 +182,7 @@ To ensure secure software delivery and prevent tampering in compliance with the 
 - **AI Engine Lambda Workloads (Synchronous)**: Deployed using **Lambda Weighted Aliases** by publishing Lambda versions and pinning ECR digests. Traffic shifts gradually: a `10%` canary window for 5 minutes, transitioning to `100%` if no execution errors occur.
 - **Alert Routing Lambda (SQS Triggered)**: Deployed using an **All-at-once** strategy for alert retries. SQS/DLQ are used only for alert routing retry buffers rather than the detection flow. Safe deployment is ensured via a strict **Dead Letter Queue (DLQ)** configuration to capture alert routing failures.
 - **Lambda Reserved Concurrency**: Configured with a default reserved concurrency limit (e.g., 5-10 concurrent executions baseline) to act as a rate-limiting and cost guardrail, avoiding execution spikes and throttling limits.
-- **SQS Concurrency Controls**: Configured on the event source mapping using maximum concurrency settings and batch size constraints to align message processing with AI Engine capacity and prevent database connection exhaustion.
+- **SQS Concurrency Controls**: Configured on the event source mapping using maximum concurrency settings and batch size constraints to align message processing with alert routing capacity and prevent database connection exhaustion.
 - **Lambda Timeout & Execution Retry Handling**: The AI Engine Lambda function is configured with a safe execution timeout and automatic retry rules. For alert routing, SQS acts as a buffer; if a Lambda execution is interrupted, the message is returned to the queue for a retry, up to a maximum limit, before being routed to the Dead Letter Queue (DLQ).
 
 ### 4.2 Rollback method

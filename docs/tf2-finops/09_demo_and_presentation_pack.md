@@ -93,8 +93,8 @@ This script guides presenters through demonstrating the end-to-end FinOps Watch 
 - **Verification**: Check CLI logs and S3/DynamoDB audit records to confirm the audit state changes to `RollbackCompleted` (returning `audit_recorded = true`) with the operator's Cognito user ID logged in the `actor` field. Confirm that the Finance user's attempt yields an authorization failure (representing HTTP `403 Forbidden` semantics) and writes an `unauthorized_action_blocked` audit entry. If the manual rollback rate exceeds the environment threshold (prod 1% rollback rate, staging 10% rollback rate, dev/sandbox disabled), verify the tenant is locked into `LOCKED_MODE` (forcing all future decisions to dry-run).
 
 ### Step 11 - Verify callback delivery
-- **Action**: Monitor the callback receiver endpoint logs during asynchronous runs.
-- **Internal Action**: When the AI Engine completes a check, it delivers updates to the CDO callback endpoint.
+- **Action**: Monitor the callback receiver endpoint logs when the optional callback_url is enabled.
+- **Internal Action**: When the AI Engine completes a check and callback_url is configured, it delivers an optional callback copy of the result to the CDO callback endpoint.
 - **Verification**: Confirm delivery is logged as platform telemetry. Verify that if delivery fails, the platform executes a retry schedule (0s, 30s, 120s) and logs `CALLBACK_EXHAUSTED` upon final failure without disrupting the synchronous detection results.
 
 ---

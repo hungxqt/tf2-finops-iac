@@ -121,7 +121,7 @@ If the AI Engine is completely unreachable (e.g., ALB routing failure or Lambda 
 
 ### 4.7 Concurrency controls
 
-- **Concurrency Load Simulation**: Simulates a burst of concurrent direct AI Engine Lambda invocations.
+- **Concurrency Load Simulation**: Simulates a burst of concurrent requests through the private ALB path to test AI Engine Lambda concurrency.
 - **Reserved Concurrency Guardrail**: Verifies that the AI Engine Lambda function respects its configured Reserved Concurrency limits to prevent throttling other critical platform services, returning proper invocation throttling errors.
 - **Provisioned Concurrency Test (Optional)**: If enabled, verifies that pre-warmed Lambda execution environments are allocated and successfully route requests without cold-start latency.
 
