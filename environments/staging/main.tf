@@ -495,13 +495,14 @@ module "iam" {
       module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
     ]
   )
-  ai_payload_idempotency_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
-  kms_key_arns                     = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
-  containment_apply_enabled        = false
-  queue_arns                       = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
-  sns_topic_arns                   = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
-  telemetry_member_account_ids     = var.telemetry_member_account_ids
-  telemetry_member_role_name       = var.telemetry_member_role_name
+  ai_payload_idempotency_table_arn   = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
+  ai_payload_idempotency_kms_key_arn = module.lakehouse.ddb_kms_key_arn
+  kms_key_arns                       = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
+  containment_apply_enabled          = false
+  queue_arns                         = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
+  sns_topic_arns                     = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
+  telemetry_member_account_ids       = var.telemetry_member_account_ids
+  telemetry_member_role_name         = var.telemetry_member_role_name
   cur_source_bucket_arn = (
     var.cur_source_bucket_arn != "" ? var.cur_source_bucket_arn :
     module.lakehouse.cur_export_bucket_arn != "" ? module.lakehouse.cur_export_bucket_arn :

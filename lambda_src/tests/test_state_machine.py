@@ -180,27 +180,41 @@ def check_asl_file(asl_path, is_template=True):
     assert eval_detect["Type"] == "Choice"
     detect_choices = eval_detect["Choices"]
     
+    found_ai_error_fail = False
+    found_missing_success_fail = False
     found_success_fail = False
     found_confidence_fail = False
     found_anomalies_decide = False
     
     for choice in detect_choices:
+        if choice.get("Variable") == "$.ai_detect_response.ai_error" and choice.get("BooleanEquals") is True:
+            assert choice["Next"] == "SetAIFailClosedError"
+            found_ai_error_fail = True
+        if choice.get("Variable") == "$.ai_detect_response.success" and choice.get("IsPresent") is False:
+            assert choice["Next"] == "SetAIFailClosedError"
+            found_missing_success_fail = True
         if choice.get("Variable") == "$.ai_detect_response.success" and choice.get("BooleanEquals") is False:
             assert choice["Next"] == "SetAIFailClosedError"
             found_success_fail = True
-        if choice.get("Variable") == "$.ai_detect_response.data_confidence" and choice.get("StringEquals") == "LOW":
-            assert choice["Next"] == "SetAIFailClosedError"
-            found_confidence_fail = True
         if "And" in choice:
             conds = choice["And"]
+            has_confidence_present = any(c.get("Variable") == "$.ai_detect_response.data_confidence" and c.get("IsPresent") is True for c in conds)
+            has_confidence_low = any(c.get("Variable") == "$.ai_detect_response.data_confidence" and c.get("StringEquals") == "LOW" for c in conds)
+            if has_confidence_present and has_confidence_low:
+                assert choice["Next"] == "SetAIFailClosedError"
+                found_confidence_fail = True
+            has_success_present = any(c.get("Variable") == "$.ai_detect_response.success" and c.get("IsPresent") is True for c in conds)
             has_success_true = any(c.get("Variable") == "$.ai_detect_response.success" and c.get("BooleanEquals") is True for c in conds)
+            has_anomalies_detected_present = any(c.get("Variable") == "$.ai_detect_response.anomalies_detected" and c.get("IsPresent") is True for c in conds)
             has_anomalies_detected = any(c.get("Variable") == "$.ai_detect_response.anomalies_detected" and c.get("BooleanEquals") is True for c in conds)
             has_anomalies_list = any(c.get("Variable") == "$.ai_detect_response.anomalies_list" and c.get("IsPresent") is True for c in conds)
-            if has_success_true and has_anomalies_detected and has_anomalies_list:
+            if has_success_present and has_success_true and has_anomalies_detected_present and has_anomalies_detected and has_anomalies_list:
                 # G1 fix: routes to ProcessDetectedAnomalies Map, not InvokeDecide
                 assert choice["Next"] == "ProcessDetectedAnomalies"
                 found_anomalies_decide = True
                 
+    assert found_ai_error_fail, "EvaluateDetectResponse must fail closed on ai_error = True"
+    assert found_missing_success_fail, "EvaluateDetectResponse must fail closed when success is missing"
     assert found_success_fail, "EvaluateDetectResponse must check success = False to FailClosed"
     assert found_confidence_fail, "EvaluateDetectResponse must check data_confidence = LOW to FailClosed"
     assert found_anomalies_decide, "EvaluateDetectResponse must check success, anomalies_detected, and anomalies_list to go to ProcessDetectedAnomalies"
@@ -533,7 +547,6 @@ def test_state_machine_tenant_context_propagation():
     assert "CheckErrorBudgetLock" in iterator_states
     check_error_budget_params = iterator_states["CheckErrorBudgetLock"]["Parameters"]
     assert check_error_budget_params.get("tenant_id.$") == "$.tenant_id"
-
 
 
 

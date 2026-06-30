@@ -127,6 +127,12 @@ variable "ai_payload_idempotency_table_arn" {
   default     = ""
 }
 
+variable "ai_payload_idempotency_kms_key_arn" {
+  type        = string
+  description = "ARN of the KMS key used by the ai_payload_idempotency DynamoDB table."
+  default     = ""
+}
+
 variable "trusted_tenant_ids" {
   type        = list(string)
   description = "Allowed tenant IDs used as sts:ExternalId and aws:RequestTag/tenant_id conditions on the member telemetry ingestion role trust policy. Required when create_member_telemetry_ingestion_role = true."

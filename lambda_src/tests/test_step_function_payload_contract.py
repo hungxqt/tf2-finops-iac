@@ -470,10 +470,11 @@ class TestDetectPath:
         ctx = POST_BUILD_DETECT_REQUEST
         assert _resolve_path(ctx, "$.ai_detect_request.tenant_id") == TENANT_ID
 
-    def test_build_detect_request_stable_idempotency_key(self):
+    def test_build_detect_request_run_scoped_idempotency_key(self):
         ctx = POST_BUILD_DETECT_REQUEST
         idem = _resolve_path(ctx, "$.ai_detect_request.idempotency_key")
         assert idem == IDEMPOTENCY_KEY
+        assert RUN_ID in idem
 
     def test_build_detect_request_body_has_business_context(self):
         ctx = POST_BUILD_DETECT_REQUEST
@@ -611,12 +612,34 @@ class TestDetectPath:
         )
         assert found
 
+    def test_detect_response_fail_closed_on_ai_error(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateDetectResponse"]["Choices"]
+        found = any(
+            c.get("Variable") == "$.ai_detect_response.ai_error" and
+            c.get("BooleanEquals") is True and
+            c.get("Next") == "SetAIFailClosedError"
+            for c in choices
+        )
+        assert found
+
+    def test_detect_response_fail_closed_when_success_missing(self):
+        asl = _load_asl_template()
+        choices = asl["States"]["EvaluateDetectResponse"]["Choices"]
+        found = any(
+            c.get("Variable") == "$.ai_detect_response.success" and
+            c.get("IsPresent") is False and
+            c.get("Next") == "SetAIFailClosedError"
+            for c in choices
+        )
+        assert found
+
     def test_detect_response_fail_closed_on_low_confidence(self):
         asl = _load_asl_template()
         choices = asl["States"]["EvaluateDetectResponse"]["Choices"]
         found = any(
-            c.get("Variable") == "$.ai_detect_response.data_confidence" and
-            c.get("StringEquals") == "LOW" and
+            any(cond.get("Variable") == "$.ai_detect_response.data_confidence" and cond.get("IsPresent") is True for cond in c.get("And", [])) and
+            any(cond.get("Variable") == "$.ai_detect_response.data_confidence" and cond.get("StringEquals") == "LOW" for cond in c.get("And", [])) and
             c.get("Next") == "SetAIFailClosedError"
             for c in choices
         )

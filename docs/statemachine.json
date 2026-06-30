@@ -593,7 +593,7 @@
         "method": "POST",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+        "idempotency_key.$": "States.Format('{}:{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type, $.run_id)",
         "ai_contract_version.$": "$.ai_contract_version",
         "dry_run_mode.$": "$.force_dry_run",
         "body": {
@@ -603,7 +603,7 @@
           "account_id.$": "$.account_id",
           "account_name.$": "$.environment",
           "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+          "idempotency_key.$": "States.Format('{}:{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type, $.run_id)",
           "request_timestamp.$": "$.normalized.details.request_timestamp",
           "is_ad_hoc.$": "$.is_ad_hoc",
           "telemetry_delay_event.$": "$.normalized.details.telemetry_delay_event",
@@ -632,7 +632,7 @@
         "method": "POST",
         "tenant_id.$": "$.tenant_id",
         "correlation_id.$": "$.correlation_id",
-        "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+        "idempotency_key.$": "States.Format('{}:{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type, $.run_id)",
         "ai_contract_version.$": "$.ai_contract_version",
         "dry_run_mode.$": "$.force_dry_run",
         "body": {
@@ -641,7 +641,7 @@
           "account_id.$": "$.account_id",
           "account_name.$": "$.environment",
           "correlation_id.$": "$.correlation_id",
-          "idempotency_key.$": "States.Format('{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type)",
+          "idempotency_key.$": "States.Format('{}:{}:{}:{}', $.tenant_id, $.execution_date, $.normalized.details.batch_type, $.run_id)",
           "data_source_type": "S3_POINTER",
           "is_ad_hoc.$": "$.is_ad_hoc",
           "telemetry_delay_event.$": "$.normalized.details.telemetry_delay_event",
@@ -701,20 +701,46 @@
       "Type": "Choice",
       "Choices": [
         {
+          "Variable": "$.ai_detect_response.ai_error",
+          "BooleanEquals": true,
+          "Next": "SetAIFailClosedError"
+        },
+        {
+          "Variable": "$.ai_detect_response.success",
+          "IsPresent": false,
+          "Next": "SetAIFailClosedError"
+        },
+        {
           "Variable": "$.ai_detect_response.success",
           "BooleanEquals": false,
           "Next": "SetAIFailClosedError"
         },
         {
-          "Variable": "$.ai_detect_response.data_confidence",
-          "StringEquals": "LOW",
+          "And": [
+            {
+              "Variable": "$.ai_detect_response.data_confidence",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ai_detect_response.data_confidence",
+              "StringEquals": "LOW"
+            }
+          ],
           "Next": "SetAIFailClosedError"
         },
         {
           "And": [
             {
               "Variable": "$.ai_detect_response.success",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ai_detect_response.success",
               "BooleanEquals": true
+            },
+            {
+              "Variable": "$.ai_detect_response.anomalies_detected",
+              "IsPresent": true
             },
             {
               "Variable": "$.ai_detect_response.anomalies_detected",

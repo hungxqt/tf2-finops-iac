@@ -622,6 +622,18 @@ data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {
     ]
     resources = [var.ai_payload_idempotency_table_arn]
   }
+
+  dynamic "statement" {
+    for_each = var.ai_payload_idempotency_kms_key_arn != "" ? [1] : []
+    content {
+      sid = "VpcAlbCallerIdempotencyKmsAccess"
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ]
+      resources = [var.ai_payload_idempotency_kms_key_arn]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "workers_xray" {
