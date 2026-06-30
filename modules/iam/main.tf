@@ -418,6 +418,28 @@ data "aws_iam_policy_document" "normalizer" {
       resources = var.kms_key_arns
     }
   }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "AllowCURSourceList"
+      actions   = ["s3:ListBucket"]
+      resources = [var.cur_source_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid     = "AllowCURSourceGet"
+      actions = ["s3:GetObject", "s3:HeadObject"]
+      resources = length(var.telemetry_member_account_ids) > 0 ? [
+        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
+        ] : [
+        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
+      ]
+    }
+  }
 }
 
 # 4. Router
