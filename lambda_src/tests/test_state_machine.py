@@ -535,5 +535,32 @@ def test_state_machine_tenant_context_propagation():
     assert check_error_budget_params.get("tenant_id.$") == "$.tenant_id"
 
 
+def test_state_machine_failed_run_duplicate_handling():
+    asl_template_path = os.path.join(os.path.dirname(__file__), "../../modules/orchestration/statemachine.json")
+    with open(asl_template_path, "r", encoding="utf-8") as f:
+        raw_content = f.read()
+    processed_content = re.sub(r'"\$\{[a-zA-Z0-9_]+\}"', '"arn:aws:placeholder"', raw_content)
+    processed_content = re.sub(r'\$\{[a-zA-Z0-9_]+\}', '6', processed_content)
+    asl = json.loads(processed_content)
+    
+    top_states = asl["States"]
+    target_map = top_states["ProcessAnalysisTargets"]
+    states = target_map["Iterator"]["States"]
+    
+    duplicate_run = states.get("DuplicateRun")
+    assert duplicate_run is not None
+    assert duplicate_run["Type"] == "Choice"
+    
+    choices = duplicate_run["Choices"]
+    failed_choice = None
+    for choice in choices:
+        if choice.get("Variable") == "$.state.status" and choice.get("StringEquals") == "FAILED":
+            failed_choice = choice
+            break
+            
+    assert failed_choice is not None, "FAILED run status check missing in DuplicateRun Choice state"
+    assert failed_choice["Next"] == "AccountDuplicateIgnored", "FAILED run status must route to AccountDuplicateIgnored"
+
+
 
 

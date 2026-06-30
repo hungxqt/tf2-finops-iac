@@ -841,3 +841,74 @@ def test_handle_request_cross_account_assume_role_failure():
         handler.cw_client = None
         handler.sts_client = None
 
+
+def test_cost_puller_negative_ce_cost():
+    # Test that a negative CE value is handled safely.
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-112233-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "company-cdo-112233-telemetry"
+    
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({"bucket": bucket, "key": key, "body": body})
+        
+    def fake_list_objects(bucket, prefix):
+        from datetime import timedelta
+        return {
+            "Contents": [
+                {
+                    "Key": "cur/manifest.json",
+                    "LastModified": datetime.utcnow() - timedelta(hours=48)
+                }
+            ]
+        }
+        
+    def fake_get_cost_and_usage(**kwargs):
+        return {
+            "ResultsByTime": [
+                {
+                    "TimePeriod": {"Start": "2026-06-24", "End": "2026-06-25"},
+                    "Estimated": False,
+                    "Groups": [
+                        {
+                            "Keys": ["112233", "Amazon Simple Storage Service", "ap-southeast-1"],
+                            "Metrics": {"UnblendedCost": {"Amount": "-3.21"}}
+                        }
+                    ]
+                }
+            ]
+        }
+        
+    handler.s3_client = finops_common.FakeS3(
+        put_object_func=fake_put_object,
+        list_objects_func=fake_list_objects
+    )
+    handler.ce_client = finops_common.FakeCostExplorer(
+        get_cost_and_usage_func=fake_get_cost_and_usage
+    )
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account()
+    
+    event_data = {
+        "run_id": "run-negative-ce",
+        "correlation_id": "corr-negative-ce",
+        "account_id": "112233",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+    }
+    
+    try:
+        resp = handler.handle_request(event_data, None)
+        assert resp["status"] == "READY"
+        assert resp["details"]["telemetry_delay_event"] is True
+        assert resp["details"]["current_ce_cost_gap_usd"] == 0.0
+        assert "AmazonS3" not in resp["details"]["missing_resources"]
+        assert resp["details"]["negative_cost_record_count"] == 1
+        assert resp["details"]["negative_cost_total_usd"] == -3.21
+    finally:
+        del os.environ["LAKEHOUSE_BUCKET_NAME"]
+        del os.environ["CUR_SOURCE_BUCKET"]
+        handler.s3_client = None
+        handler.ce_client = None
+        handler.cw_client = None
+        handler.sts_client = None
+

@@ -451,6 +451,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
     missing_resources = []
     current_ce_cost_gap_usd = 0.0
     comparison_window = {}
+    negative_cost_record_count = 0
+    negative_cost_total_usd = 0.0
 
     telemetry_delay_event = False
     stale_cost_explorer = False
@@ -570,10 +572,22 @@ def handle_request(event_data: dict, context: Any) -> dict:
         }
         exec_ce_records = [r for r in ce_records if r["date"] == exec_date_str]
         for r in exec_ce_records:
-            service_code = r.get("service_code") or r.get("service")
-            if service_code:
-                missing_resources.append(service_code)
-                current_ce_cost_gap_usd += float(r.get("unblended_cost") or 0.0)
+            cost_val = r.get("unblended_cost", 0.0)
+            if cost_val > 0:
+                service_code = r.get("service_code") or r.get("service")
+                if service_code:
+                    missing_resources.append(service_code)
+                    current_ce_cost_gap_usd += float(cost_val)
+
+        # Clamp/recompute current_ce_cost_gap_usd so it is never negative
+        current_ce_cost_gap_usd = max(0.0, current_ce_cost_gap_usd)
+
+        # Compute bounded diagnostics for negative cost values from all ce_records
+        for r in ce_records:
+            cost_val = r.get("unblended_cost", 0.0)
+            if cost_val < 0:
+                negative_cost_record_count += 1
+                negative_cost_total_usd += float(cost_val)
 
     # ── CUR-ready manifest validation already completed upfront ──
 
@@ -625,7 +639,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "delayed_cur": cur_delayed,
                 "stale_cost_explorer": stale_cost_explorer,
                 "missing_cloudwatch": missing_cloudwatch,
-                "estimated_billing": estimated_billing
+                "estimated_billing": estimated_billing,
+                "negative_cost_record_count": negative_cost_record_count,
+                "negative_cost_total_usd": negative_cost_total_usd
             }
         }
 
@@ -700,6 +716,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "stale_cost_explorer": stale_cost_explorer,
             "estimated_billing": estimated_billing,
             "completeness_score": completeness_score,
+            "negative_cost_record_count": negative_cost_record_count,
+            "negative_cost_total_usd": negative_cost_total_usd,
             "resource_utilization_metrics": utilization_metrics,
             "business_context": [
                 {
@@ -741,7 +759,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "completeness_score": completeness_score,
                 "stale_cost_explorer": stale_cost_explorer,
                 "missing_cloudwatch": missing_cloudwatch,
-                "estimated_billing": estimated_billing
+                "estimated_billing": estimated_billing,
+                "negative_cost_record_count": negative_cost_record_count,
+                "negative_cost_total_usd": negative_cost_total_usd
             },
             "resource_utilization_metrics": utilization_metrics,
             "business_context": [
@@ -760,6 +780,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "estimated_billing": estimated_billing,
             "completeness_score": completeness_score,
             "telemetry_delay_event": False,
+            "negative_cost_record_count": negative_cost_record_count,
+            "negative_cost_total_usd": negative_cost_total_usd,
         }
 
     response = finops_common.create_response(status, event.run_id, event.correlation_id, "cost_puller", details)

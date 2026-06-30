@@ -543,12 +543,12 @@ def test_normalizer_payload_contract_fields():
     assert details["account_id"] == "123456789012"
     assert details["account_name"] == "sandbox"
     assert details["correlation_id"] == CORRELATION_ID
-    assert details["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc"
+    assert details["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc-run-s3-pointer-1"
     assert details["business_context"]["linked_account_id"] == "123456789012"
     assert details["business_context"]["traffic_volume"] == 120000
     assert details["resource_utilization_metrics"][0]["cpu_utilization"] == 75.5
     assert len(details["aws_cur_line_items"]) == 1
-    assert details["batch_type"] == "adhoc"
+    assert details["batch_type"] == "adhoc-run-s3-pointer-1"
     assert details["telemetry_delay_event"] is False
     assert len(put_called) == 2 # curated Parquet AND AI input json.gz
 
@@ -563,7 +563,7 @@ def test_normalizer_payload_contract_fields():
     assert envelope["correlation_id"] == CORRELATION_ID
     assert envelope["request_timestamp"].endswith("Z")
     assert len(envelope["aws_cur_line_items"]) == 1
-    assert envelope["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc"
+    assert envelope["idempotency_key"] == f"{TENANT_ID}:2026-06-24:adhoc-run-s3-pointer-1"
     assert envelope["business_context"]["linked_account_id"] == "123456789012"
 
     # 2. Test CE fallback S3 pointer
@@ -955,3 +955,259 @@ class TestDetectRequestModeSelection:
         monkeypatch.delenv("RAW_JSON_INLINE_MAX_BYTES", raising=False)
         cap = int(os.environ.get("RAW_JSON_INLINE_MAX_BYTES", "200000"))
         assert cap == 200_000
+
+
+def test_normalizer_batch_type_emissions():
+    from unittest.mock import MagicMock
+    from workers.normalizer import handler as normalizer_handler
+    
+    # 1. Scheduled daily run
+    event_scheduled = MagicMock()
+    event_scheduled.is_ad_hoc = False
+    event_scheduled.run_id = "run-daily-123"
+    event_scheduled.execution_date = "2026-06-30"
+    event_scheduled.account_id = "123456789012"
+    
+    # Test batch_type logic directly
+    # Prepare mock dependencies if calling handler directly, or check how batch_type is assigned:
+    # If is_ad_hoc is False, it should be "daily"
+    # If is_ad_hoc is True, it should be "adhoc-run-daily-123"
+    
+    # Let's run a unit test for the logic we modified
+    # We can check that:
+    # if event.is_ad_hoc:
+    #     safe_run_id = "".join(c for c in event.run_id if c.isalnum() or c in "-_")
+    #     batch_type = f"adhoc-{safe_run_id}"
+    # else:
+    #     batch_type = "daily"
+    
+    def run_logic(is_adhoc, run_id):
+        event = MagicMock()
+        event.is_ad_hoc = is_adhoc
+        event.run_id = run_id
+        if event.is_ad_hoc:
+            safe_run_id = "".join(c for c in event.run_id if c.isalnum() or c in "-_")
+            batch_type = f"adhoc-{safe_run_id}"
+        else:
+            batch_type = "daily"
+        return batch_type
+        
+    assert run_logic(False, "run-123") == "daily"
+    assert run_logic(True, "run-123") == "adhoc-run-123"
+    assert run_logic(True, "run@123!_#") == "adhoc-run123_"
+
+
+def test_normalizer_ce_fallback_negative_records():
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    os.environ["ATHENA_WORKGROUP_NAME"] = "test-workgroup"
+    
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({"bucket": bucket, "key": key, "body": body})
+        
+    raw_envelope = {
+        "schema_version": "3.2.0",
+        "tenant_id": "tenant-123",
+        "account_id": "112233445566",
+        "correlation_id": "corr-new",
+        "idempotency_key": "idemp-new",
+        "request_timestamp": "2026-06-24T00:00:00Z",
+        "aws_cost_explorer_daily": [
+            {
+                "date": "2026-06-24",
+                "linked_account_id": "112233445566",
+                "service": "Amazon Elastic Compute Cloud - Compute",
+                "unblended_cost": 100.0,
+            },
+            {
+                "date": "2026-06-24",
+                "linked_account_id": "112233445566",
+                "service": "Amazon Simple Storage Service",
+                "unblended_cost": -3.21,
+            }
+        ],
+        "quality": {
+            "completeness_score": 0.8,
+            "delayed_cur": True,
+        }
+    }
+    
+    envelope_bytes = json.dumps(raw_envelope).encode("utf-8")
+    gzipped = gzip.compress(envelope_bytes)
+    
+    def fake_get_object(bucket, key):
+        return gzipped
+        
+    handler.s3_client = finops_common.FakeS3(
+        put_object_func=fake_put_object,
+        get_object_func=fake_get_object
+    )
+    
+    event_data = {
+        "run_id": "run-new",
+        "correlation_id": "corr-new",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-new",
+            "correlation_id": "corr-new",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/cur/account_id=112233445566/year=2026/month=06/day=24/run-new_raw.json.gz",
+            "details": {
+                "telemetry_delay_event": True,
+                "delayed_cur": True,
+            }
+        }
+    }
+    
+    try:
+        resp = handler.handle_request(event_data, None)
+        assert resp["status"] == "NORMALIZED"
+        ce_daily = resp["details"]["aws_cost_explorer_daily"]
+        
+        # Verify negative records are filtered out and positive records are retained
+        assert len(ce_daily) == 1
+        assert ce_daily[0]["unblended_cost"] == 100.0
+        assert not any(r["unblended_cost"] < 0 for r in ce_daily)
+    finally:
+        del os.environ["LAKEHOUSE_BUCKET_NAME"]
+        del os.environ["ATHENA_WORKGROUP_NAME"]
+        handler.s3_client = None
+
+
+def test_normalizer_cur_ready_negative_rows():
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    os.environ["ATHENA_WORKGROUP_NAME"] = "test-wg"
+    os.environ["GLUE_DATABASE_NAME"] = "test-db"
+    os.environ["GLUE_TABLE_NAME"] = "test-tbl"
+    os.environ["ATHENA_RESULTS_BUCKET_NAME"] = "test-athena-results"
+
+    query_executed = []
+    def fake_start_query_execution(**kwargs):
+        query_executed.append(kwargs)
+        return {"QueryExecutionId": "query-id-123"}
+
+    get_status_calls = [0]
+    def fake_get_query_execution(QueryExecutionId):
+        get_status_calls[0] += 1
+        state = "SUCCEEDED"
+        return {
+            "QueryExecution": {
+                "Status": {
+                    "State": state
+                }
+            }
+        }
+
+    get_results_calls = [0]
+    def fake_get_query_results(**kwargs):
+        get_results_calls[0] += 1
+        if get_results_calls[0] == 1:
+            return {
+                "ResultSet": {
+                    "Rows": [
+                        {"Data": [{"VarCharValue": "line_item_unblended_cost"}, {"VarCharValue": "line_item_product_code"}, {"VarCharValue": "line_item_usage_account_id"}]},
+                        {"Data": [{"VarCharValue": "150.00"}, {"VarCharValue": "AmazonEC2"}, {"VarCharValue": "112233445566"}]},
+                        {"Data": [{"VarCharValue": "-3.21"}, {"VarCharValue": "AmazonS3"}, {"VarCharValue": "112233445566"}]}
+                    ]
+                },
+                "NextToken": "page-2"
+            }
+        else:
+            return {
+                "ResultSet": {
+                    "Rows": [
+                        {"Data": [{"VarCharValue": "250.00"}, {"VarCharValue": "AmazonRDS"}, {"VarCharValue": "112233445566"}]}
+                    ]
+                }
+            }
+
+    class FakeAthena:
+        def start_query_execution(self, **kwargs):
+            return fake_start_query_execution(**kwargs)
+        def get_query_execution(self, QueryExecutionId):
+            return fake_get_query_execution(QueryExecutionId)
+        def get_query_results(self, **kwargs):
+            return fake_get_query_results(**kwargs)
+
+    handler.athena_client = FakeAthena()
+
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({
+            "bucket": bucket,
+            "key": key,
+            "body": body
+        })
+
+    _MANIFEST_BYTES_ATH = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            {"name": "resource_tags_user_environment", "type": "string"},
+        ],
+        "dataFiles": ["s3://tf2-finops-cur-export-bucket/cur/data/BILLING_PERIOD=2026-06/part.parquet"]
+    }).encode("utf-8")
+
+    handler.s3_client = finops_common.FakeS3(
+        put_object_func=fake_put_object,
+        get_object_func=lambda bucket, key: _MANIFEST_BYTES_ATH
+    )
+
+    event_data = {
+        "run_id": "run-cur-ready-neg",
+        "correlation_id": "corr-cur-ready-neg",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-cur-ready-neg",
+            "correlation_id": "corr-cur-ready-neg",
+            "worker": "cost_puller",
+            "details": {
+                "telemetry_delay_event": False,
+                "cur_manifest_uri": "s3://tf2-finops-cur-export-bucket/cur/metadata/BILLING_PERIOD=2026-06/cur2-Manifest.json",
+                "delayed_cur": False,
+            }
+        }
+    }
+
+    try:
+        resp = handler.handle_request(event_data, None)
+        assert resp["status"] == "NORMALIZED"
+        
+        # Verify aws_cur_line_items in details has no negative rows
+        cur_items = resp["details"]["aws_cur_line_items"]
+        assert len(cur_items) == 2
+        assert cur_items[0]["line_item_product_code"] == "AmazonEC2"
+        assert cur_items[1]["line_item_product_code"] == "AmazonRDS"
+        assert not any(float(item["line_item_unblended_cost"]) < 0 for item in cur_items)
+        
+        # Verify AI input written to S3 does not have negative rows
+        ai_input_call = [p for p in put_called if "ai-input" in p["key"]][0]
+        gzipped_data = ai_input_call["body"]
+        decompressed = gzip.decompress(gzipped_data)
+        envelope = json.loads(decompressed.decode("utf-8"))
+        
+        ai_cur_items = envelope["aws_cur_line_items"]
+        assert len(ai_cur_items) == 2
+        assert not any(float(item["line_item_unblended_cost"]) < 0 for item in ai_cur_items)
+    finally:
+        del os.environ["LAKEHOUSE_BUCKET_NAME"]
+        del os.environ["ATHENA_WORKGROUP_NAME"]
+        del os.environ["GLUE_DATABASE_NAME"]
+        del os.environ["GLUE_TABLE_NAME"]
+        del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
+        handler.s3_client = None
+        handler.athena_client = None

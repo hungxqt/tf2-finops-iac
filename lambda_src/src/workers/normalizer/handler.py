@@ -19,6 +19,59 @@ ddb_client = None
 athena_client = None
 
 
+import math
+
+def sanitize_ce_records(records):
+    sanitized = []
+    if not records:
+        return sanitized
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        val = r.get("unblended_cost")
+        if val is None:
+            val = r.get("line_item_unblended_cost")
+        if val is None:
+            val = r.get("cost")
+        if val is None:
+            continue
+        try:
+            cost = float(val)
+            if not math.isfinite(cost):
+                continue
+        except (ValueError, TypeError):
+            continue
+        if cost < 0:
+            continue
+        sanitized.append(r)
+    return sanitized
+
+def sanitize_cur_records(records):
+    sanitized = []
+    if not records:
+        return sanitized
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        val = r.get("line_item_unblended_cost")
+        if val is None:
+            val = r.get("unblended_cost")
+        if val is None:
+            val = r.get("cost")
+        if val is None:
+            continue
+        try:
+            cost = float(val)
+            if not math.isfinite(cost):
+                continue
+        except (ValueError, TypeError):
+            continue
+        if cost < 0:
+            continue
+        sanitized.append(r)
+    return sanitized
+
+
 def get_s3_client():
     global s3_client
     if s3_client is not None:
@@ -294,7 +347,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
     ce_records = []
     s3_bucket_uri = ""
     s3_object_checksum = ""
-    batch_type = "adhoc" if event.is_ad_hoc else "daily"
+    if event.is_ad_hoc:
+        safe_run_id = "".join(c for c in event.run_id if c.isalnum() or c in "-_")
+        batch_type = f"adhoc-{safe_run_id}"
+    else:
+        batch_type = "daily"
     tenant_id = resolve_tenant_id(event, event_data)
     account_name = resolve_account_name(event, event_data)
     ai_idempotency_key = event_data.get("idempotency_key") or f"{tenant_id}:{event.execution_date}:{batch_type}"
@@ -345,6 +402,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             ce_records = raw_records.get("aws_cost_explorer_daily", [])
             if not ce_records and "aws_cur_line_items" in raw_records:
                 ce_records = raw_records.get("aws_cur_line_items", [])
+            ce_records = sanitize_ce_records(ce_records)
             records_to_normalize = ce_records
 
             # Extract quality flags from envelope if present and not overridden by event_data
@@ -361,7 +419,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 if "estimated_billing" in envelope_quality and event_data.get("estimated_billing") is None:
                     estimated_billing = bool(envelope_quality["estimated_billing"])
         elif isinstance(raw_records, list):
-            records_to_normalize = raw_records
+            ce_records = sanitize_ce_records(raw_records)
+            records_to_normalize = ce_records
         else:
             records_to_normalize = []
 
@@ -517,6 +576,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             logger.error("Athena query execution failed: %s", e)
             raise e
 
+        cur_records = sanitize_cur_records(cur_records)
         if not cur_records:
             raise finops_common.InvalidInputError("Athena returned no CUR records")
 
@@ -692,6 +752,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 or ingestion_details.get("current_ce_cost_gap_usd")
                 or 0.0
             )
+        current_ce_cost_gap_usd = max(0.0, current_ce_cost_gap_usd)
 
     # Resolve comparison_window
     comparison_window = {"start_date": event.execution_date, "end_date": event.execution_date}

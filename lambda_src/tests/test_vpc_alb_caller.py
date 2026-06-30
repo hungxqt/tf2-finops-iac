@@ -873,3 +873,39 @@ def test_vpc_alb_caller_alb_base_url_scheme_validation(monkeypatch):
     with pytest.raises(ConfigMissingError, match="ALB_BASE_URL must not include a path"):
         handler.validate_alb_base_url("http://internal-ai-alb.us-east-1.elb.amazonaws.com/v1")
 
+
+def test_vpc_alb_caller_adhoc_key_validation():
+    # 1. Valid adhoc key format (with suffix safe-run-id) should pass validation
+    valid_key = f"{VALID_TENANT_ID}:2026-06-26:adhoc-run-12345"
+    # Should not raise exception
+    handler.validate_ai_context(
+        path="/v1/detect",
+        tenant_id=VALID_TENANT_ID,
+        correlation_id=VALID_CORRELATION_ID,
+        idempotency_key=valid_key,
+        body={"idempotency_key": valid_key, "tenant_id": VALID_TENANT_ID, "correlation_id": VALID_CORRELATION_ID}
+    )
+
+    # 2. Cross-tenant adhoc key should raise InvalidInputError
+    cross_tenant_id = "00000000-0000-0000-0000-000000000000"
+    cross_key = f"{cross_tenant_id}:2026-06-26:adhoc-run-12345"
+    with pytest.raises(InvalidInputError, match="idempotency_key tenant prefix must match tenant_id"):
+        handler.validate_ai_context(
+            path="/v1/detect",
+            tenant_id=VALID_TENANT_ID,
+            correlation_id=VALID_CORRELATION_ID,
+            idempotency_key=cross_key,
+            body={"idempotency_key": cross_key, "tenant_id": VALID_TENANT_ID, "correlation_id": VALID_CORRELATION_ID}
+        )
+
+    # 3. Malformed adhoc key (e.g. invalid date or invalid suffix format) should raise InvalidInputError
+    malformed_key = f"{VALID_TENANT_ID}:2026-XX-26:adhoc-run-12345"
+    with pytest.raises(InvalidInputError, match="idempotency_key must match"):
+        handler.validate_ai_context(
+            path="/v1/detect",
+            tenant_id=VALID_TENANT_ID,
+            correlation_id=VALID_CORRELATION_ID,
+            idempotency_key=malformed_key,
+            body={"idempotency_key": malformed_key, "tenant_id": VALID_TENANT_ID, "correlation_id": VALID_CORRELATION_ID}
+        )
+

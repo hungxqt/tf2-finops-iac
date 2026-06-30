@@ -319,7 +319,10 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
     status = "NEW"
     table_name = os.environ.get("RUN_STATE_TABLE_NAME")
-    idempotency_key = finops_common.idempotency_key(event.account_id, event.cost_period, event.execution_date)
+    if event.is_ad_hoc:
+        idempotency_key = f"{event.account_id}:{event.cost_period}:{event.execution_date}:{event.run_id}"
+    else:
+        idempotency_key = finops_common.idempotency_key(event.account_id, event.cost_period, event.execution_date)
     
     client = get_ddb_client()
     

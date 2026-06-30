@@ -151,6 +151,11 @@
           "Variable": "$.state.status",
           "StringEquals": "IN_PROGRESS",
           "Next": "AccountDuplicateIgnored"
+        },
+        {
+          "Variable": "$.state.status",
+          "StringEquals": "FAILED",
+          "Next": "AccountDuplicateIgnored"
         }
       ],
       "Default": "CheckAdHocQuotaDecision"

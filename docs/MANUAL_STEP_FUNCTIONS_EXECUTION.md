@@ -132,6 +132,13 @@ Remove-Item -Path .\manual_input.json -ErrorAction SilentlyContinue
 
 ## 4. Key Constraints & Safety Guardrails
 
+### Same-Day Daily Rerun Blocking & Ad Hoc Overrides
+> [!IMPORTANT]
+> Scheduled daily runs (where `is_ad_hoc` is false or omitted) are limited to **exactly once per tenant/date**.
+> 
+> * **Same-day daily reruns are blocked**: If a previous daily run for the same day has been attempted (whether it `COMPLETED`, is `IN_PROGRESS`, or `FAILED`), any subsequent daily run for that date will immediately route to `AccountDuplicateIgnored` and terminate without re-entering `InvokeDetect`.
+> * **Intentional same-day reruns must be ad-hoc**: If you need to force a rerun of the analysis on the same day (e.g. for testing, troubleshooting, or after fixing a telemetry delay), you **must** set `"is_ad_hoc": true` in the execution input JSON. This will bypass the duplicate check, use a unique ad-hoc run-state key, and consume the tenant's daily ad-hoc quota (limit of 5 ad-hoc runs per day). Do not attempt to delete DynamoDB rows to bypass this restriction.
+
 ### `force_dry_run` Manual Input Limitation
 > [!WARNING]
 > Do **NOT** attempt to pass `"force_dry_run": true` (or `false`) within the execution input JSON as a manual override.

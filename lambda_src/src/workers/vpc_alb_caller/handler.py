@@ -77,7 +77,7 @@ ALLOWED_PATH_PATTERNS = [
 
 AI_PAYLOAD_PATHS = {"/v1/detect", "/v1/decide", "/v1/verify"}
 AI_IDEMPOTENCY_KEY_PATTERN = re.compile(
-    r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):(daily|adhoc|decide|verify)$"
+    r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):(daily|adhoc|adhoc-[a-zA-Z0-9_\-]+|decide|verify)$"
 )
 
 # TTL for idempotency records: 24 hours in seconds
@@ -161,7 +161,7 @@ def validate_ai_context(path: str, tenant_id: str, correlation_id: str, idempote
     match = AI_IDEMPOTENCY_KEY_PATTERN.match(idempotency_key)
     if not match:
         raise InvalidInputError(
-            "idempotency_key must match tenant_id:YYYY-MM-DD:daily|adhoc|decide|verify"
+            "idempotency_key must match tenant_id:YYYY-MM-DD:daily|adhoc|adhoc-[a-zA-Z0-9_-]+|decide|verify"
         )
     idempotency_tenant = match.group(1)
     validate_uuid(idempotency_tenant, "idempotency_key tenant prefix")

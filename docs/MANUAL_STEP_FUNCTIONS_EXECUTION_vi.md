@@ -132,6 +132,13 @@ Remove-Item -Path .\manual_input.json -ErrorAction SilentlyContinue
 
 ## 4. Các Giới hạn & Biện pháp Bảo vệ An toàn
 
+### Chặn Chạy lại Daily trong Ngày & Ghi đè bằng Ad Hoc
+> [!IMPORTANT]
+> Lượt chạy daily theo lịch (trong đó `is_ad_hoc` bằng false hoặc bị bỏ qua) được giới hạn chính xác **một lần duy nhất cho mỗi tenant/ngày**.
+> 
+> * **Chặn chạy lại daily trong cùng ngày**: Nếu một lượt chạy daily đã được thực thi (bất kể trạng thái là `COMPLETED`, `IN_PROGRESS`, hay `FAILED`), các lượt chạy daily tiếp theo cho ngày đó sẽ bị chặn ngay lập tức, chuyển tiếp sang `AccountDuplicateIgnored` và kết thúc mà không chạy lại bước `InvokeDetect`.
+> * **Các lượt chạy lại có chủ đích phải dùng ad-hoc**: Nếu bạn cần chạy lại quy trình phân tích trong cùng một ngày (ví dụ: để kiểm thử, khắc phục sự cố, hoặc sau khi xử lý xong sự cố chậm trễ dữ liệu telemetry), bạn **bắt buộc** phải đặt `"is_ad_hoc": true` trong dữ liệu JSON đầu vào. Cơ chế này sẽ bỏ qua bước kiểm tra trùng lặp daily, sử dụng khóa trạng thái ad-hoc duy nhất và tiêu tốn hạn ngạch chạy ad-hoc hàng ngày của tenant (tối đa 5 lượt ad-hoc mỗi ngày). Tuyệt đối không xóa các dòng trong bảng DynamoDB để vượt qua giới hạn này.
+
 ### Giới hạn ghi đè `force_dry_run` qua Tham số đầu vào
 > [!WARNING]
 > **KHÔNG** cố gắng truyền tham số `"force_dry_run": true` (hoặc `false`) vào trong payload JSON đầu vào để ghi đè chế độ chạy thử.

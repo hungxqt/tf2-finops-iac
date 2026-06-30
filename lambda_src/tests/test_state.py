@@ -482,3 +482,50 @@ def test_state_prepare_propagation_details():
     assert explicit_targets[1]["account_id"] == "333333333333"
     assert explicit_targets[1]["tenant_id"] == handler._default_tenant_id("333333333333")
 
+
+def test_state_adhoc_run_state_key_uniqueness():
+    os.environ["RUN_STATE_TABLE_NAME"] = "test-run-state-table"
+    
+    put_called = []
+    
+    def fake_get_item(table_name, key):
+        return None
+        
+    def fake_put_item(table_name, item):
+        put_called.append(item)
+        
+    # Assign fake DynamoDB client
+    handler.ddb_client = finops_common.FakeDynamoDB(
+        get_item_func=fake_get_item,
+        put_item_func=fake_put_item
+    )
+
+    # Ad-hoc run 1
+    event_data_1 = {
+        "run_id": "run-adhoc-1",
+        "correlation_id": "corr-adhoc-1",
+        "account_id": "123456",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "operation": "check",
+        "is_ad_hoc": True
+    }
+    resp1 = handler.handle_request(event_data_1, None)
+    assert resp1["status"] == "NEW"
+    assert len(put_called) == 1
+    key1 = put_called[0]["idempotency_key"]
+    assert "run-adhoc-1" in key1
+    
+    # Ad-hoc run 2 on same day
+    event_data_2 = event_data_1.copy()
+    event_data_2["run_id"] = "run-adhoc-2"
+    resp2 = handler.handle_request(event_data_2, None)
+    assert resp2["status"] == "NEW"
+    assert len(put_called) == 2
+    key2 = put_called[1]["idempotency_key"]
+    assert "run-adhoc-2" in key2
+    assert key1 != key2
+
+    del os.environ["RUN_STATE_TABLE_NAME"]
+    handler.ddb_client = None
+

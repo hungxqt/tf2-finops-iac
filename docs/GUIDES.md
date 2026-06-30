@@ -237,6 +237,9 @@ Refer to the dedicated [ACCOUNT_POLICY_SEEDING.md](file:///E:/code-folder/xbrain
 When scheduled runs are disabled (`scheduler_enabled = false`), or for ad hoc and verification runs, the Orchestrator Step Functions workflow can be triggered manually.
 Refer to the dedicated [MANUAL_STEP_FUNCTIONS_EXECUTION.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/MANUAL_STEP_FUNCTIONS_EXECUTION.md) guide for prerequisites, execution payloads (single-account and multi-account), PowerShell command sequences, and execution monitoring.
 
+> [!IMPORTANT]
+> **Same-day daily reruns are blocked**: Scheduled daily runs (where `is_ad_hoc` is false or omitted) are restricted to exactly-once per tenant/date. If a daily run has been executed (regardless of whether it `COMPLETED`, is `IN_PROGRESS`, or `FAILED`), subsequent daily runs for that date are blocked and will route to `AccountDuplicateIgnored`. Intentional same-day reruns must be run as ad-hoc runs by setting `"is_ad_hoc": true` in the execution input, which will consume the daily ad-hoc quota (limit of 5 runs per day). Do not delete or overwrite `finops-idempotency-{env}` rows.
+
 
 
 ---
