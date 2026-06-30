@@ -44,7 +44,7 @@ CDO owns the operational hosting cost of the AIOps-provided AI Engine on Lambda 
 - The above forecast is the estimated **CDO platform infrastructure** including the CDO-owned Lambda container hosting platform, but excluding AIOps-owned model development and model-quality work.
 - VPC endpoints, KMS, and observability are the largest fixed costs.
 - Actual costs must be measured from tagged AWS spend. Use `Evidence needed: CDO Lambda hosting actual`, `Evidence needed: CDO pipeline per-run actual`, and `Evidence needed: AI workload hosted-on-CDO actual` until measured.
-- Enabling the `callback_url` parameter triggers additional egress data transfer, logging, and retry costs when asynchronous notifications are enabled.
+- Enabling the `callback_url` parameter triggers additional egress data transfer, logging, and retry costs when optional callback copy delivery is enabled.
 
 ---
 
@@ -69,7 +69,7 @@ As tenant count grows, fixed costs such as VPC endpoints, KMS CMKs, and S3 + Clo
 **Analysis**:
 - VPC endpoints constitute the platform baseline supporting secure Lambda hosting, queue buffering, observability, and private networking.
 - At larger tenant counts, average cost should decline because the baseline endpoints and dashboard costs are shared.
-- The break-even point must be recalculated after Lambda container invocation volumes and AI worker queue patterns are known; do not reuse the older serverless-only $46.77/tenant estimate.
+- The break-even point must be recalculated after Lambda container invocation volumes and private ALB/VpcAlbCaller invocation volume patterns are known; do not reuse the older serverless-only $46.77/tenant estimate.
 
 ---
 
@@ -153,9 +153,9 @@ After onboarding test accounts with different load levels:
 |---|---|---|---|---|
 | Small | Low account count, low CUR volume, few dashboard readers | `Evidence needed` | `Evidence needed` | Validates minimum viable workflow cost. |
 | Medium | Moderate account count, common shared services, multiple owner tags | `Evidence needed` | `Evidence needed` | Validates expected capstone operating shape. |
-| Large | Higher account count, larger CUR volume, heavier dashboard/query activity | `Evidence needed` | `Evidence needed` | Validates Athena scan limits and SQS worker queue backlog scaling. |
+| Large | Higher account count, larger CUR volume, heavier dashboard/query activity | `Evidence needed` | `Evidence needed` | Validates Athena scan limits and private ALB/VpcAlbCaller invocation volume scaling. |
 
-**Expected insight**: S3, Athena, DynamoDB, and Lambda costs scale with account and data volume. Baseline VPC endpoints scale as shared fixed platform cost, while Lambda container invocations scale with the AI request and worker queue capacity.
+**Expected insight**: S3, Athena, DynamoDB, and Lambda costs scale with account and data volume. Baseline VPC endpoints scale as shared fixed platform cost, while Lambda container invocations scale with private ALB/VpcAlbCaller invocation volume and synchronous AI Engine Lambda container execution.
 
 ### 5.3 Cost-per-Correct-Decision
 
