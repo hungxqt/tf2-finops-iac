@@ -71,3 +71,39 @@ def test_normalizer_iam_policy_cur_source():
     assert "cur_source_prefix" in normalizer_block, (
         "normalizer IAM policy Get statement must fallback using cur_source_prefix"
     )
+
+
+def test_iam_boundary_cloudwatch_permissions():
+    """Verify that the IAM boundary allows cloudwatch:GetMetricData but not broad cloudwatch:*"""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    iam_main_tf = os.path.join(base_dir, "modules/iam/main.tf")
+    assert os.path.exists(iam_main_tf)
+    
+    with open(iam_main_tf, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    boundary_block = get_block(content, r'data "aws_iam_policy_document" "boundary"\s*\{')
+    assert boundary_block is not None
+
+    assert "cloudwatch:GetMetricData" in boundary_block, "IAM boundary must allow cloudwatch:GetMetricData"
+    assert "cloudwatch:*" not in boundary_block, "IAM boundary must NOT allow broad cloudwatch:*"
+    
+    cw_matches = re.findall(r'"cloudwatch:[^"]*"', boundary_block)
+    for match in cw_matches:
+        assert match == '"cloudwatch:GetMetricData"', f"IAM boundary contains disallowed action: {match}"
+
+
+def test_cost_puller_identity_policy_cloudwatch():
+    """Verify that the cost_puller identity policy contains AllowCloudWatchMetricData statement"""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    iam_main_tf = os.path.join(base_dir, "modules/iam/main.tf")
+    assert os.path.exists(iam_main_tf)
+    
+    with open(iam_main_tf, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    cost_puller_block = get_block(content, r'data "aws_iam_policy_document" "cost_puller"\s*\{')
+    assert cost_puller_block is not None
+
+    assert "AllowCloudWatchMetricData" in cost_puller_block, "cost_puller IAM policy missing AllowCloudWatchMetricData statement"
+    assert "cloudwatch:GetMetricData" in cost_puller_block, "cost_puller IAM policy AllowCloudWatchMetricData missing cloudwatch:GetMetricData action"

@@ -28,6 +28,7 @@ locals {
         TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
         TELEMETRY_MEMBER_ROLE_NAME = var.telemetry_member_role_name
         CUR_EXPORTS_JSON           = var.cur_exports_json
+        AWS_STS_REGIONAL_ENDPOINTS = "regional"
       }
     }
     normalizer = {

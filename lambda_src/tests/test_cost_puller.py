@@ -10,7 +10,7 @@ import finops_common
 
 def _fake_sts_for_account(account_id="112233"):
     return finops_common.FakeSTS(
-        get_caller_identity_func=lambda: {"AccountId": account_id}
+        get_caller_identity_func=lambda: {"Account": account_id}
     )
 
 
@@ -489,7 +489,7 @@ def test_handle_request_remote_session_override():
     })
 
     def fake_get_caller_identity():
-        return {"AccountId": "112233445566"}
+        return {"Account": "112233445566"}
 
     fake_sts = finops_common.FakeSTS(
         get_caller_identity_func=fake_get_caller_identity
@@ -547,7 +547,8 @@ def test_handle_request_remote_session_override():
     # Set all global clients to prevent Real* classes (which need boto3) from being created
     handler.s3_client = mock_s3
     handler.ce_client = finops_common.FakeCostExplorer()
-    handler.cw_client = finops_common.FakeCloudWatch()
+    source_cw_mock = MagicMock()
+    handler.cw_client = source_cw_mock
     handler.sts_client = fake_sts
 
     with patch("workers.cost_puller.handler.get_cross_account_session", return_value=mock_session):
@@ -557,6 +558,7 @@ def test_handle_request_remote_session_override():
     mock_s3.head_object.assert_called_with("tf2-finops-cur-export-bucket", "cur/manifest/metadata/BILLING_PERIOD=2026-06/manifest-Manifest.json")
     mock_s3.put_object.assert_called()
     mock_cw.get_metric_data.assert_called()
+    source_cw_mock.get_metric_data.assert_not_called()
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
@@ -586,7 +588,7 @@ def test_cost_puller_assume_role_passes_external_id_and_tags():
         }
 
     fake_sts = finops_common.FakeSTS(
-        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        get_caller_identity_func=lambda: {"Account": "111111111111"},
         assume_role_func=fake_assume_role,
     )
 
@@ -623,7 +625,7 @@ def test_cost_puller_assume_role_no_extra_params_when_tenant_id_empty():
         }
 
     fake_sts = finops_common.FakeSTS(
-        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        get_caller_identity_func=lambda: {"Account": "111111111111"},
         assume_role_func=fake_assume_role,
     )
 
@@ -657,7 +659,7 @@ def test_cost_puller_assume_role_uses_telemetry_member_role_name_env():
         }
 
     fake_sts = finops_common.FakeSTS(
-        get_caller_identity_func=lambda: {"AccountId": "111111111111"},
+        get_caller_identity_func=lambda: {"Account": "111111111111"},
         assume_role_func=fake_assume_role,
     )
 
@@ -729,7 +731,7 @@ def test_cost_puller_ce_fallback_two_dimensions():
     )
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = finops_common.FakeSTS(
-        get_caller_identity_func=lambda: {"AccountId": account_id}
+        get_caller_identity_func=lambda: {"Account": account_id}
     )
 
     resp = handler.handle_request(
@@ -789,7 +791,7 @@ def test_handle_request_cross_account_assume_role_failure():
     })
 
     def fake_get_caller_identity():
-        return {"AccountId": "112233445566"}
+        return {"Account": "112233445566"}
 
     def fake_assume_role(**kwargs):
         raise RuntimeError("AccessDenied: Not authorized to assume this role")

@@ -178,15 +178,16 @@ data "aws_iam_policy_document" "boundary" {
   }
 
   statement {
-    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and xray:* do not support resource-level permissions"
-    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and xray:* require wildcard resource *"
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage, cloudwatch:GetMetricData, and xray:* do not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage, cloudwatch:GetMetricData, and xray:* require wildcard resource *"
     # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
     sid    = "AllowCostAndXRayActions"
     effect = "Allow"
     actions = [
       "ce:GetCostAndUsage",
       "xray:PutTraceSegments",
-      "xray:PutTelemetryRecords"
+      "xray:PutTelemetryRecords",
+      "cloudwatch:GetMetricData"
     ]
     resources = ["*"]
   }
@@ -621,6 +622,15 @@ data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {
       "dynamodb:UpdateItem"
     ]
     resources = [var.ai_payload_idempotency_table_arn]
+  }
+
+  dynamic "statement" {
+    for_each = length(var.kms_key_arns) > 0 ? [1] : []
+    content {
+      sid       = "VpcAlbCallerKMSAccess"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      resources = var.kms_key_arns
+    }
   }
 }
 

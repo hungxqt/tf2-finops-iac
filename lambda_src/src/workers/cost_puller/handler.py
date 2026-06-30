@@ -329,9 +329,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
     current_account_id = event.account_id
     if local_sts:
         try:
-            current_account_id = local_sts.get_caller_identity()["AccountId"]
-        except Exception:
-            pass
+            caller_identity = local_sts.get_caller_identity()
+            current_account_id = caller_identity["Account"]
+            logger.info("STS resolved current account ID: %s", current_account_id)
+        except Exception as e:
+            logger.warning("Failed to get caller identity from STS: %s", e)
 
     # Handle cross account role assumption if target account_id differs
     tenant_id_for_sts = getattr(event, "tenant_id", "") or event_data.get("tenant_id", "")
@@ -353,8 +355,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
         return response.to_dict()
 
     if remote_session:
+        logger.info("Using assumed member role session for telemetry clients (target account: %s)", event.account_id)
         local_cw = remote_session.client("cloudwatch")
         local_ce = remote_session.client("ce")
+    else:
+        logger.info("Using source role session for telemetry clients (target account matches current account: %s)", event.account_id)
 
     # Check if CUR is delayed or invalid
     cur_delayed = False
