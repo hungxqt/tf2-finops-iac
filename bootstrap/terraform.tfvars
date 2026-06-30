@@ -1,0 +1,9 @@
+aws_region        = "ap-southeast-1"
+project_name      = "tf2-finops"
+github_repository = "hungxqt/tf2-finops-iac"
+
+# ARN of the replica S3 bucket for Terraform state replication
+state_replica_bucket_arn = "arn:aws:s3:::tf2-finops-state-replica-bucket"
+
+# Destroyable status for the bootstrap resources. Set to true to allow destruction of bootstrap resources.
+destroyable = true
