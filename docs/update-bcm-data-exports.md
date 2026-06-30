@@ -1,0 +1,3 @@
+aws bcm-data-exports update-export --export-arn "arn:aws:bcm-data-exports:us-east-1:336805808730:export/cur-export-2-6d5656fe-1d48-4329-aead-15f1f5e542d5" --export file://accountCUR.json --region ap-southeast-1 --profile member
+
+aws bcm-data-exports get-export --region ap-southeast-1 --profile member --export-arn arn:aws:bcm-data-exports:us-east-1:336805808730:export/cur-export-2-6d5656fe-1d48-4329-aead-15f1f5e542d5 > accountCUR-backup.json

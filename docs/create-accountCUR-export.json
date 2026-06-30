@@ -1,0 +1,47 @@
+  {
+    "Export": {
+      "Name": "accountCUR",
+      "Description": "TF2 FinOps CUR 2.0 member account export",
+      "DataQuery": {
+        "QueryStatement": "SELECT bill_billing_period_start_date, bill_payer_account_id, line_item_usage_account_id,
+        line_item_usage_account_name, line_item_line_item_type, line_item_usage_start_date, line_item_usage_end_date,
+        line_item_product_code, line_item_usage_type, line_item_operation, line_item_resource_id,
+        line_item_usage_amount, pricing.unit AS pricing_unit, line_item_unblended_rate, line_item_unblended_cost,
+        line_item_currency_code, product.product_name AS product_product_name, product.region_code AS
+        product_region_code, product.instance_type AS product_instance_type, resource_tags.user_team AS
+        resource_tags_user_team, resource_tags.user_Environment AS resource_tags_user_environment,
+        resource_tags.user_cost_center AS resource_tags_user_cost_center, resource_tags.user_owner AS
+        resource_tags_user_owner FROM COST_AND_USAGE_REPORT",
+        "TableConfigurations": {
+          "COST_AND_USAGE_REPORT": {
+            "TIME_GRANULARITY": "DAILY",
+            "INCLUDE_RESOURCES": "TRUE",
+            "INCLUDE_SPLIT_COST_ALLOCATION_DATA": "FALSE"
+          }
+        }
+      },
+      "DestinationConfigurations": {
+        "S3Destination": {
+          "S3Bucket": "tf2-finops-cur-export-bucket-2",
+          "S3BucketOwner": "093490087544",
+          "S3Prefix": "336805808730",
+          "S3Region": "ap-southeast-1",
+          "S3OutputConfigurations": {
+            "OutputType": "CUSTOM",
+            "Format": "PARQUET",
+            "Compression": "PARQUET",
+            "Overwrite": "OVERWRITE_REPORT"
+          }
+        }
+      },
+      "RefreshCadence": {
+        "Frequency": "SYNCHRONOUS"
+      }
+    },
+    "ResourceTags": [
+      {
+        "Key": "Project",
+        "Value": "tf2-finops"
+      }
+    ]
+  }
