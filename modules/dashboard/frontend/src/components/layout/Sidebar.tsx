@@ -54,8 +54,13 @@ export function Sidebar({ expanded, onToggle, activePage, onNavigate, summary }:
       )}
     >
       {/* Logo area */}
-      <div className="flex items-center h-14 px-3 border-b border-border-subtle shrink-0">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
+      <div
+        className={cn(
+          "flex items-center h-14 border-b border-border-subtle shrink-0",
+          expanded ? "px-3" : "px-2 justify-center gap-1.5"
+        )}
+      >
+        <div className={cn("flex items-center gap-3 min-w-0", expanded && "flex-1")}>
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-blue to-accent-violet flex items-center justify-center shrink-0">
             <Activity className="w-4 h-4 text-white" />
           </div>
@@ -68,8 +73,14 @@ export function Sidebar({ expanded, onToggle, activePage, onNavigate, summary }:
         </div>
         <button
           onClick={onToggle}
-          className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-elevated transition-colors"
+          className={cn(
+            "shrink-0 flex items-center justify-center rounded-md text-text-muted",
+            "hover:text-text-primary hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/70",
+            "transition-colors",
+            expanded ? "w-7 h-7" : "w-8 h-8 bg-surface-elevated/60 border border-border-subtle"
+          )}
           aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
+          title={expanded ? "Collapse sidebar" : "Expand sidebar"}
         >
           {expanded ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
