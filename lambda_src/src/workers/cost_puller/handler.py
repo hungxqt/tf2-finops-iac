@@ -226,9 +226,18 @@ def query_traffic_context(cw_client_inst, exec_time: datetime) -> Tuple[float, s
         return 0.0, "ALB", True
 
 
+class TelemetryAuthError(Exception):
+    """Raised when cross-account telemetry role assumption fails."""
+    pass
+
+
 def get_cross_account_session(sts_client_inst, account_id: str, current_account_id: str, tenant_id: str = "") -> Optional[Any]:
-    if not sts_client_inst or account_id == current_account_id:
+    if account_id == current_account_id:
         return None
+    if not sts_client_inst:
+        raise TelemetryAuthError(
+            f"STS client is unavailable to assume cross-account role for account {account_id}"
+        )
     role_name = os.environ.get("TELEMETRY_MEMBER_ROLE_NAME", "cdo-telemetry-ingestion-role")
     role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
     try:
@@ -252,8 +261,7 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
     except Exception as e:
         if isinstance(e, (NameError, TypeError, ValueError, KeyError, AttributeError, ImportError, IndexError, SyntaxError)):
             raise e
-        logger.warning("Failed to assume role %s: %s. Using default session.", role_arn, e)
-        return None
+        raise TelemetryAuthError(f"Failed to assume role {role_arn}: {str(e)}") from e
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -327,17 +335,47 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
     # Handle cross account role assumption if target account_id differs
     tenant_id_for_sts = getattr(event, "tenant_id", "") or event_data.get("tenant_id", "")
-    remote_session = get_cross_account_session(local_sts, event.account_id, current_account_id, tenant_id=tenant_id_for_sts)
-    if remote_session:
-        local_s3 = remote_session.client("s3")
-        local_ce = remote_session.client("ce")
-        local_cw = remote_session.client("cloudwatch")
+    try:
+        remote_session = get_cross_account_session(local_sts, event.account_id, current_account_id, tenant_id=tenant_id_for_sts)
+    except TelemetryAuthError as e:
+        logger.error("Telemetry cross-account assume-role failed: %s", e)
+        role_name = os.environ.get("TELEMETRY_MEMBER_ROLE_NAME", "cdo-telemetry-ingestion-role")
+        details = {
+            "error": str(e),
+            "target_account_id": event.account_id,
+            "current_account_id": current_account_id,
+            "role_name": role_name,
+            "delayed_cur": True,
+            "fail_closed": True
+        }
+        response = finops_common.create_response("TELEMETRY_AUTH_FAILED", event.run_id, event.correlation_id, "cost_puller", details)
+        response.tenant_id = event.tenant_id
+        return response.to_dict()
 
-    # Check if CUR is delayed
+    if remote_session:
+        local_cw = remote_session.client("cloudwatch")
+        local_ce = remote_session.client("ce")
+
+    # Check if CUR is delayed or invalid
     cur_delayed = False
     cur_last_modified = None
 
-    if action == "simulate-cur-delay" or action == "simulate-cur-delay-no-fallback":
+    # CUR-ready manifest variables
+    manifest_uri = ""
+    execution_id = ""
+    export_arn = ""
+    columns = []
+    data_files = []
+    data_file_count = 0
+    columns_count = 0
+    manifest_etag = ""
+    export_name_out = ""
+    source_account_id_out = ""
+    billing_period_out = ""
+
+    force_ce_fallback = event_data.get("force_ce_fallback", False) or getattr(event, "force_ce_fallback", False)
+
+    if action == "simulate-cur-delay" or action == "simulate-cur-delay-no-fallback" or force_ce_fallback:
         cur_delayed = True
         cur_last_modified = exec_time - timedelta(hours=cur_delay_threshold + 1)
     elif local_s3:
@@ -346,31 +384,58 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # ── Deterministic CUR 2.0 manifest readiness check ──
         export_name = export_config.get("export_name", "")
         export_prefix = export_config.get("prefix", "")
-        export_source_bucket = export_config.get("source_account_id", "")
         effective_cur_bucket = cur_source_bucket or ""
+        allowed_raw_prefix = export_config.get("allowed_raw_prefix", export_prefix)
+        billing_period_out = _resolve_billing_period(event, exec_time)
+        source_account_id_out = export_config.get("source_account_id", event.account_id)
+        export_name_out = export_name
 
-        billing_period = _resolve_billing_period(event, exec_time)
-        manifest_key = _build_manifest_key(export_prefix, export_name, billing_period)
+        manifest_key = _build_manifest_key(export_prefix, export_name, billing_period_out)
+        manifest_uri = f"s3://{effective_cur_bucket}/{manifest_key}"
 
         logger.info(
             "CUR 2.0 mode: checking manifest at s3://%s/%s for billing_period=%s",
-            effective_cur_bucket, manifest_key, billing_period,
+            effective_cur_bucket, manifest_key, billing_period_out,
         )
 
         try:
-            local_s3.head_object(effective_cur_bucket, manifest_key)
-            logger.info("Manifest key exists and is readable.")
-            cur_delayed = False
-        except Exception as head_err:
-            err_code = ""
-            if hasattr(head_err, "response"):
-                err_code = str(head_err.response.get("Error", {}).get("Code", ""))  # type: ignore[attr-defined]
-            if "404" in err_code or "NoSuchKey" in str(head_err) or "404" in str(head_err):
-                logger.info("Manifest key not yet present; treating as CUR delayed.")
-                cur_delayed = True
+            head_resp = local_s3.head_object(effective_cur_bucket, manifest_key)
+            manifest_etag = head_resp.get("ETag", "")
+
+            # Retrieve and validate manifest contents immediately to detect validation failures early
+            manifest_data = local_s3.get_object(effective_cur_bucket, manifest_key)
+            if isinstance(manifest_data, dict) and "Body" in manifest_data:
+                manifest_bytes = manifest_data["Body"].read()
             else:
-                logger.warning("head_object error (non-404): %s — treating as CUR delayed.", head_err)
-                cur_delayed = True
+                manifest_bytes = manifest_data
+            manifest_json = json.loads(manifest_bytes.decode("utf-8"))
+
+            # Single Data Exports parser
+            parsed_manifest = finops_common.parse_and_validate_manifest(manifest_json)
+            execution_id = parsed_manifest["execution_id"]
+            export_arn = parsed_manifest["export_arn"]
+            columns = parsed_manifest["columns"]
+            data_files = parsed_manifest["data_files"]
+            data_file_count = parsed_manifest["data_file_count"]
+            columns_count = parsed_manifest["columns_count"]
+
+            # Validate columns
+            finops_common.validate_manifest_columns(columns)
+
+            # Validate dataFiles
+            finops_common.validate_data_files(
+                data_files=data_files,
+                allowed_bucket=effective_cur_bucket,
+                allowed_prefix=allowed_raw_prefix,
+                billing_period=billing_period_out
+            )
+            cur_delayed = False
+        except finops_common.UnsafeActionError as unsafe_err:
+            logger.error("Security/Unsafe action detected: %s", unsafe_err)
+            raise
+        except Exception as head_err:
+            logger.warning("CUR manifest check/validation failed: %s — treating as CUR delayed/failed.", head_err)
+            cur_delayed = True
     else:
         cur_delayed = False
 
@@ -505,78 +570,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 missing_resources.append(service_code)
                 current_ce_cost_gap_usd += float(r.get("unblended_cost") or 0.0)
 
-    # ── CUR-ready manifest validation ──
-    manifest_uri = ""
-    execution_id = ""
-    export_arn = ""
-    columns = []
-    data_files = []
-    data_file_count = 0
-    columns_count = 0
-    manifest_etag = ""
-    export_name_out = ""
-    source_account_id_out = ""
-    billing_period_out = ""
-
-    if not cur_delayed:
-        logger.info("CUR is available. Discovering / validating CUR manifest.")
-
-        if not using_exports_json:
-            raise finops_common.ConfigMissingError(
-                "CUR 2.0 configuration (CUR_EXPORTS_JSON) is required for AWS Data Exports CUR 2.0 manifest."
-            )
-
-        if local_s3:
-            # Deterministic CUR 2.0 path
-            export_name = export_config.get("export_name", "")
-            export_prefix = export_config.get("prefix", "")
-            effective_cur_bucket = cur_source_bucket or ""
-            allowed_raw_prefix = export_config.get("allowed_raw_prefix", export_prefix)
-            billing_period_out = _resolve_billing_period(event, exec_time)
-            source_account_id_out = export_config.get("source_account_id", event.account_id)
-            export_name_out = export_name
-
-            manifest_key = _build_manifest_key(export_prefix, export_name, billing_period_out)
-            manifest_uri = f"s3://{effective_cur_bucket}/{manifest_key}"
-
-            try:
-                head_resp = local_s3.head_object(effective_cur_bucket, manifest_key)
-                manifest_etag = head_resp.get("ETag", "")
-            except Exception:
-                pass  # etag is optional; key existence already confirmed
-
-            try:
-                manifest_data = local_s3.get_object(effective_cur_bucket, manifest_key)
-                if isinstance(manifest_data, dict) and "Body" in manifest_data:
-                    manifest_bytes = manifest_data["Body"].read()
-                else:
-                    manifest_bytes = manifest_data
-                manifest_json = json.loads(manifest_bytes.decode("utf-8"))
-                
-                # Single Data Exports parser
-                parsed_manifest = finops_common.parse_and_validate_manifest(manifest_json)
-                execution_id = parsed_manifest["execution_id"]
-                export_arn = parsed_manifest["export_arn"]
-                columns = parsed_manifest["columns"]
-                data_files = parsed_manifest["data_files"]
-                data_file_count = parsed_manifest["data_file_count"]
-                columns_count = parsed_manifest["columns_count"]
-
-                # Validate columns
-                finops_common.validate_manifest_columns(columns)
-
-                # Validate dataFiles
-                finops_common.validate_data_files(
-                    data_files=data_files,
-                    allowed_bucket=effective_cur_bucket,
-                    allowed_prefix=allowed_raw_prefix,
-                    billing_period=billing_period_out
-                )
-            except (finops_common.UnsafeActionError, finops_common.InvalidInputError, finops_common.ContractMismatchError):
-                raise
-            except Exception as e:
-                logger.error("Manifest validation failed for %s: %s", manifest_uri, e)
-                raise finops_common.InvalidInputError(f"CUR manifest validation failed: {e}")
+    # ── CUR-ready manifest validation already completed upfront ──
 
     # Fetch CloudWatch Utilization Metrics
     resource_ids = []

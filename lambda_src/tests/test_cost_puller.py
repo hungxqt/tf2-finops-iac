@@ -463,8 +463,9 @@ def test_get_cross_account_session_assume_role_failure():
         raise RuntimeError("AccessDenied: Not authorized to assume this role")
     
     fake_sts = finops_common.FakeSTS(assume_role_func=fake_assume_role)
-    session = handler.get_cross_account_session(fake_sts, "999999999999", "112233445566")
-    assert session is None
+    with pytest.raises(handler.TelemetryAuthError) as exc_info:
+        handler.get_cross_account_session(fake_sts, "999999999999", "112233445566")
+    assert "Failed to assume role" in str(exc_info.value)
 
 def test_get_cross_account_session_programming_error_propagates():
     def fake_assume_role(**kwargs):
@@ -544,7 +545,7 @@ def test_handle_request_remote_session_override():
     }
 
     # Set all global clients to prevent Real* classes (which need boto3) from being created
-    handler.s3_client = finops_common.FakeS3()
+    handler.s3_client = mock_s3
     handler.ce_client = finops_common.FakeCostExplorer()
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = fake_sts
@@ -772,4 +773,69 @@ def test_cost_puller_ce_fallback_two_dimensions():
     handler.ce_client = None
     handler.cw_client = None
     handler.sts_client = None
+
+
+def test_handle_request_cross_account_assume_role_failure():
+    from unittest.mock import MagicMock
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "company-cdo-999999999999-telemetry"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
+    os.environ["CUR_EXPORTS_JSON"] = json.dumps({
+        "999999999999": {
+            "source_account_id": "999999999999",
+            "prefix": "cur",
+            "export_name": "manifest",
+            "allowed_raw_prefix": "cur"
+        }
+    })
+
+    def fake_get_caller_identity():
+        return {"AccountId": "112233445566"}
+
+    def fake_assume_role(**kwargs):
+        raise RuntimeError("AccessDenied: Not authorized to assume this role")
+
+    fake_sts = finops_common.FakeSTS(
+        get_caller_identity_func=fake_get_caller_identity,
+        assume_role_func=fake_assume_role
+    )
+
+    # Mock clients to verify they aren't used for queries
+    mock_s3 = MagicMock()
+    mock_ce = MagicMock()
+    mock_cw = MagicMock()
+
+    handler.s3_client = mock_s3
+    handler.ce_client = mock_ce
+    handler.cw_client = mock_cw
+    handler.sts_client = fake_sts
+
+    event_data = {
+        "run_id": "run-fail-closed",
+        "correlation_id": "corr-fail-closed",
+        "account_id": "999999999999",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+    }
+
+    try:
+        resp = handler.handle_request(event_data, None)
+        assert resp["status"] == "TELEMETRY_AUTH_FAILED"
+        assert resp["details"]["target_account_id"] == "999999999999"
+        assert resp["details"]["current_account_id"] == "112233445566"
+        assert resp["details"]["role_name"] == "cdo-telemetry-ingestion-role"
+        assert resp["details"]["delayed_cur"] is True
+        assert resp["details"]["fail_closed"] is True
+
+        # Verify that S3/CE/CW were NOT called (fail closed)
+        mock_ce.get_cost_and_usage.assert_not_called()
+        mock_cw.get_metric_data.assert_not_called()
+        mock_s3.list_objects_v2.assert_not_called()
+    finally:
+        del os.environ["LAKEHOUSE_BUCKET_NAME"]
+        del os.environ["CUR_SOURCE_BUCKET"]
+        del os.environ["CUR_EXPORTS_JSON"]
+        handler.s3_client = None
+        handler.ce_client = None
+        handler.cw_client = None
+        handler.sts_client = None
 

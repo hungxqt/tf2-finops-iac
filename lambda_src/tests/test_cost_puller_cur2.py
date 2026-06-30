@@ -395,17 +395,18 @@ def test_missing_manifest_fields_fails():
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = _fake_sts_for_account(account_id)
 
-    with pytest.raises(finops_common.InvalidInputError, match="missing required field"):
-        handler.handle_request(
-            {
-                "run_id": "run-missing-fields",
-                "correlation_id": "corr-missing-fields",
-                "account_id": account_id,
-                "cost_period": "2026-06",
-                "execution_date": "2026-06-24",
-            },
-            None,
-        )
+    resp = handler.handle_request(
+        {
+            "run_id": "run-missing-fields",
+            "correlation_id": "corr-missing-fields",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+    assert resp["status"] == "CUR_DELAY"
+    assert resp["details"]["delayed_cur"] is True
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
@@ -438,17 +439,18 @@ def test_empty_data_files_fails():
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = _fake_sts_for_account(account_id)
 
-    with pytest.raises(finops_common.InvalidInputError, match="must be a non-empty list"):
-        handler.handle_request(
-            {
-                "run_id": "run-empty-data-files",
-                "correlation_id": "corr-empty-data-files",
-                "account_id": account_id,
-                "cost_period": "2026-06",
-                "execution_date": "2026-06-24",
-            },
-            None,
-        )
+    resp = handler.handle_request(
+        {
+            "run_id": "run-empty-data-files",
+            "correlation_id": "corr-empty-data-files",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+    assert resp["status"] == "CUR_DELAY"
+    assert resp["details"]["delayed_cur"] is True
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
@@ -479,17 +481,18 @@ def test_legacy_manifest_fails():
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = _fake_sts_for_account(account_id)
 
-    with pytest.raises(finops_common.InvalidInputError, match="Legacy CUR manifest format.*is not supported"):
-        handler.handle_request(
-            {
-                "run_id": "run-legacy",
-                "correlation_id": "corr-legacy",
-                "account_id": account_id,
-                "cost_period": "2026-06",
-                "execution_date": "2026-06-24",
-            },
-            None,
-        )
+    resp = handler.handle_request(
+        {
+            "run_id": "run-legacy",
+            "correlation_id": "corr-legacy",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+    assert resp["status"] == "CUR_DELAY"
+    assert resp["details"]["delayed_cur"] is True
 
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
     del os.environ["CUR_SOURCE_BUCKET"]
@@ -657,17 +660,18 @@ def test_cost_puller_rejects_missing_required_column():
     handler.cw_client = finops_common.FakeCloudWatch()
     handler.sts_client = _fake_sts_for_account(account_id)
 
-    with pytest.raises(finops_common.ContractMismatchError, match="Required columns missing from CUR manifest.*resource_tags_user_environment"):
-        handler.handle_request(
-            {
-                "run_id": "run-bad-columns",
-                "correlation_id": "corr-bad-columns",
-                "account_id": account_id,
-                "cost_period": "2026-06",
-                "execution_date": "2026-06-24",
-            },
-            None,
-        )
+    resp = handler.handle_request(
+        {
+            "run_id": "run-bad-columns",
+            "correlation_id": "corr-bad-columns",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+    assert resp["status"] == "CUR_DELAY"
+    assert resp["details"]["delayed_cur"] is True
 
     # Cleanup
     del os.environ["LAKEHOUSE_BUCKET_NAME"]

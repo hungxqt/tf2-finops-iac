@@ -713,28 +713,6 @@ data "aws_iam_policy_document" "member_telemetry_ingestion" {
     ]
     resources = ["*"]
   }
-
-  dynamic "statement" {
-    for_each = var.cur_source_bucket_arn != "" ? [1] : []
-    content {
-      sid       = "AllowMemberCURList"
-      actions   = ["s3:ListBucket"]
-      resources = [var.cur_source_bucket_arn]
-    }
-  }
-
-  dynamic "statement" {
-    for_each = var.cur_source_bucket_arn != "" ? [1] : []
-    content {
-      sid     = "AllowMemberCURGet"
-      actions = ["s3:GetObject"]
-      resources = length(var.telemetry_member_account_ids) > 0 ? [
-        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
-        ] : [
-        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
-      ]
-    }
-  }
 }
 
 resource "aws_iam_role_policy" "member_telemetry_ingestion" {

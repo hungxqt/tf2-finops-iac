@@ -460,9 +460,26 @@
             "States.ALL"
           ],
           "ResultPath": "$.error",
-          "Next": "MarkRunFailed"
+          "Next": "TriggerCEFallbackFromNormalizationFailure"
         }
       ]
+    },
+    "TriggerCEFallbackFromNormalizationFailure": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.force_ce_fallback",
+          "BooleanEquals": true,
+          "Next": "MarkRunFailed"
+        }
+      ],
+      "Default": "SetForceCEFallbackFlag"
+    },
+    "SetForceCEFallbackFlag": {
+      "Type": "Pass",
+      "Result": true,
+      "ResultPath": "$.force_ce_fallback",
+      "Next": "IngestCostData"
     },
     "CheckTelemetryQuality": {
       "Type": "Choice",
