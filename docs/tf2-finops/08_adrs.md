@@ -190,6 +190,10 @@
 
 ---
 
+> [!NOTE]
+> **Reader Note (Superseded Architecture)**:
+> The ADRs in this section (including ADR-011 and ADR-012) describe the legacy Direct Lambda/SQS asynchronous queue execution and polling model. As of [ADR-021](#adr-021-lambda-container-hosting-behind-private-internal-alb-for-ai-engine-endpoints), the active baseline architecture is a synchronous invocation model fronted by a private internal ALB (`Step Functions` -> `VpcAlbCallerLambda` -> `private internal ALB` -> `AI Engine Lambda`). All direct Lambda execution, SQS/DLQ request queuing, and status polling references below are historical only.
+
 ## ADR-011 - Private REST API Gateway over internal ALB
 
 - **Status**: Superseded by ADR-012

@@ -9,7 +9,7 @@ tags = {
 }
 
 # AI Engine Lambda Container Images (must be digest-pinned to satisfy validation)
-request_image_uri = "093490087544.dkr.ecr.ap-southeast-1.amazonaws.com/test/test-registry@sha256:e136603596fd816e379f8b6e02c5076cc48f73f494bb55e7b8cd739c205a60ff"
+request_image_uri = "197826770971.dkr.ecr.ap-southeast-1.amazonaws.com/tf-2-ai-engine@sha256:194f823d331937967fa54035f26dffdd7ed0d26d0be10dff94aa9210bf2c3c80"
 
 # S3 Cross-Region Replication region
 replica_region = "ap-southeast-2"
