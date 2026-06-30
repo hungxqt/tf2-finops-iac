@@ -1073,7 +1073,7 @@ data "aws_iam_policy_document" "cur_export" {
     ]
     # Scope writes to the raw export prefix only; curated/, ai-input/, audit/, features/ are excluded.
     resources = [
-      for acc in local.cur_data_export_source_account_ids : "${local.cur_export_bucket_arn}/${acc}/${var.cur_export_name}/*"
+      for acc in local.cur_data_export_source_account_ids : "${local.cur_export_bucket_arn}/*"
     ]
     condition {
       test     = "StringLike"
