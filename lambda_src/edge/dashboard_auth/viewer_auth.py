@@ -207,8 +207,16 @@ def handler(event, context):
                 
                 if access_token and id_token:
                     cookies_to_set = {
-                        'Cognito-Access-Token': {'value': access_token, 'max_age': AUTH_COOKIE_MAX_AGE_SECONDS},
-                        'Cognito-Id-Token': {'value': id_token, 'max_age': AUTH_COOKIE_MAX_AGE_SECONDS}
+                        'Cognito-Access-Token': {
+                            'value': access_token,
+                            'max_age': AUTH_COOKIE_MAX_AGE_SECONDS,
+                            'same_site': 'Lax'
+                        },
+                        'Cognito-Id-Token': {
+                            'value': id_token,
+                            'max_age': AUTH_COOKIE_MAX_AGE_SECONDS,
+                            'same_site': 'Lax'
+                        }
                     }
                     return make_redirect(
                         decoded_state['redirect'],
@@ -248,6 +256,7 @@ def handler(event, context):
         f"response_type=code&"
         f"client_id={client_id}&"
         f"redirect_uri={urllib.parse.quote(redirect_uri)}&"
+        f"scope={urllib.parse.quote('openid email profile')}&"
         f"state={urllib.parse.quote(state)}&"
         f"code_challenge={challenge}&"
         f"code_challenge_method=S256"

@@ -1083,6 +1083,15 @@ resource "aws_iam_role_policy" "edge_auth" {
         Resource = [
           "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/${var.environment}/dashboard/cognito_client_id"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = [
+          var.dashboard_kms_key_arn
+        ]
       }
     ]
   })
@@ -1140,4 +1149,3 @@ resource "terraform_data" "destroy_guard" {
     prevent_destroy = true
   }
 }
-

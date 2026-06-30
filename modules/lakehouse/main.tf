@@ -51,12 +51,32 @@ data "aws_iam_policy_document" "kms_policy" {
   }
 }
 
+data "aws_iam_policy_document" "kms_data_policy" {
+  source_policy_documents = [data.aws_iam_policy_document.kms_policy.json]
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "KMS key policy must specify resource = * as it is attached directly to the key"
+    # checkov:skip=CKV_AWS_356: "KMS key policy must specify resource = * as it is attached directly to the key"
+    sid    = "AllowCloudFrontDataUsage"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*"
+    ]
+    resources = ["*"]
+  }
+}
+
 # KMS Key for general data (Lakehouse, Athena Results)
 resource "aws_kms_key" "data" {
   description             = "KMS key for data encryption (Lakehouse, Athena)"
   deletion_window_in_days = var.destroyable ? 7 : 30
   enable_key_rotation     = true
-  policy                  = data.aws_iam_policy_document.kms_policy.json
+  policy                  = data.aws_iam_policy_document.kms_data_policy.json
   tags = merge(var.tags, {
     Region = var.aws_region
   })
@@ -599,14 +619,14 @@ resource "aws_glue_catalog_table" "raw_cur_data" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    "classification"                         = "parquet"
-    "projection.enabled"                     = "true"
-    "projection.billing_period.type"         = "date"
-    "projection.billing_period.range"        = "2024-01,2035-12"
-    "projection.billing_period.format"       = "yyyy-MM"
-    "projection.billing_period.interval"     = "1"
+    "classification"                          = "parquet"
+    "projection.enabled"                      = "true"
+    "projection.billing_period.type"          = "date"
+    "projection.billing_period.range"         = "2024-01,2035-12"
+    "projection.billing_period.format"        = "yyyy-MM"
+    "projection.billing_period.interval"      = "1"
     "projection.billing_period.interval.unit" = "MONTHS"
-    "storage.location.template"              = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+    "storage.location.template"               = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
   }
 
   partition_keys {
