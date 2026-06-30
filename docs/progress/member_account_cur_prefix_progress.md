@@ -9,6 +9,8 @@ This log tracks the progress of the member-account CUR 2.0 manifest prefix fixes
 - **Completed**: Update IAM policies and S3 bucket policies/lifecycle configurations to scope down to generated member-account prefixes.
 - **Completed**: Fix Cost Explorer fallback dimension bug by querying only 2 dimensions (`LINKED_ACCOUNT`, `SERVICE`) and normalizing region to `"global"`.
 - **Completed**: Added comprehensive test cases for manifest key generation, multi-account config with custom bucket (`tf2-finops-cur-export-bucket-2`), unconfigured event account rejection, and Cost Explorer fallback.
+- **Completed**: Fix S3 bucket policy for CUR data exports to allow BCM Data Exports writes from all configured telemetry member accounts, and enforce 12-digit account ID validation.
+- **Completed**: Implement plan-mode regression test for S3 bucket policy source accounts, SourceArns, and prefixes.
 
 ## Details of Changes
 
@@ -26,7 +28,9 @@ This log tracks the progress of the member-account CUR 2.0 manifest prefix fixes
 - **Lakehouse Module** (`modules/lakehouse`):
   - Declare variables `cur_export_name` and `telemetry_member_account_ids`.
   - Update `aws_s3_bucket_lifecycle_configuration.cur_export` to expire files per member-account prefix.
-  - Scope `AllowBCMDataExportsPut` bucket policy statement to member-account prefixes.
+  - Fix `AllowBCMDataExportsPut` bucket policy statement to support multiple source accounts and SourceArns derived from a new `cur_data_export_source_account_ids` local.
+  - Avoid plan-time computed value dependency by referencing statically constructed S3 bucket ARNs using the `cur_export_bucket_arn` local.
+  - Add validation to `telemetry_member_account_ids` variable requiring 12-digit AWS account IDs.
 - **IAM Module** (`modules/iam`):
   - Declare variable `cur_export_name`.
   - Scope down `AllowCURSourceGet` and `AllowMemberCURGet` resources to generated member-account prefixes when `telemetry_member_account_ids` is provided.
@@ -43,8 +47,12 @@ This log tracks the progress of the member-account CUR 2.0 manifest prefix fixes
   - Test CE fallback dimensions and region normalization to `"global"`.
 - **Normalizer Tests** (`lambda_src/tests/test_normalizer_cur2.py`):
   - Test acceptance of valid member-account prefix and rejection of mismatching prefix.
+- **Terraform Integration Tests** (`modules/lakehouse/lakehouse.tftest.hcl`):
+  - Add plan-mode regression test `validate_cur_export_policy_with_members` to verify that the generated policy dynamically resolves source account variables, correctly scopes resources to `${account_id}/${var.cur_export_name}/*`, and correctly restricts condition scopes.
 
 ## Verification Run
 - Pytest: 363 tests passed successfully.
+- Terraform test: Module test suite with `validate_cur_export_policy_with_members` passed.
 - Terraform validate: Sandbox, Staging, and Prod validated successfully.
 - Static checks: Trivy and Checkov passed successfully.
+

@@ -83,6 +83,11 @@ variable "telemetry_member_account_ids" {
   type        = list(string)
   description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
   default     = []
+
+  validation {
+    condition     = alltrue([for acc in var.telemetry_member_account_ids : can(regex("^[0-9]{12}$", acc))])
+    error_message = "All telemetry member account IDs must be exactly 12-digit numbers."
+  }
 }
 
 

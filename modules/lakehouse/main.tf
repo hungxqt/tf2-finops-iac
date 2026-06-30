@@ -3,6 +3,12 @@
 
 data "aws_caller_identity" "current" {}
 
+locals {
+  cur_data_export_source_account_ids = length(var.telemetry_member_account_ids) > 0 ? sort(distinct(var.telemetry_member_account_ids)) : [data.aws_caller_identity.current.account_id]
+  cur_export_bucket_name             = var.cur_export_bucket_name != "" ? var.cur_export_bucket_name : "tf2-finops-cur-export-bucket"
+  cur_export_bucket_arn              = "arn:aws:s3:::${local.cur_export_bucket_name}"
+}
+
 # Common KMS Key Policy Document
 data "aws_iam_policy_document" "kms_policy" {
   statement {
@@ -941,7 +947,7 @@ resource "aws_s3_bucket" "cur_export" {
   # checkov:skip=CKV_AWS_144: "CUR export landing bucket does not need cross-region replication (raw source only)"
   # checkov:skip=CKV2_AWS_62: "CUR export landing bucket is polled by cost_puller and does not need event notifications"
   count         = var.create_cur_export_bucket ? 1 : 0
-  bucket        = var.cur_export_bucket_name != "" ? var.cur_export_bucket_name : "tf2-finops-cur-export-bucket"
+  bucket        = local.cur_export_bucket_name
   force_destroy = var.destroyable
   tags          = var.tags
 }
@@ -1043,8 +1049,8 @@ data "aws_iam_policy_document" "cur_export" {
     }
     actions = ["s3:*"]
     resources = [
-      aws_s3_bucket.cur_export[0].arn,
-      "${aws_s3_bucket.cur_export[0].arn}/*"
+      local.cur_export_bucket_arn,
+      "${local.cur_export_bucket_arn}/*"
     ]
     condition {
       test     = "Bool"
@@ -1066,18 +1072,20 @@ data "aws_iam_policy_document" "cur_export" {
       "s3:PutObject"
     ]
     # Scope writes to the raw export prefix only; curated/, ai-input/, audit/, features/ are excluded.
-    resources = length(var.telemetry_member_account_ids) > 0 ? [
-      for acc in var.telemetry_member_account_ids : "${aws_s3_bucket.cur_export[0].arn}/${acc}/${var.cur_export_name}/*"
-    ] : (var.cur_raw_prefix != "" ? ["${aws_s3_bucket.cur_export[0].arn}/${var.cur_raw_prefix}/*"] : ["${aws_s3_bucket.cur_export[0].arn}/*"])
+    resources = [
+      for acc in local.cur_data_export_source_account_ids : "${local.cur_export_bucket_arn}/${acc}/${var.cur_export_name}/*"
+    ]
     condition {
       test     = "StringLike"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:bcm-data-exports:us-east-1:${data.aws_caller_identity.current.account_id}:export/*"]
+      values = [
+        for acc in local.cur_data_export_source_account_ids : "arn:aws:bcm-data-exports:us-east-1:${acc}:export/*"
+      ]
     }
     condition {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
-      values   = [data.aws_caller_identity.current.account_id]
+      values   = local.cur_data_export_source_account_ids
     }
   }
 
@@ -1091,10 +1099,10 @@ data "aws_iam_policy_document" "cur_export" {
     }
     actions = ["s3:PutObject", "s3:DeleteObject"]
     resources = [
-      "${aws_s3_bucket.cur_export[0].arn}/curated/*",
-      "${aws_s3_bucket.cur_export[0].arn}/ai-input/*",
-      "${aws_s3_bucket.cur_export[0].arn}/audit/*",
-      "${aws_s3_bucket.cur_export[0].arn}/features/*",
+      "${local.cur_export_bucket_arn}/curated/*",
+      "${local.cur_export_bucket_arn}/ai-input/*",
+      "${local.cur_export_bucket_arn}/audit/*",
+      "${local.cur_export_bucket_arn}/features/*",
     ]
   }
 }

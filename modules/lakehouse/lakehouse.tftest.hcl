@@ -73,3 +73,33 @@ run "validate_glue_catalog_tables" {
     error_message = "The output format of containment audit table must be JSON HiveIgnoreKeyTextOutputFormat"
   }
 }
+
+run "validate_cur_export_policy_with_members" {
+  command = plan
+
+  variables {
+    create_cur_export_bucket     = true
+    telemetry_member_account_ids = ["111111111111", "222222222222"]
+    cur_export_name              = "memberCUR"
+  }
+
+  assert {
+    condition     = contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Resource, "arn:aws:s3:::tf2-finops-cur-export-bucket/111111111111/memberCUR/*") && contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Resource, "arn:aws:s3:::tf2-finops-cur-export-bucket/222222222222/memberCUR/*")
+    error_message = "Resource list must contain both member-account CUR prefixes"
+  }
+
+  assert {
+    condition     = contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Condition.StringEquals["aws:SourceAccount"], "111111111111") && contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Condition.StringEquals["aws:SourceAccount"], "222222222222")
+    error_message = "aws:SourceAccount condition must contain both member accounts"
+  }
+
+  assert {
+    condition     = contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Condition.StringLike["aws:SourceArn"], "arn:aws:bcm-data-exports:us-east-1:111111111111:export/*") && contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Condition.StringLike["aws:SourceArn"], "arn:aws:bcm-data-exports:us-east-1:222222222222:export/*")
+    error_message = "aws:SourceArn condition must contain both member-account CUR export ARNs"
+  }
+
+  assert {
+    condition     = !contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Condition.StringEquals["aws:SourceAccount"], data.aws_caller_identity.current.account_id)
+    error_message = "aws:SourceAccount must not contain caller account ID when member accounts are configured"
+  }
+}
