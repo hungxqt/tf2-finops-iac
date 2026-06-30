@@ -433,10 +433,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
                         billing_period_out = m.group(1)
                 
                 # Validate data files
+                allowed_prefix = ingestion_details.get("allowed_raw_prefix") or cur_raw_export_prefix
                 finops_common.validate_data_files(
                     data_files=data_files,
-                    allowed_bucket="tf2-finops-cur-export-bucket",
-                    allowed_prefix=cur_raw_export_prefix,
+                    allowed_bucket=m_bucket,
+                    allowed_prefix=allowed_prefix,
                     billing_period=billing_period_out
                 )
             except (finops_common.UnsafeActionError, finops_common.InvalidInputError):

@@ -73,3 +73,16 @@ variable "cur_raw_prefix" {
   default     = ""
 }
 
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
+variable "telemetry_member_account_ids" {
+  type        = list(string)
+  description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
+  default     = []
+}
+
+

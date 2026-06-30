@@ -677,3 +677,99 @@ def test_cost_puller_assume_role_uses_telemetry_member_role_name_env():
     )
 
     del os.environ["TELEMETRY_MEMBER_ROLE_NAME"]
+
+
+def test_cost_puller_ce_fallback_two_dimensions():
+    """
+    CE fallback path calls GetCostAndUsage using only LINKED_ACCOUNT and SERVICE,
+    and returns region set to 'global' in normalized fallback records.
+    """
+    account_id = "112233"
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = "tf2-finops-cur-export-bucket"
+    os.environ["CUR_EXPORTS_JSON"] = json.dumps({
+        account_id: {
+            "source_account_id": account_id,
+            "prefix": "finops-cur-export",
+            "export_name": "finops-export",
+            "allowed_raw_prefix": "finops-cur-export",
+        }
+    })
+
+    captured_kwargs = []
+
+    def fake_get_cost_and_usage(**kwargs):
+        captured_kwargs.append(kwargs)
+        return {
+            "ResultsByTime": [
+                {
+                    "TimePeriod": {"Start": "2026-06-24", "End": "2026-06-25"},
+                    "Estimated": False,
+                    "Groups": [
+                        {
+                            "Keys": [account_id, "Amazon Elastic Compute Cloud - Compute"],
+                            "Metrics": {"UnblendedCost": {"Amount": "150.00"}}
+                        }
+                    ]
+                }
+            ]
+        }
+
+    put_calls = []
+    def fake_put_object(bucket, key, body):
+        put_calls.append((bucket, key, body))
+
+    # Without head_object_func, FakeS3 will raise 404 NoSuchKey by default
+    handler.s3_client = finops_common.FakeS3(
+        put_object_func=fake_put_object
+    )
+    handler.ce_client = finops_common.FakeCostExplorer(
+        get_cost_and_usage_func=fake_get_cost_and_usage
+    )
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = finops_common.FakeSTS(
+        get_caller_identity_func=lambda: {"AccountId": account_id}
+    )
+
+    resp = handler.handle_request(
+        {
+            "run_id": "run-ce-fallback-2d",
+            "correlation_id": "corr-ce-fallback-2d",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+
+    assert resp["status"] == "READY"
+    
+    # Prove only 2 GroupBy dimensions are used
+    assert len(captured_kwargs) == 1
+    group_by = captured_kwargs[0]["GroupBy"]
+    assert len(group_by) == 2
+    assert {"Type": "DIMENSION", "Key": "LINKED_ACCOUNT"} in group_by
+    assert {"Type": "DIMENSION", "Key": "SERVICE"} in group_by
+    assert {"Type": "DIMENSION", "Key": "REGION"} not in group_by
+
+    # Prove region is normalized to 'global'
+    raw_telemetry_put = [k for b, k, v in put_calls if k.startswith("cur/")]
+    assert len(raw_telemetry_put) == 1
+    raw_data_body = put_calls[0][2]
+    if raw_data_body.startswith(b'\x1f\x8b'):
+        raw_data_body = gzip.decompress(raw_data_body)
+    raw_json = json.loads(raw_data_body.decode("utf-8"))
+    
+    ce_daily_records = raw_json.get("aws_cost_explorer_daily", [])
+    assert len(ce_daily_records) == 1
+    assert ce_daily_records[0]["region"] == "global"
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.ce_client = None
+    handler.cw_client = None
+    handler.sts_client = None
+

@@ -994,14 +994,29 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur_export" {
     }
   }
 
-  rule {
-    id     = "expire-raw-cur"
-    status = "Enabled"
-    filter {
-      prefix = var.cur_raw_prefix != "" ? "${var.cur_raw_prefix}/" : ""
+  dynamic "rule" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? var.telemetry_member_account_ids : (var.cur_raw_prefix != "" ? [var.cur_raw_prefix] : [])
+    content {
+      id     = "expire-raw-cur-${rule.value}"
+      status = "Enabled"
+      filter {
+        prefix = length(var.telemetry_member_account_ids) > 0 ? "${rule.value}/${var.cur_export_name}/" : "${rule.value}/"
+      }
+      expiration {
+        days = 90
+      }
     }
-    expiration {
-      days = 90
+  }
+
+  dynamic "rule" {
+    for_each = length(var.telemetry_member_account_ids) == 0 && var.cur_raw_prefix == "" ? [1] : []
+    content {
+      id     = "expire-raw-cur-default"
+      status = "Enabled"
+      filter {}
+      expiration {
+        days = 90
+      }
     }
   }
 }
@@ -1051,9 +1066,9 @@ data "aws_iam_policy_document" "cur_export" {
       "s3:PutObject"
     ]
     # Scope writes to the raw export prefix only; curated/, ai-input/, audit/, features/ are excluded.
-    resources = [
-      var.cur_raw_prefix != "" ? "${aws_s3_bucket.cur_export[0].arn}/${var.cur_raw_prefix}/*" : "${aws_s3_bucket.cur_export[0].arn}/*"
-    ]
+    resources = length(var.telemetry_member_account_ids) > 0 ? [
+      for acc in var.telemetry_member_account_ids : "${aws_s3_bucket.cur_export[0].arn}/${acc}/${var.cur_export_name}/*"
+    ] : (var.cur_raw_prefix != "" ? ["${aws_s3_bucket.cur_export[0].arn}/${var.cur_raw_prefix}/*"] : ["${aws_s3_bucket.cur_export[0].arn}/*"])
     condition {
       test     = "StringLike"
       variable = "aws:SourceArn"

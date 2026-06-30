@@ -287,11 +287,19 @@ def handle_request(event_data: dict, context: Any) -> dict:
     # Parse CUR_EXPORTS_JSON — account-keyed map of export configs
     cur_exports = _parse_cur_exports_json(cur_exports_raw)
 
+    if cur_exports_raw and cur_exports and event.account_id not in cur_exports:
+        raise finops_common.ConfigMissingError(
+            f"Account {event.account_id} is not configured in CUR_EXPORTS_JSON"
+        )
+
     # Resolve the export config for this account (fall back to first entry if single-account)
     export_config: Dict[str, Any] = cur_exports.get(event.account_id) or (
         next(iter(cur_exports.values())) if len(cur_exports) == 1 else {}
     )
     using_exports_json = bool(export_config)
+
+    export_prefix = export_config.get("prefix", "")
+    allowed_raw_prefix = export_config.get("allowed_raw_prefix") or export_prefix
 
     # Bucket & Account Security validations
     # Note: tf2-finops-cur-export-bucket does not embed account ID in its name by design;
@@ -400,8 +408,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     Metrics=["UnblendedCost"],
                     GroupBy=[
                         {"Type": "DIMENSION", "Key": "LINKED_ACCOUNT"},
-                        {"Type": "DIMENSION", "Key": "SERVICE"},
-                        {"Type": "DIMENSION", "Key": "REGION"}
+                        {"Type": "DIMENSION", "Key": "SERVICE"}
                     ]
                 )
             except Exception as e:
@@ -452,10 +459,10 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 if is_est:
                     estimated_billing = True
                 for group in result.get("Groups", []):
-                    keys = group.get("Keys", ["", "", ""])
+                    keys = group.get("Keys", ["", ""])
                     linked_account = keys[0] if len(keys) > 0 else ""
                     service = keys[1] if len(keys) > 1 else ""
-                    region = keys[2] if len(keys) > 2 else ""
+                    region = keys[2] if len(keys) > 2 else "global"
                     cost = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0))
 
                     service_code = CE_SERVICE_TO_CUR_CODE.get(service, service.replace("Amazon ", "").replace(" ", ""))
@@ -558,7 +565,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 # Validate dataFiles
                 finops_common.validate_data_files(
                     data_files=data_files,
-                    allowed_bucket="tf2-finops-cur-export-bucket",
+                    allowed_bucket=effective_cur_bucket,
                     allowed_prefix=allowed_raw_prefix,
                     billing_period=billing_period_out
                 )
@@ -681,6 +688,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "raw_data_uri": raw_data_uri,
             "data_source_type": "S3_POINTER",
             "s3_object_checksum": s3_object_checksum,
+            "allowed_raw_prefix": allowed_raw_prefix,
             "telemetry_delay_event": True,
             "missing_resources": missing_resources,
             "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
@@ -708,6 +716,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "data_source_type": "S3_POINTER",
             "cur_manifest_uri": manifest_uri,
             "manifest_etag": manifest_etag,
+            "allowed_raw_prefix": allowed_raw_prefix,
             "manifest_format": "DATA_EXPORTS",
             "execution_id": execution_id,
             "export_arn": export_arn,

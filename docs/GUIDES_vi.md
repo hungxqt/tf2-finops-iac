@@ -275,9 +275,12 @@ cd ../..
 Worker `cost_puller` Ä‘áº£m nháº­n viá»‡c thu tháº­p dá»¯ liá»‡u chi phÃ­ (billing) vÃ  hiá»‡u nÄƒng (utilization) thÃ´. NÃ³ hoáº¡t Ä‘á»™ng á»Ÿ cháº¿ Ä‘á»™ thu tháº­p há»—n há»£p (hybrid ingestion), Ä‘á»c cÃ¡c tá»‡p CUR tá»« S3 source bucket hoáº·c tá»± Ä‘á»™ng chuyá»ƒn sang Cost Explorer khi CUR bá»‹ trá»….
 
 ### Bước 7.1: Các tham số cấu hình
-Hành vi thu thập dữ liệu được kiểm soát bởi các biến Terraform được truyền vào module `compute_lambda`:
-* `cur_source_bucket`: Bucket S3 nơi AWS CUR được lưu trữ.
-* `cur_source_prefix`: Đường dẫn prefix trong source bucket cho các tệp CUR.
+Hành vi thu thập dữ liệu được kiểm soát bởi các biến Terraform được truyền vào các module `compute_lambda`, `lakehouse`, và `iam`:
+* `cur_source_bucket` / `cur_source_bucket_arn`: Bucket S3 nơi AWS CUR được lưu trữ.
+* `cur_raw_prefix` / `cur_source_prefix`: S3 prefix dưới CUR export bucket nơi AWS Data Exports ghi dữ liệu raw CUR 2.0 Parquet.
+* `cur_export_name`: Tên của AWS Data Exports (ví dụ: mặc định là `accountCUR`) dùng để tạo đường dẫn account thành viên một cách xác định.
+* `telemetry_member_account_ids`: Danh sách các ID tài khoản thành viên để CDO lấy telemetry. Theo mặc định, `CUR_EXPORTS_JSON` được tạo động từ danh sách này dưới dạng: `account_id -> { source_account_id=account_id, prefix=account_id, export_name=cur_export_name, allowed_raw_prefix="${account_id}/${cur_export_name}" }`.
+* `cur_exports_json`: Một chuỗi JSON cấu hình ghi đè thủ công cho CUR 2.0. Nếu được thiết lập rõ ràng, nó sẽ ghi đè cấu hình được tạo tự động từ `telemetry_member_account_ids` và `cur_export_name`. Chỉ dùng cho mục đích nâng cao hoặc cấu hình tường minh.
 * `cur_delay_threshold_hours`: Ngưỡng thời gian trễ (tính bằng giờ) trước khi chuyển sang chế độ dự phòng CE (mặc định: `36`).
 * `ce_lookback_window_days`: Số ngày lịch sử CE cần lấy khi chạy dự phòng (mặc định: `30`).
 * `traffic_metric_identifiers`: Định danh dùng để truy vấn dữ liệu traffic vật lý (ví dụ: tên ALB).

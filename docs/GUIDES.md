@@ -280,9 +280,12 @@ Ensure the table projection ranges (e.g. `2024,2035`), formats, and S3 partition
 The `cost_puller` worker acquires raw billing and utilization telemetry. It operates in a hybrid ingestion mode, reading CUR files from the source S3 bucket or falling back to Cost Explorer when CUR updates are delayed.
 
 ### Step 7.1: Configuration Parameters
-The ingestion behavior is controlled by these Terraform variables passed to the `compute_lambda` module:
-* `cur_source_bucket`: S3 bucket where AWS CUR is delivered.
-* `cur_source_prefix`: Prefix path in the source bucket for CUR files.
+The ingestion behavior is controlled by these Terraform variables passed to the `compute_lambda`, `lakehouse`, and `iam` modules:
+* `cur_source_bucket` / `cur_source_bucket_arn`: S3 bucket where AWS CUR is delivered.
+* `cur_raw_prefix` / `cur_source_prefix`: S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 Parquet files.
+* `cur_export_name`: The AWS Data Exports export name (e.g. `accountCUR`, default value) used to build deterministic member-account paths.
+* `telemetry_member_account_ids`: The list of member account IDs from which CDO pulls telemetry. By default, `CUR_EXPORTS_JSON` is generated dynamically from this list as: `account_id -> { source_account_id=account_id, prefix=account_id, export_name=cur_export_name, allowed_raw_prefix="${account_id}/${cur_export_name}" }`.
+* `cur_exports_json`: A JSON string manual override of the CUR 2.0 configuration. If set explicitly, it overrides the auto-generated config from `telemetry_member_account_ids` and `cur_export_name`. Advanced/explicit use only.
 * `cur_delay_threshold_hours`: Delay threshold in hours before switching to CE fallback (default: `36`).
 * `ce_lookback_window_days`: Days of CE history retrieved during fallback (default: `30`).
 * `traffic_metric_identifiers`: Identifiers for querying physical traffic metrics (e.g., ALB names).

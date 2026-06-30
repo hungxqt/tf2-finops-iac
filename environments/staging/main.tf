@@ -16,6 +16,15 @@ locals {
     account_policy  = "${var.project_name}-${var.environment}-account-policy"
     rollback_cache  = "${var.project_name}-${var.environment}-rollback-cache"
   }
+
+  cur_exports_json = var.cur_exports_json != "" ? var.cur_exports_json : jsonencode({
+    for acc in var.telemetry_member_account_ids : acc => {
+      source_account_id  = acc
+      prefix             = acc
+      export_name        = var.cur_export_name
+      allowed_raw_prefix = "${acc}/${var.cur_export_name}"
+    }
+  })
 }
 
 
@@ -454,6 +463,11 @@ module "lakehouse" {
   athena_replica_bucket_arn    = aws_s3_bucket.athena_results_replica.arn
   tags                         = var.tags
   destroyable                  = var.destroyable
+  create_cur_export_bucket     = var.create_cur_export_bucket
+  cur_export_bucket_name       = var.cur_export_bucket_name
+  cur_raw_prefix               = var.cur_raw_prefix
+  cur_export_name              = var.cur_export_name
+  telemetry_member_account_ids = var.telemetry_member_account_ids
 }
 
 # 3. Alerting Module
@@ -481,14 +495,20 @@ module "iam" {
       module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
     ]
   )
-  ai_payload_idempotency_table_arn       = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
-  kms_key_arns                           = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
-  containment_apply_enabled              = false
-  queue_arns                             = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
-  sns_topic_arns                         = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
-  telemetry_member_account_ids           = var.telemetry_member_account_ids
-  telemetry_member_role_name             = var.telemetry_member_role_name
-  cur_source_bucket_arn                  = var.cur_source_bucket_arn
+  ai_payload_idempotency_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
+  kms_key_arns                     = [module.lakehouse.data_kms_key_arn, module.lakehouse.audit_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
+  containment_apply_enabled        = false
+  queue_arns                       = [module.orchestration.rollback_status_queue_arn, module.compute_lambda.lambda_dlq_arn]
+  sns_topic_arns                   = [module.alerting.finance_topic_arn, module.alerting.engineering_topic_arn]
+  telemetry_member_account_ids     = var.telemetry_member_account_ids
+  telemetry_member_role_name       = var.telemetry_member_role_name
+  cur_source_bucket_arn = (
+    var.cur_source_bucket_arn != "" ? var.cur_source_bucket_arn :
+    module.lakehouse.cur_export_bucket_arn != "" ? module.lakehouse.cur_export_bucket_arn :
+    ""
+  )
+  cur_source_prefix                      = var.cur_raw_prefix
+  cur_export_name                        = var.cur_export_name
   create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
   trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
   athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
@@ -562,6 +582,8 @@ module "compute_lambda" {
   ce_lookback_window_days    = var.ce_lookback_window_days
   traffic_metric_identifiers = var.traffic_metric_identifiers
   telemetry_member_role_name = var.telemetry_member_role_name
+  cur_exports_json           = local.cur_exports_json
+  cur_raw_export_prefix      = var.cur_raw_prefix
 }
 
 # 7. Orchestration Module

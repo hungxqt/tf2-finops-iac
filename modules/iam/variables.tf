@@ -78,6 +78,13 @@ variable "cur_source_prefix" {
   default     = ""
 }
 
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
+
 variable "create_member_telemetry_ingestion_role" {
   type        = bool
   description = "Whether to create the member telemetry ingestion role in this deployment context"

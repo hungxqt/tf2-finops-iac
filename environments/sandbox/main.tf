@@ -19,6 +19,15 @@ locals {
     # It is merged into compute_lambda.dynamodb_table_names below so vpc_alb_caller
     # receives IDEMPOTENCY_TABLE_NAME via its environment block.
   }
+
+  cur_exports_json = var.cur_exports_json != "" ? var.cur_exports_json : jsonencode({
+    for acc in var.telemetry_member_account_ids : acc => {
+      source_account_id  = acc
+      prefix             = acc
+      export_name        = var.cur_export_name
+      allowed_raw_prefix = "${acc}/${var.cur_export_name}"
+    }
+  })
 }
 
 
@@ -460,6 +469,8 @@ module "lakehouse" {
   create_cur_export_bucket     = var.create_cur_export_bucket
   cur_export_bucket_name       = var.cur_export_bucket_name
   cur_raw_prefix               = var.cur_raw_prefix
+  cur_export_name              = var.cur_export_name
+  telemetry_member_account_ids = var.telemetry_member_account_ids
 }
 
 # 3. Alerting Module
@@ -502,6 +513,7 @@ module "iam" {
     ""
   )
   cur_source_prefix                      = var.cur_raw_prefix
+  cur_export_name                        = var.cur_export_name
   create_member_telemetry_ingestion_role = var.create_member_telemetry_ingestion_role
   trusted_cost_puller_role_arns          = var.trusted_cost_puller_role_arns
   athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
@@ -587,7 +599,7 @@ module "compute_lambda" {
   cur_data_table_name        = module.lakehouse.cur_data_table_name
   athena_results_bucket_name = module.lakehouse.athena_results_bucket_name
   telemetry_member_role_name = var.telemetry_member_role_name
-  cur_exports_json           = var.cur_exports_json
+  cur_exports_json           = local.cur_exports_json
   cur_raw_export_prefix      = var.cur_raw_prefix
 }
 

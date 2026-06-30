@@ -450,3 +450,87 @@ def test_normalizer_dynamic_query_construction():
     _clear_athena_env()
     handler.s3_client = None
     handler.athena_client = None
+
+
+def test_normalizer_member_account_prefix_accepted():
+    """
+    Normalizer accepts manifest containing dataFiles with member-account prefix
+    matching ingestion.details.allowed_raw_prefix and manifest S3 URI bucket,
+    while rejecting other prefixes.
+    """
+    account_id = "336805808730"
+    cur_bucket = "tf2-finops-cur-export-bucket-2"
+
+    # Valid manifest with custom bucket and member-account prefix
+    valid_manifest = _make_manifest(
+        bucket=cur_bucket,
+        prefix=f"{account_id}/accountCUR",
+        data_files=[f"s3://{cur_bucket}/{account_id}/accountCUR/data/BILLING_PERIOD=2026-06/part.parquet"]
+    )
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    # Even if CUR_RAW_EXPORT_PREFIX env is set differently, the ingestion details should override it
+    os.environ["CUR_RAW_EXPORT_PREFIX"] = "some-other-prefix"
+    _set_athena_env()
+
+    manifest_uri = f"s3://{cur_bucket}/{account_id}/accountCUR/metadata/BILLING_PERIOD=2026-06/accountCUR-Manifest.json"
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: valid_manifest,
+        put_object_func=lambda b, k, v: None,
+    )
+    handler.athena_client = FakeAthena()
+
+    # Proves it accepts matching prefix
+    resp = handler.handle_request(
+        {
+            "run_id": "run-member-prefix-ok",
+            "correlation_id": "corr-member-prefix-ok",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+            "ingestion": {
+                "details": {
+                    "cur_manifest_uri": manifest_uri,
+                    "allowed_raw_prefix": f"{account_id}/accountCUR"
+                }
+            },
+        },
+        None,
+    )
+    assert resp["status"] == "NORMALIZED"
+
+    # Proves it rejects mismatching prefix (attacker)
+    bad_manifest = _make_manifest(
+        bucket=cur_bucket,
+        prefix=f"999999999999/accountCUR",
+        data_files=[f"s3://{cur_bucket}/999999999999/accountCUR/data/BILLING_PERIOD=2026-06/part.parquet"]
+    )
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: bad_manifest,
+    )
+
+    with pytest.raises(finops_common.UnsafeActionError, match="outside the allowed prefix"):
+        handler.handle_request(
+            {
+                "run_id": "run-member-prefix-bad",
+                "correlation_id": "corr-member-prefix-bad",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+                "ingestion": {
+                    "details": {
+                        "cur_manifest_uri": manifest_uri,
+                        "allowed_raw_prefix": f"{account_id}/accountCUR"
+                    }
+                },
+            },
+            None,
+        )
+
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_RAW_EXPORT_PREFIX"]
+    _clear_athena_env()
+    handler.s3_client = None
+    handler.athena_client = None
+

@@ -327,7 +327,9 @@ data "aws_iam_policy_document" "cost_puller" {
     content {
       sid     = "AllowCURSourceGet"
       actions = ["s3:GetObject", "s3:HeadObject"]
-      resources = [
+      resources = length(var.telemetry_member_account_ids) > 0 ? [
+        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
+        ] : [
         var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
       ]
     }
@@ -704,7 +706,9 @@ data "aws_iam_policy_document" "member_telemetry_ingestion" {
     content {
       sid     = "AllowMemberCURGet"
       actions = ["s3:GetObject"]
-      resources = [
+      resources = length(var.telemetry_member_account_ids) > 0 ? [
+        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
+        ] : [
         var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
       ]
     }

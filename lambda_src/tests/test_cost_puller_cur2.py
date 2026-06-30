@@ -496,3 +496,122 @@ def test_legacy_manifest_fails():
     del os.environ["CUR_EXPORTS_JSON"]
     handler.s3_client = None
     handler.sts_client = None
+
+
+def test_build_manifest_key_member_account():
+    """Build manifest key matches AWS Data Exports layout for member account prefix."""
+    key = handler._build_manifest_key("336805808730", "accountCUR", "2026-06")
+    assert key == "336805808730/accountCUR/metadata/BILLING_PERIOD=2026-06/accountCUR-Manifest.json"
+
+
+def test_cur2_multi_account_configured_bucket():
+    """
+    Cost puller parses multi-account CUR_EXPORTS_JSON,
+    validates dataFiles against custom bucket (tf2-finops-cur-export-bucket-2),
+    verifies allowed_raw_prefix and details structure,
+    and returns READY.
+    """
+    account_id = "336805808730"
+    cur_bucket = "tf2-finops-cur-export-bucket-2"
+    
+    # Prefix is configured as "336805808730/accountCUR" via allowed_raw_prefix
+    data_files = [
+        f"s3://{cur_bucket}/{account_id}/accountCUR/data/BILLING_PERIOD=2026-06/part-00001.snappy.parquet"
+    ]
+    manifest_bytes = _make_manifest(data_files=data_files)
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    
+    # Setup multi-account config
+    os.environ["CUR_EXPORTS_JSON"] = json.dumps({
+        account_id: {
+            "source_account_id": account_id,
+            "prefix": account_id,
+            "export_name": "accountCUR",
+            "allowed_raw_prefix": f"{account_id}/accountCUR"
+        },
+        "123456789012": {
+            "source_account_id": "123456789012",
+            "prefix": "123456789012",
+            "export_name": "accountCUR",
+            "allowed_raw_prefix": "123456789012/accountCUR"
+        }
+    })
+
+    def fake_head(bucket, key):
+        return {"ETag": '"abc12345"', "ContentLength": len(manifest_bytes)}
+
+    def fake_get(bucket, key):
+        return manifest_bytes
+
+    handler.s3_client = finops_common.FakeS3(
+        head_object_func=fake_head,
+        get_object_func=fake_get,
+    )
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    resp = handler.handle_request(
+        {
+            "run_id": "run-multi-acc",
+            "correlation_id": "corr-multi-acc",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+        },
+        None,
+    )
+
+    assert resp["status"] == "READY"
+    details = resp["details"]
+    assert details["cur_manifest_uri"] == f"s3://{cur_bucket}/{account_id}/accountCUR/metadata/BILLING_PERIOD=2026-06/accountCUR-Manifest.json"
+    assert details["allowed_raw_prefix"] == f"{account_id}/accountCUR"
+    assert details["export_name"] == "accountCUR"
+    assert details["source_account_id"] == account_id
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.sts_client = None
+
+
+def test_cur2_rejection_unconfigured_account():
+    """Cost puller rejects requests when the event account is not configured in CUR_EXPORTS_JSON."""
+    account_id = "999999999999"
+    cur_bucket = "tf2-finops-cur-export-bucket-2"
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    os.environ["CUR_EXPORTS_JSON"] = json.dumps({
+        "123456789012": {
+            "source_account_id": "123456789012",
+            "prefix": "123456789012",
+            "export_name": "accountCUR",
+            "allowed_raw_prefix": "123456789012/accountCUR"
+        }
+    })
+
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    with pytest.raises(finops_common.ConfigMissingError, match="is not configured in CUR_EXPORTS_JSON"):
+        handler.handle_request(
+            {
+                "run_id": "run-unconfig",
+                "correlation_id": "corr-unconfig",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+            },
+            None,
+        )
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.sts_client = None
+

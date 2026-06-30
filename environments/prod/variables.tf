@@ -170,4 +170,35 @@ variable "scheduler_enabled" {
   default     = false
 }
 
+variable "cur_exports_json" {
+  type        = string
+  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. If set, this manual override takes precedence over the automatically generated config from telemetry_member_account_ids and cur_export_name. Advanced/explicit use only."
+  default     = ""
+}
+
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
+variable "create_cur_export_bucket" {
+  type        = bool
+  description = "Set to true to create the dedicated CUR 2.0 / AWS Data Exports landing bucket via the lakehouse module."
+  default     = false
+}
+
+variable "cur_export_bucket_name" {
+  type        = string
+  description = "Override name for the CUR 2.0 export landing bucket. Defaults to 'tf2-finops-cur-export-bucket' when empty."
+  default     = ""
+}
+
+variable "cur_raw_prefix" {
+  type        = string
+  description = "S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 Parquet files (e.g. 'finops-cur-export'). Used for IAM scoping and bcm-data-exports bucket policy."
+  default     = ""
+}
+
+
 

@@ -156,9 +156,16 @@ variable "trusted_cost_puller_role_arns" {
 
 variable "cur_exports_json" {
   type        = string
-  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. Each entry must have source_account_id, prefix, export_name, and optionally allowed_raw_prefix. Leave empty to fall back to legacy CUR_SOURCE_PREFIX discovery."
+  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. If set, this manual override takes precedence over the automatically generated config from telemetry_member_account_ids and cur_export_name. Advanced/explicit use only."
   default     = ""
 }
+
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
 
 variable "create_cur_export_bucket" {
   type        = bool
