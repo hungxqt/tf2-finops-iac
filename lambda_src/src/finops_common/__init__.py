@@ -22,6 +22,7 @@ from finops_common.utils import (
     config_value,
     parse_and_validate_manifest,
     validate_data_files,
+    validate_manifest_columns,
 )
 from finops_common.aws_clients import (
     DynamoDBClient,

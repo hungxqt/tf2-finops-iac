@@ -28,6 +28,11 @@ output "cur_data_table_name" {
   value       = aws_glue_catalog_table.cur_data.name
 }
 
+output "raw_cur_table_name" {
+  description = "The name of the Glue Catalog table for raw CUR 2.0 / Data Exports cost data"
+  value       = aws_glue_catalog_table.raw_cur_data.name
+}
+
 output "containment_audit_table_name" {
   description = "The name of the Glue Catalog table for containment audit records"
   value       = aws_glue_catalog_table.containment_audit.name
@@ -39,6 +44,7 @@ output "glue_catalog_tables" {
     database = aws_glue_catalog_database.lakehouse.name
     tables = {
       cur_data          = aws_glue_catalog_table.cur_data.name
+      raw_cur_data      = aws_glue_catalog_table.raw_cur_data.name
       containment_audit = aws_glue_catalog_table.containment_audit.name
     }
   }
@@ -77,6 +83,11 @@ output "glue_database_arn" {
 output "cur_data_table_arn" {
   description = "The ARN of the Glue Catalog table for curated cost data"
   value       = aws_glue_catalog_table.cur_data.arn
+}
+
+output "raw_cur_table_arn" {
+  description = "The ARN of the Glue Catalog table for raw CUR 2.0 / Data Exports cost data"
+  value       = aws_glue_catalog_table.raw_cur_data.arn
 }
 
 output "athena_workgroup_arn" {

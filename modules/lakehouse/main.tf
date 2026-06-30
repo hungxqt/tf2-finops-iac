@@ -592,6 +592,153 @@ resource "aws_glue_catalog_table" "cur_data" {
   }
 }
 
+# Glue Catalog Table for Raw CUR 2.0 / Data Exports cost data
+resource "aws_glue_catalog_table" "raw_cur_data" {
+  name          = "raw_cur_data"
+  database_name = aws_glue_catalog_database.lakehouse.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"                         = "parquet"
+    "projection.enabled"                     = "true"
+    "projection.billing_period.type"         = "date"
+    "projection.billing_period.range"        = "2024-01,2035-12"
+    "projection.billing_period.format"       = "yyyy-MM"
+    "projection.billing_period.interval"     = "1"
+    "projection.billing_period.interval.unit" = "MONTHS"
+    "storage.location.template"              = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+  }
+
+  partition_keys {
+    name = "billing_period"
+    type = "string"
+  }
+
+  storage_descriptor {
+    location      = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      name                  = "parquet"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "bill_billing_period_start_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "bill_payer_account_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_account_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_line_item_type"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_start_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "line_item_usage_end_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "line_item_product_code"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_type"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_operation"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_resource_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_amount"
+      type = "double"
+    }
+
+    columns {
+      name = "pricing_unit"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_unblended_rate"
+      type = "double"
+    }
+
+    columns {
+      name = "line_item_unblended_cost"
+      type = "double"
+    }
+
+    columns {
+      name = "line_item_currency_code"
+      type = "string"
+    }
+
+    columns {
+      name = "product_product_name"
+      type = "string"
+    }
+
+    columns {
+      name = "product_region_code"
+      type = "string"
+    }
+
+    columns {
+      name = "product_instance_type"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_environment"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_owner"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_team"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_cost_center"
+      type = "string"
+    }
+  }
+}
+
 # Glue Catalog Table for Containment Audit Records
 resource "aws_glue_catalog_table" "containment_audit" {
   name          = "containment_audit"

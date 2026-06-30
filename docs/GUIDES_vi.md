@@ -15,11 +15,17 @@ HÃ£y Ä‘áº£m báº£o báº¡n Ä‘Ã£ cÃ i Ä‘áº·t vÃ  cáº�
 Náº¿u triá»ƒn khai cá»§a báº¡n liÃªn quan Ä‘áº¿n viá»‡c thu tháº­p sá»‘ liá»‡u chi phÃ­ vÃ  sá»­ dá»¥ng (telemetry) tá»« cÃ¡c tÃ i khoáº£n thÃ nh viÃªn AWS (member accounts) riÃªng biá»‡t:
 1. **Cáº¥u hÃ¬nh táº¡i TÃ i khoáº£n Payer/CDO**:
    - Thiáº¿t láº­p biáº¿n Ä‘áº§u vÃ o `telemetry_member_account_ids` lÃ  danh sÃ¡ch cÃ¡c ID cá»§a tÃ i khoáº£n thÃ nh viÃªn.
-   - Cáº¥u hÃ¬nh bucket vÃ  tiá»n tá»‘ CUR nguá»“n báº±ng cÃ¡ch sá»­ dá»¥ng `cur_source_bucket_arn` vÃ  `cur_source_prefix` trong cÃ¡c tham sá»‘ cá»§a module `iam`.
+   - Cáº¥u hÃ¬nh bucket vÃ  tiá» n tá»‘ CUR nguá»“n báº±ng cÃ¡ch sá»­ dá»¥ng `cur_source_bucket_arn` vÃ  `cur_source_prefix` trong cÃ¡c tham sá»‘ cá»§a module `iam`.
 2. **Cáº¥u hÃ¬nh Vai trÃ² (Role) táº¡i TÃ i khoáº£n ThÃ nh viÃªn**:
    - Má»—i tÃ i khoáº£n thÃ nh viÃªn pháº£i triá»ƒn khai vai trÃ² IAM thu tháº­p dá»¯ liá»‡u (`cdo-telemetry-ingestion-role`).
    - ChÃ­nh sÃ¡ch á»§y thÃ¡c (trust policy) cá»§a vai trÃ² nÃ y pháº£i cho phÃ©p ARN cá»§a vai trÃ² IAM CDO cost-puller tá»« tÃ i khoáº£n Payer/CDO giáº£ Ä‘á»‹nh (assume role).
-   - ChÃ­nh sÃ¡ch phÃ¢n quyá»n cá»§a vai trÃ² pháº£i cáº¥p quyá»n Ä‘á»c (`s3:ListBucket`, `s3:GetObject`) Ä‘á»‘i vá»›i bucket/tiá»n tá»‘ CUR cá»¥c bá»™, vÃ  cho phÃ©p truy váº¥n Cost Explorer (`ce:GetCostAndUsage`) vÃ  sá»‘ liá»‡u CloudWatch (`cloudwatch:GetMetricData`).
+   - ChÃ­nh sÃ¡ch phÃ¢n quyá» n cá»§a vai trÃ² pháº£i cáº¥p quyá» n Ä‘á» c (`s3:ListBucket`, `s3:GetObject`) Ä‘á»‘i vá»›i bucket/tiá» n tá»‘ CUR cá»¥c bá»™, vÃ  cho phÃ©p truy váº¥n Cost Explorer (`ce:GetCostAndUsage`) vÃ  sá»‘ liá»‡u CloudWatch (`cloudwatch:GetMetricData`).
+
+### 1.2 Điều kiện tiên quyết đối với AWS Data Export (Bắt buộc cho CUR 2.0 Ingestion)
+Giai đoạn `NormalizeCostWindow` của orchestrator phụ thuộc vào AWS Data Exports (CUR 2.0).
+1. **Cost Allocation Tag (Thẻ phân bổ chi phí)**: Kích hoạt thẻ phân bổ chi phí môi trường trong Billing Console (ví dụ: `user:Environment`).
+2. **Cấu hình Schema của Export**: AWS Data Export phải được cấu hình để xuất ra tệp Parquet và bao gồm/bí danh (alias) thẻ môi trường chính xác là `resource_tags_user_environment`.
+3. **Hợp đồng Thu thập Cột**: Định nghĩa truy vấn AWS Data Export phải chứa tất cả các cột bắt buộc được mô tả trong Telemetry Contract (bao gồm `line_item_usage_start_date`, `line_item_usage_account_id`, `line_item_product_code`, `line_item_usage_type`, `line_item_usage_amount`, `pricing_unit`, `line_item_unblended_cost` và `resource_tags_user_environment`). Nếu thiếu các cột này, các worker cost puller và normalizer sẽ dừng sớm (fail-fast) để tránh tính toán sai/lệch dữ liệu.
 
 ---
 

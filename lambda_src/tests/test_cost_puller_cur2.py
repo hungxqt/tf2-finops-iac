@@ -615,3 +615,67 @@ def test_cur2_rejection_unconfigured_account():
     del os.environ["CUR_EXPORTS_JSON"]
     handler.sts_client = None
 
+
+def test_cost_puller_rejects_missing_required_column():
+    """Cost puller rejects a Data Exports manifest missing resource_tags_user_environment."""
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+
+    # Manifest missing "resource_tags_user_environment"
+    bad_manifest = json.dumps({
+        "executionId": "exec-12345",
+        "exportArn": "arn:aws:bcm-data-exports:us-east-1:112233445566:export/cur2",
+        "columns": [
+            {"name": "bill_billing_period_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_start_date", "type": "timestamp"},
+            {"name": "line_item_usage_account_id", "type": "string"},
+            {"name": "line_item_product_code", "type": "string"},
+            {"name": "line_item_usage_type", "type": "string"},
+            {"name": "line_item_usage_amount", "type": "double"},
+            {"name": "pricing_unit", "type": "string"},
+            {"name": "line_item_unblended_cost", "type": "double"},
+            # missing resource_tags_user_environment
+        ],
+        "dataFiles": [f"s3://{cur_bucket}/finops-cur-export/finops-export/data/BILLING_PERIOD=2026-06/part-00001.snappy.parquet"],
+    }).encode("utf-8")
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = f"tf2-finops-{account_id}-lakehouse"
+    os.environ["CUR_SOURCE_BUCKET"] = cur_bucket
+    os.environ["CUR_EXPORTS_JSON"] = _exports_json(account_id=account_id)
+
+    def fake_head(bucket, key):
+        return {"ETag": '"abc123"', "ContentLength": len(bad_manifest)}
+
+    def fake_get(bucket, key):
+        return bad_manifest
+
+    handler.s3_client = finops_common.FakeS3(
+        head_object_func=fake_head,
+        get_object_func=fake_get,
+    )
+    handler.ce_client = finops_common.FakeCostExplorer()
+    handler.cw_client = finops_common.FakeCloudWatch()
+    handler.sts_client = _fake_sts_for_account(account_id)
+
+    with pytest.raises(finops_common.ContractMismatchError, match="Required columns missing from CUR manifest.*resource_tags_user_environment"):
+        handler.handle_request(
+            {
+                "run_id": "run-bad-columns",
+                "correlation_id": "corr-bad-columns",
+                "account_id": account_id,
+                "cost_period": "2026-06",
+                "execution_date": "2026-06-24",
+            },
+            None,
+        )
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["CUR_SOURCE_BUCKET"]
+    del os.environ["CUR_EXPORTS_JSON"]
+    handler.s3_client = None
+    handler.ce_client = None
+    handler.cw_client = None
+    handler.sts_client = None
+
+

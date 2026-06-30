@@ -562,6 +562,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 data_file_count = parsed_manifest["data_file_count"]
                 columns_count = parsed_manifest["columns_count"]
 
+                # Validate columns
+                finops_common.validate_manifest_columns(columns)
+
                 # Validate dataFiles
                 finops_common.validate_data_files(
                     data_files=data_files,
@@ -569,7 +572,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     allowed_prefix=allowed_raw_prefix,
                     billing_period=billing_period_out
                 )
-            except (finops_common.UnsafeActionError, finops_common.InvalidInputError):
+            except (finops_common.UnsafeActionError, finops_common.InvalidInputError, finops_common.ContractMismatchError):
                 raise
             except Exception as e:
                 logger.error("Manifest validation failed for %s: %s", manifest_uri, e)

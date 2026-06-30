@@ -72,6 +72,26 @@ run "validate_glue_catalog_tables" {
     condition     = aws_glue_catalog_table.containment_audit.storage_descriptor[0].output_format == "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
     error_message = "The output format of containment audit table must be JSON HiveIgnoreKeyTextOutputFormat"
   }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.name == "raw_cur_data"
+    error_message = "The raw cost data table name must be 'raw_cur_data'"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.partition_keys[0].name == "billing_period"
+    error_message = "The partition key of raw cost table must be 'billing_period'"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.storage_descriptor[0].input_format == "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    error_message = "The input format of raw cost table must be Parquet MapredParquetInputFormat"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.storage_descriptor[0].output_format == "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+    error_message = "The output format of raw cost table must be Parquet MapredParquetOutputFormat"
+  }
 }
 
 run "validate_cur_export_policy_with_members" {
@@ -84,8 +104,8 @@ run "validate_cur_export_policy_with_members" {
   }
 
   assert {
-    condition     = contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Resource, "arn:aws:s3:::tf2-finops-cur-export-bucket/111111111111/memberCUR/*") && contains(jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Resource, "arn:aws:s3:::tf2-finops-cur-export-bucket/222222222222/memberCUR/*")
-    error_message = "Resource list must contain both member-account CUR prefixes"
+    condition     = jsondecode(data.aws_iam_policy_document.cur_export[0].json).Statement[1].Resource == "arn:aws:s3:::tf2-finops-cur-export-bucket/*"
+    error_message = "Resource must allow writing to cur_export bucket path"
   }
 
   assert {

@@ -21,6 +21,12 @@ If your deployment involves pulling cost and utilization telemetry from separate
    - The role trust policy must authorize the CDO cost-puller IAM role ARN from the Payer/CDO account.
    - The role permissions policy must grant read access (`s3:ListBucket`, `s3:GetObject`) to the local CUR bucket/prefix, and allow querying Cost Explorer (`ce:GetCostAndUsage`) and CloudWatch metrics (`cloudwatch:GetMetricData`).
 
+### 1.2 AWS Data Export Prerequisites (Required for CUR 2.0 Ingestion)
+The orchestrator's `NormalizeCostWindow` stage depends on AWS Data Exports (CUR 2.0).
+1. **Cost Allocation Tag**: Enable the environment cost allocation tag in the Billing Console (e.g., `user:Environment`).
+2. **Export Schema Configuration**: The AWS Data Export must be configured to output Parquet files and include/alias the environment tag exactly as `resource_tags_user_environment`.
+3. **Column Ingestion Contract**: The export query definition must contain all required columns described in the Telemetry Contract (including `line_item_usage_start_date`, `line_item_usage_account_id`, `line_item_product_code`, `line_item_usage_type`, `line_item_usage_amount`, `pricing_unit`, `line_item_unblended_cost`, and `resource_tags_user_environment`). If these columns are missing, the cost puller and normalizer workers will fail fast to prevent partial/incorrect calculations.
+
 ---
 
 ## 2. Step-by-Step Deployment Workflow

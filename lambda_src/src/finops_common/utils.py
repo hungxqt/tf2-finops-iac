@@ -138,3 +138,40 @@ def validate_data_files(data_files: list, allowed_bucket: str, allowed_prefix: s
                 f"Data file {df!r} does not match the billing period {billing_period}"
             )
 
+
+def validate_manifest_columns(columns: list) -> None:
+    """Validate that CUR manifest contains all required columns for the telemetry contract.
+    Normalizes column shapes: can be a list of strings or dicts with keys 'name', 'ColumnName', or 'columnName'.
+    If any required columns are missing, raises ContractMismatchError listing all missing columns
+    and indicating that the AWS Data Export must include the environment resource tag
+    aliased as 'resource_tags_user_environment'.
+    """
+    normalized_cols = set()
+    for col in columns:
+        if isinstance(col, dict):
+            name = col.get("name") or col.get("ColumnName") or col.get("columnName")
+            if name:
+                normalized_cols.add(name.lower())
+        elif isinstance(col, str):
+            normalized_cols.add(col.lower())
+
+    required_columns = [
+        "line_item_usage_start_date",
+        "line_item_usage_account_id",
+        "line_item_product_code",
+        "line_item_usage_type",
+        "line_item_usage_amount",
+        "pricing_unit",
+        "line_item_unblended_cost",
+        "resource_tags_user_environment",
+    ]
+
+    missing_columns = [col for col in required_columns if col.lower() not in normalized_cols]
+    if missing_columns:
+        missing_str = ", ".join(missing_columns)
+        raise ContractMismatchError(
+            f"Required columns missing from CUR manifest: {missing_str}. "
+            "The AWS Data Export must include the environment resource tag aliased as 'resource_tags_user_environment'."
+        )
+
+

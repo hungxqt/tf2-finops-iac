@@ -534,3 +534,85 @@ def test_normalizer_member_account_prefix_accepted():
     handler.s3_client = None
     handler.athena_client = None
 
+
+def test_normalizer_rejects_missing_column_manifest():
+    """Normalizer rejects a manifest missing resource_tags_user_environment before starting Athena."""
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+    bad_columns = [
+        {"name": "bill_billing_period_start_date", "type": "timestamp"},
+        {"name": "line_item_usage_start_date", "type": "timestamp"},
+        {"name": "line_item_usage_account_id", "type": "string"},
+        {"name": "line_item_product_code", "type": "string"},
+        {"name": "line_item_usage_type", "type": "string"},
+        {"name": "line_item_usage_amount", "type": "double"},
+        {"name": "pricing_unit", "type": "string"},
+        {"name": "line_item_unblended_cost", "type": "double"},
+        # missing resource_tags_user_environment
+    ]
+    bad_manifest = _make_manifest(bucket=cur_bucket, columns=bad_columns)
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    _set_athena_env()
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: bad_manifest,
+    )
+    handler.athena_client = FakeAthena()
+
+    manifest_uri = f"s3://{cur_bucket}/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json"
+
+    event_data = {
+        "run_id": "run-cur2-norm-bad",
+        "correlation_id": "corr-cur2-norm-bad",
+        "account_id": account_id,
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "details": {
+                "cur_manifest_uri": manifest_uri,
+                "data_source_type": "S3_POINTER",
+            }
+        },
+    }
+
+    with pytest.raises(finops_common.ContractMismatchError, match="Required columns missing from CUR manifest.*resource_tags_user_environment"):
+        handler.handle_request(event_data, None)
+
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    _clear_athena_env()
+    handler.s3_client = None
+    handler.athena_client = None
+
+
+def test_build_dynamic_select_fields_valid_and_optional_columns():
+    """A valid manifest containing the required columns builds the expected dynamic SELECT,
+    while missing optional columns become NULL AS ...
+    """
+    # Valid but missing optional columns: resource_tags_user_owner, resource_tags_user_team
+    manifest_cols = [
+        {"name": "line_item_usage_start_date"},
+        {"name": "line_item_usage_account_id"},
+        {"name": "line_item_product_code"},
+        {"name": "line_item_usage_type"},
+        {"name": "line_item_usage_amount"},
+        {"name": "pricing_unit"},
+        {"name": "line_item_unblended_cost"},
+        {"name": "resource_tags_user_environment"},
+        {"name": "bill_billing_period_start_date"},
+        {"name": "line_item_resource_id"}
+    ]
+    select_sql = handler.build_dynamic_select_fields(manifest_cols)
+
+    # Required/present columns
+    assert "line_item_usage_start_date" in select_sql
+    assert "line_item_usage_account_id" in select_sql
+    assert "line_item_product_code" in select_sql
+    assert "line_item_resource_id" in select_sql
+
+    # Missing optional columns mapped to NULL AS ...
+    assert "NULL AS resource_tags_user_owner" in select_sql
+    assert "NULL AS resource_tags_user_team" in select_sql
+    assert "NULL AS resource_tags_user_cost_center" in select_sql
+
+

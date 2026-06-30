@@ -134,20 +134,8 @@ def build_dynamic_select_fields(manifest_columns: list) -> str:
         elif isinstance(col, str):
             normalized_manifest_cols.add(col.lower())
             
-    # Check mandatory columns
-    mandatory_columns = [
-        "line_item_usage_start_date",
-        "line_item_usage_account_id",
-        "line_item_product_code",
-        "line_item_usage_type",
-        "line_item_usage_amount",
-        "pricing_unit",
-        "line_item_unblended_cost",
-        "resource_tags_user_environment",
-    ]
-    for col in mandatory_columns:
-        if col.lower() not in normalized_manifest_cols:
-            raise finops_common.InvalidInputError(f"Required column '{col}' is missing from CUR manifest columns.")
+    # Check mandatory columns using the shared validator
+    finops_common.validate_manifest_columns(manifest_columns)
             
     # All columns we want to query
     all_target_columns = [
@@ -424,6 +412,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 manifest_columns = parsed_manifest["columns"]
                 data_files = parsed_manifest["data_files"]
                 
+                # Validate columns
+                finops_common.validate_manifest_columns(manifest_columns)
+                
                 # Resolve billing period
                 bp = event.cost_period or ""
                 billing_period_out = exec_time.strftime("%Y-%m")
@@ -440,7 +431,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     allowed_prefix=allowed_prefix,
                     billing_period=billing_period_out
                 )
-            except (finops_common.UnsafeActionError, finops_common.InvalidInputError):
+            except (finops_common.UnsafeActionError, finops_common.InvalidInputError, finops_common.ContractMismatchError):
                 raise
             except Exception as manifest_err:
                 logger.error("CUR manifest re-validation failed: %s", manifest_err)
