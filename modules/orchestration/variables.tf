@@ -56,17 +56,7 @@ variable "ai_engine_contract_version" {
   default     = "v1"
 }
 
-variable "ai_poll_max_attempts" {
-  type        = number
-  description = "Maximum attempts for AI Engine async result polling"
-  default     = 6
-}
 
-variable "ai_poll_interval_seconds" {
-  type        = number
-  description = "Wait duration in seconds between AI polling attempts"
-  default     = 10
-}
 
 variable "cloudwatch_log_kms_key_arn" {
   type        = string
@@ -78,7 +68,26 @@ variable "scheduler_kms_key_arn" {
   description = "KMS Customer Managed Key (CMK) ARN for EventBridge Scheduler encryption"
 }
 
+variable "cur_retry_interval_seconds" {
+  type        = number
+  description = "Wait duration in seconds before retrying CUR pull"
+  default     = 3600
+}
+
 variable "destroyable" {
   type        = bool
   description = "Set to true to make orchestration DynamoDB tables destroyable (Sandbox exceptions)"
 }
+
+variable "scheduler_enabled" {
+  type        = bool
+  description = "Whether to enable the EventBridge Scheduler schedule. If false, the schedule state is DISABLED."
+  default     = false
+}
+
+variable "analysis_target_account_ids" {
+  type        = list(string)
+  description = "List of linked/member AWS account IDs to analyze"
+  default     = []
+}
+

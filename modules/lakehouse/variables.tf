@@ -54,3 +54,40 @@ variable "destroyable" {
   type        = bool
   description = "Set to true to make S3 buckets, KMS keys, ECR, etc. destroyable (Sandbox exceptions)"
 }
+
+variable "create_cur_export_bucket" {
+  type        = bool
+  description = "Set to true to create the dedicated CUR 2.0 / AWS Data Exports landing bucket managed by this module. Set to false when the bucket is provisioned externally or pre-exists."
+  default     = false
+}
+
+variable "cur_export_bucket_name" {
+  type        = string
+  description = "Name for the CUR 2.0 export landing bucket. Defaults to 'tf2-finops-cur-export-bucket' when empty."
+  default     = ""
+}
+
+variable "cur_raw_prefix" {
+  type        = string
+  description = "S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 files (e.g. 'my-export'). Used to scope the bcm-data-exports bucket policy statement and the IAM GetObject grant for cost_puller."
+  default     = ""
+}
+
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
+variable "telemetry_member_account_ids" {
+  type        = list(string)
+  description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
+  default     = []
+
+  validation {
+    condition     = alltrue([for acc in var.telemetry_member_account_ids : can(regex("^[0-9]{12}$", acc))])
+    error_message = "All telemetry member account IDs must be exactly 12-digit numbers."
+  }
+}
+
+

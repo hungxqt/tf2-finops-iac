@@ -1,1157 +1,165 @@
-# TF2 FinOps IaC Implementation Plan
+# TF2 FinOps IaC Implementation Plan & Backlog
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Goal:** Build the Terraform repository skeleton for TF2 FinOps Watch to provision the AWS platform foundation for lakehouse ingestion, scheduled orchestration, CDO-hosted AI Engine integration via private internal ALB and Lambda container runtime, alerting, safe containment, audit evidence, and CI/CD-controlled deployments.
 
-**Goal:** Build the Terraform repository skeleton for TF2 FinOps Watch so the team can provision the AWS platform foundation for lakehouse ingestion, scheduled orchestration, CDO-hosted AI Engine integration on ECS/Fargate, alerting, safe containment, audit evidence, and CI/CD-controlled deployments.
+**Architecture:** Terraform is the single source of truth for AWS infrastructure. The platform uses S3/Glue/Athena as the lakehouse data plane, EventBridge Scheduler and Step Functions for 24h orchestration, Lambda for short CDO adapters and policy workers (running Python 3.13), and AWS Lambda container platform infrastructure for the AIOps-provided AI Engine. This repo owns ECR repositories (digest-pinned images, scan-on-push), the AI Engine Request Lambda and Worker Lambda (`package_type = "Image"`), Lambda aliases/versions, private internal HTTPS ALB, Route 53 private hosted zone, private networking, execution roles, secrets plumbing, and infrastructure integration points.
 
-**Architecture:** Terraform is the single source of truth for AWS infrastructure. The platform uses S3/Glue/Athena as the lakehouse data plane, EventBridge Scheduler and Step Functions for 24h orchestration, Lambda for short CDO adapters and policy workers, and ECS/Fargate for the CDO-hosted AIOps AI Engine runtime. This repo owns the ECS cluster, Fargate and Fargate Spot services, ECR repository, Route 53 private DNS, private networking, task execution/task roles, secrets plumbing, and infrastructure integration points.
-
-**Tech Stack:** Terraform `>= 1.15.6`, AWS provider `>= 5.47, < 6.0`, Python 3.13 Lambda workers, Amazon ECS, AWS Fargate and Fargate Spot, ECR, Route 53 private DNS, Secrets Manager, CloudWatch container metrics/logs, GitHub Actions OIDC, TFLint, Trivy, Checkov, S3 backend with `use_lockfile = true`.
+**Tech Stack:** Terraform `>= 1.10.0` (floor for `use_lockfile = true`, active version `1.15.6`), AWS provider `>= 5.47, < 6.0`, Python 3.13 managed Lambda workers, AWS Lambda container platform (Image package type), ECR, Route 53 private DNS, Secrets Manager, CloudWatch metrics/logs, X-Ray tracing, GitHub Actions OIDC, TFLint, Trivy, Checkov, S3 backend with `use_lockfile = true`.
 
 ---
 
-## 1. Implementation Contract
+## 1. Contract Coverage Matrix
 
-### Version and Execution Assumptions
+Future implementation work must verify compliance against this contract coverage matrix:
 
-- Runtime: Terraform, not OpenTofu.
-- Local checked tools at planning time:
-  - Terraform `v1.15.6`
-  - TFLint `0.63.1`
-  - Trivy `0.71.1`
-  - Checkov `3.2.524`
-- Provider floor:
-  - `hashicorp/aws >= 5.47, < 6.0`
-  - `hashicorp/archive >= 2.4, < 3.0`
-- Backend:
-  - `bootstrap/` starts local for first creation of the state backend.
-  - All long-lived environment roots use S3 backend with `use_lockfile = true`.
-  - Do not create a DynamoDB lock table.
-- Region default: `ap-southeast-1`.
-- Environment criticality:
-  - `sandbox`: fast iteration, containment apply allowed only for non-prod examples.
-  - `staging`: integration and dry-run validation.
-  - `prod`: manual approval only, tag/suggest/dry-run containment only.
+### 1.1 AI API Contract
+- **Authentication**: SigV4 header security with role-based validation. No static API keys in production.
+- **Payload Headers**: Secure context headers passed: `Content-Type`, `Accept`, `X-Tenant-Id` (tenant isolation), `X-Idempotency-Key` (idempotency check), `X-Correlation-Id` (correlation ID), `X-Payload-SHA256` (payload hash), `X-Request-Timestamp` (request timestamp), and `X-Dry-Run-Mode` (dry-run mode).
+- **Ingestion Mode**: CDO/AI boundary supports both `RAW_JSON` and `S3_POINTER` modes.
+- **Logical Operations**: `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous operations. `/v1/status/{id}` is for remediation audit/status only (not for detection polling). `/v1/audit/{audit_id}/rollback` handles result notifications. `/health` is for backend health check.
+- **Metadata Context**: Schema versioning, optional `callback_url`, `data_confidence` score, and `rollback_payload.boto3_equivalent` parameters are preserved.
+- **Error Handling**: Fail-closed logic for AI timeout, rate limits (`429`), schema mismatch, cross-tenant denial (`403`), and unavailable service.
 
-### Source Priority
+### 1.2 Telemetry Ingestion Contract
+- **CUR Processing**: Ingests billing metadata using S3 pointers by default (`S3_POINTER`).
+- **Cost Explorer Fallback**: Daily query via `RAW_JSON` runs only when CUR delivery delay exceeds 36 hours.
+- **Degradation Policy**: If CloudWatch metrics are missing or CUR delay exceeds fallback tolerance, the workflow degrades to dry-run/alert-only containment and writes audit evidence.
 
-When implementation details conflict, use this order:
+### 1.3 Deployment Contract
+- **Identity & Credentials**: Keyless GitHub Actions deployment via AWS OIDC provider.
+- **Workflow Safety**: No auto-apply on drift detection (only alarms/GitHub issues). Save and upload `tfplan` as a workflow artifact, ensuring that `terraform apply` consumes the reviewed plan artifact.
+- **Lambda Traffic Splitting**: Lambda weighted routing aliases (`live`, `canary`) for zero-downtime rollouts.
+- **Step Functions Release**: Versioned State Machine definitions corresponding to deployments.
+- **Rollback Triggers**: Deployment smoke-test failure triggers automatic rollback to the previous version.
 
-1. Explicit user instructions in the current conversation.
-2. `AGENTS.md`.
-3. Current scenario documents under `../tf2-finops-docs/`, especially `AGENTS.md`, `TF2_FINOPS_LEARNER.md`, and `docs/tf2-finops/01-04*.md`.
-4. This `IMPLEMENTATION.md`.
-5. `README.md`.
+### 1.4 Storage & State Policy
+- **Idempotency Hot Path**: Composite key lookup in DynamoDB table `finops-idempotency-{env}` with a 24-hour Time-to-Live (`ttl_expiry`).
+- **Audit Logging**: compliance-mode Object Lock enabled on S3 audit buckets for staging/prod (minimum 90 days retention).
+- **Sandbox Teardown Caveat**: To allow complete resource destruction in sandbox environment, sandbox audit buckets must bypass S3 Object Lock compliance retention.
+- **Rollback Cache**: DynamoDB table `finops-rollback-cache` stores the `rollback_payload.boto3_equivalent` configuration for 90 days (`ttl_expiry`).
 
-If `README.md` or in-repo docs still describe the older Lambda-only scenario, record that as stale guidance and follow `AGENTS.md` plus `../tf2-finops-docs`.
-
-### Risk Categories Addressed
-
-- **State corruption:** S3 backend, versioning, KMS encryption, native lock file, no committed state.
-- **Secret exposure:** no committed `.tfvars`, no provider credentials in HCL, Secrets Manager references only, and no webhook/API secret values in examples.
-- **Blast radius:** separate environment roots, prod manual approval, `prevent_destroy` on critical resources.
-- **CI drift:** pinned runtime/provider versions, reviewed plan artifacts, apply consumes the saved artifact.
-- **Compliance gaps:** Trivy, Checkov, TFLint, encrypted storage, audit retention, Object Lock, OIDC, ECR scan-on-push, and ECS task isolation/private access controls.
-- **Provider upgrade risk:** version constraints and lockfile committed after first `terraform init`.
-- **Testing blind spots:** module validation, environment validate, Lambda unit tests, ECS static scans, AI contract checks, and security scans.
-
-### Non-Negotiable Guardrails
-
-- AWS only.
-- Synthetic data unless real billing access is explicitly granted.
-- Default cadence is 24h unless the user changes the approved design.
-- CDO owns ingestion, scheduling, idempotency, dashboard views, alert routing, containment guardrails, audit logs, platform SLOs, and the ECS hosting platform.
-- AIOps owns anomaly detection logic, model selection, model training/retraining design, model versions, confidence scoring, classification, explanation text, AI Engine code/model internals, and backtest metrics.
-- Finance and Engineering alert routes stay separate.
-- Audit retention is at least 90 days.
-- Containment defaults to dry-run.
-- Production containment never applies destructive actions.
-- Automated containment must never terminate prod, delete data, or modify IAM.
+### 1.5 Dashboard Hosting
+- **Architecture**: Static assets hosted in S3 and delivered via CloudFront CDN.
+- **Authentication**: Cognito User Pools and Identity Pools integrated with CloudFront OAC.
+- **Database Querying**: Athena named queries provide finance-friendly SQL views. Materialized views in DynamoDB dashboard read-caches support SQL-free dashboard performance. QuickSight is a future-only BI integration.
 
 ---
 
-## 2. Target Repository Tree
-
-Create this structure under `tf2-finops-iac/`:
-
-```text
-.
-├── .github/
-│   └── workflows/
-│       ├── terraform-ci.yml
-│       ├── terraform-apply.yml
-│       └── drift-detection.yml
-├── bootstrap/
-│   ├── README.md
-│   ├── backend.tf
-│   ├── locals.tf
-│   ├── main.tf
-│   ├── outputs.tf
-│   ├── providers.tf
-│   ├── variables.tf
-│   └── versions.tf
-├── environments/
-│   ├── sandbox/
-│   │   ├── README.md
-│   │   ├── backend.tf
-│   │   ├── locals.tf
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   ├── providers.tf
-│   │   ├── terraform.tfvars.example
-│   │   ├── variables.tf
-│   │   └── versions.tf
-│   ├── staging/
-│   │   ├── README.md
-│   │   ├── backend.tf
-│   │   ├── locals.tf
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   ├── providers.tf
-│   │   ├── terraform.tfvars.example
-│   │   ├── variables.tf
-│   │   └── versions.tf
-│   └── prod/
-│       ├── README.md
-│       ├── backend.tf
-│       ├── locals.tf
-│       ├── main.tf
-│       ├── outputs.tf
-│       ├── providers.tf
-│       ├── terraform.tfvars.example
-│       ├── variables.tf
-│       └── versions.tf
-├── lambda_src/
-│   ├── requirements.txt
-│   ├── requirements-dev.txt
-│   ├── src/
-│   │   ├── finops_common/
-│   │   │   ├── __init__.py
-│   │   │   ├── aws_clients.py
-│   │   │   ├── event.py
-│   │   │   └── utils.py
-│   │   └── workers/
-│   │       ├── __init__.py
-│   │       ├── ai_client/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
-│   │       ├── audit_writer/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
-│   │       ├── containment_worker/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
-│   │       ├── cost_puller/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
-│   │       ├── normalizer/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
-│   │       └── router/
-│   │           ├── __init__.py
-│   │           └── handler.py
-│   └── tests/
-│       ├── conftest.py
-│       ├── test_ai_client.py
-│       ├── test_audit_writer.py
-│       ├── test_containment_worker.py
-│       ├── test_cost_puller.py
-│       ├── test_finops_common.py
-│       ├── test_normalizer.py
-│       ├── test_router.py
-│       └── test_state.py
-├── modules/
-│   ├── alerting/
-│   ├── compute-lambda/
-│   ├── dashboard/
-│   ├── ai-runtime-lambda/
-│   ├── iam/
-│   ├── lakehouse/
-│   ├── networking/
-│   ├── observability/
-│   └── orchestration/
-├── scripts/
-│   ├── validate.ps1
-│   └── package-lambdas.ps1
-├── .gitignore
-├── .pre-commit-config.yaml
-├── .terraform-version
-├── .tflint.hcl
-├── Makefile
-├── README.md
-└── IMPLEMENTATION.md
-```
-
-Each Terraform module must contain:
-
-```text
-README.md
-main.tf
-variables.tf
-outputs.tf
-versions.tf
-```
-
-Use `locals.tf`, `data.tf`, or `policies.tf` inside a module only when `main.tf` becomes difficult to scan.
-
----
-
-## 3. Module Contracts
+## 2. Module Target Behaviors & Known Drift
 
 ### `modules/networking`
-
-Creates the private network foundation for Lambda workers, ECS Fargate tasks, VPC endpoints, and internal AI Engine traffic.
-
-Resources:
-
-- VPC with DNS hostnames and DNS support enabled.
-- Two public subnets for NAT gateways.
-- Private subnets shared by Lambda workers, ECS Fargate tasks, internal load balancer resources, and VPC endpoints.
-- Internet gateway for public subnets.
-- NAT gateway count controlled by environment:
-  - sandbox: one NAT gateway.
-  - staging/prod: two NAT gateways unless cost override is explicitly set.
-- Route tables and associations.
-- Lambda security group with no ingress.
-- ECS task security group.
-- Internal AI Engine load balancer security group.
-- VPC endpoint security group with HTTPS ingress from Lambda and ECS task security groups.
-- Gateway endpoints for S3 and DynamoDB.
-- Interface endpoints for KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, ECR Docker registry, SQS, and Bedrock runtime.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `aws_region`
-- `vpc_cidr_block`
-- `public_subnet_cidr_blocks`
-- `private_subnet_cidr_blocks`
-- `availability_zones`
-- `single_nat_gateway`
-- `tags`
-
-Outputs:
-
-- `vpc_id`
-- `private_subnet_ids`
-- `public_subnet_ids`
-- `lambda_security_group_id`
-- `ecs_task_security_group_id`
-- `ai_engine_internal_lb_security_group_id`
-- `vpc_endpoint_security_group_id`
-- `vpc_cidr_block`
-
-Security requirements:
-
-- Do not use the default VPC.
-- Use separate `aws_vpc_security_group_ingress_rule` and `aws_vpc_security_group_egress_rule` resources.
-- Restrict Lambda egress to HTTPS where service behavior allows it.
-- Keep AI Engine traffic private. Do not expose an internet-facing AI endpoint.
-- Allow Lambda to reach the internal AI Engine endpoint on HTTPS only.
-- Allow ECS Fargate tasks to reach VPC endpoints for ECR, Secrets Manager, CloudWatch Logs, S3, and DynamoDB.
+- **Target Behavior**: Creates private VPC, subnets, NAT, VPC Route Tables, and Gateway/Interface VPC Endpoints (S3, DynamoDB, KMS, Secrets Manager, CloudWatch Logs, X-Ray, STS, ECR, SQS) to keep all AI Engine traffic entirely private.
+- **Known Drift**: None. Already matches the active VPC design.
 
 ### `modules/lakehouse`
-
-Creates durable cost, audit, feature, and query storage.
-
-Resources:
-
-- KMS keys and aliases:
-  - data key
-  - audit key
-  - DynamoDB key
-  - ECS volume/container storage key, if needed
-- S3 lakehouse bucket for raw and curated prefixes.
-- S3 audit bucket with Object Lock enabled in compliance mode.
-- S3 public access blocks for every bucket.
-- S3 bucket versioning for every bucket.
-- S3 SSE-KMS encryption for every bucket.
-- TLS-only bucket policies.
-- Lifecycle rules:
-  - raw and curated objects transition after hot review period.
-  - audit objects retain at least 90 days.
-- Glue catalog database.
-- Athena workgroup with enforced output location and query bytes cutoff.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `aws_region`
-- `audit_retention_days`
-- `athena_query_bytes_cutoff`
-- `tags`
-
-Outputs:
-
-- `lakehouse_bucket_name`
-- `lakehouse_bucket_arn`
-- `audit_bucket_name`
-- `audit_bucket_arn`
-- `glue_database_name`
-- `athena_workgroup_name`
-- `data_kms_key_arn`
-- `audit_kms_key_arn`
-- `ddb_kms_key_arn`
-- `node_volume_kms_key_arn`
-
-Security requirements:
-
-- No unencrypted S3 bucket.
-- No public bucket policy.
-- Audit bucket Object Lock must be enabled at creation time.
-- Critical buckets use `lifecycle { prevent_destroy = true }`.
+- **Target Behavior**: Provision raw/curated S3 bucket, audit S3 bucket with versioning and KMS SSE, Glue Catalog databases, and Athena workgroup.
+- **Known Drift**: Sandboxes must pass `destroyable = true` to skip S3 Object Lock compliance-mode retention and set short KMS deletion windows; staging and prod must default to `destroyable = false` for data protection.
 
 ### `modules/iam`
-
-Creates least-privilege execution roles, platform roles, IRSA foundations, and unsafe-action guardrails.
-
-Resources:
-
-- Step Functions execution role.
-- Lambda execution roles:
-  - cost puller
-  - normalizer
-  - AI client
-  - router
-  - containment worker
-  - audit writer
-- ECS Task Execution role.
-- ECS Task role.
-- SigV4-compatible CDO caller role for AI Engine service invocation.
-- Permission boundary or explicit deny policy for unsafe automation.
-- Cross-account read role policy document for member-account deployment.
-- Cross-account containment role policy document for member-account deployment.
-- Optional IAM role outputs for GitHub OIDC roles if not handled entirely in `bootstrap/`.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `lakehouse_bucket_arn`
-- `audit_bucket_arn`
-- `dynamodb_table_arns`
-- `kms_key_arns`
-- `ai_engine_secret_arn`
-- `containment_apply_enabled`
-- `tags`
-
-Outputs:
-
-- `step_functions_role_arn`
-- `scheduler_role_arn`
-- `lambda_role_arns`
-- `ecs_task_role_arn`
-- `ecs_execution_role_arn`
-- `cdo_caller_role_arn`
-- `permissions_boundary_arn`
-- `member_read_policy_json`
-- `member_containment_policy_json`
-
-Security requirements:
-
-- No `Action = "*"` policies.
-- No wildcard trust principals.
-- Do not let AI Engine pods rely on broad node-instance permissions.
-- Explicit deny must include IAM modification, organization modification, S3 deletes, DynamoDB deletes, RDS deletes, and EC2 termination.
-- Prod roles must not allow `ec2:StopInstances` or other destructive containment apply actions.
+- **Target Behavior**: Scoped execution roles for Step Functions, EventBridge Scheduler, and Lambda adapters. Includes a strict permission boundary policy blocking IAM modification, organization modifications, S3 deletes, and EC2/RDS termination on production resources.
+- **Known Drift**: Ensure the CDO caller role can assume a SigV4 credential context for the private HTTPS ALB calls.
 
 ### `modules/ai-runtime-lambda`
-
-Creates the CDO-owned ECS hosting platform for the AIOps-provided AI Engine.
-
-Resources:
-
-- ECS Cluster with Container Insights enabled.
-- Capacity provider strategies mapping to FARGATE and FARGATE_SPOT capacity providers.
-- Internal ALB, target groups on port 8080 (health check /health), HTTPS listener on port 443.
-- ACM Self-Signed TLS certificate for secure private transit.
-- Route 53 private hosted zone and record alias (`ai-engine.<project>-<env>.local`).
-- ECR repository with KMS encryption, immutable image tags, and scan-on-push enabled.
-- ECS Task Execution role and ECS Task role with SQS and logging permissions.
-- CloudWatch log group with 14-day retention.
-- Target tracking autoscaling policies for ECS service based on CPU and memory utilization.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `aws_region`
-- `vpc_id`
-- `private_subnet_ids`
-- `internal_alb_security_group_id`
-- `ecs_task_security_group_id`
-- `ai_engine_image_digest`
-- `ai_engine_cpu`
-- `ai_engine_memory`
-- `ai_engine_min_tasks`
-- `ai_engine_max_tasks`
-- `queue_urls`
-- `secret_arns`
-- `tags`
-
-Outputs:
-
-- `ecs_cluster_name`
-- `ecs_service_name`
-- `ecr_repository_url`
-- `internal_alb_dns_name`
-- `ai_engine_internal_endpoint_url`
-- `task_role_arn`
-- `task_execution_role_arn`
-- `log_group_name`
-
-Rules:
-
-- Do not deploy `latest` or mutable container tags; reference images by immutable digests.
-- Enforce private HTTPS endpoints inside the VPC (no public ingress).
+- **Target Behavior**: Deploys private internal Application Load Balancer (ALB) exposing target groups on port 8080 (health check `/health`) and HTTPS listener on port 443. Configures Route 53 private hosted zone and record alias for `ai-engine` service DNS lookup. Deploys AI Engine Request Lambda and Worker Lambda (`package_type = "Image"`) utilizing ECR digest-pinned images. Enforces reserved concurrency and KMS-encrypted CloudWatch log groups. No public Function URLs are allowed.
+- **Known Drift**: None. All references to public Function URLs, ECS clusters, Fargate capacity providers, or Private API Gateways are retired or marked as superseded reference wording.
 
 ### `modules/compute-lambda`
-
-Packages and deploys Lambda worker stubs for CDO adapters and policy workers.
-
-Resources:
-
-- Archive artifacts for each worker from `lambda_src/`.
-- Lambda functions:
-  - `cost-puller`
-  - `normalizer`
-  - `ai-client`
-  - `router`
-  - `containment-worker`
-  - `audit-writer`
-- Lambda aliases:
-  - `stable`
-  - `canary`
-- Lambda log groups with retention.
-- X-Ray active tracing.
-- Reserved concurrency limits.
-- Optional CodeDeploy application/deployment group for canary in non-sandbox environments.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `private_subnet_ids`
-- `lambda_security_group_id`
-- `lambda_role_arns`
-- `lakehouse_bucket_name`
-- `audit_bucket_name`
-- `dynamodb_table_names`
-- `ai_engine_endpoint_url`
-- `ai_engine_contract_version`
-- `ai_engine_secret_name`
-- `ai_engine_timeout_seconds`
-- `ai_engine_retry_attempts`
-- `containment_apply_enabled`
-- `log_retention_days`
-- `tags`
-
-Outputs:
-
-- `lambda_function_names`
-- `lambda_function_arns`
-- `lambda_alias_arns`
-- `audit_writer_function_name`
-- `ai_client_function_name`
-
-Implementation rules:
-
-- Lambda code is intentionally minimal but deployable. It validates required event fields, logs structured JSON, returns a typed status object, and never applies prod containment.
-- `ai-client` calls the internal ECS/ALB AI Engine endpoint through the versioned contract.
-- If the endpoint URL, secret, contract version, or response schema is invalid, `ai-client` returns an unavailable/error status and never triggers containment directly.
+- **Target Behavior**: Packages and deploys Lambda worker zip files (Python 3.13) for CDO adapters (`state`, `cost_puller`, `normalizer`, `router`, `containment_worker`, `audit_writer`, and `vpc_alb_caller`). Attaches functions to the VPC and security groups. Configures log retention, X-Ray tracing, and stable/canary aliases.
+- **Known Drift**: Replace `ai_client` references with `vpc_alb_caller`. (Fully completed in code stubs and tests).
 
 ### `modules/orchestration`
-
-Creates scheduled workflow state and control flow.
-
-Resources:
-
-- DynamoDB tables:
-  - run state
-  - anomaly records
-  - routing state
-  - containment audit index
-  - dashboard materialized views
-- Step Functions Standard state machine.
-- EventBridge Scheduler schedule with 24h default cadence.
-- IAM linkages from scheduler to Step Functions.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `scheduler_expression`
-- `step_functions_role_arn`
-- `scheduler_role_arn`
-- `lambda_function_arns`
-- `ddb_kms_key_arn`
-- `audit_bucket_name`
-- `ai_engine_internal_endpoint`
-- `ai_engine_contract_version`
-- `tags`
-
-Outputs:
-
-- `state_machine_arn`
-- `scheduler_arn`
-- `dynamodb_table_names`
-- `dynamodb_table_arns`
-
-Workflow shape:
-
-```text
-EventBridge Scheduler
--> Step Functions
--> idempotency/run-state check
--> cost-puller
--> normalizer
--> ai-client
--> router
--> containment-worker
--> audit-writer
-```
-
-Failure behavior:
-
-- Duplicate idempotency key exits without Cost Explorer calls, AI calls, alert, or containment.
-- AI unavailable, timeout, schema mismatch, or unsafe recommendation alerts Engineering and fails closed.
-- Audit write failure fails closed before containment apply.
-- Containment denial writes a denied audit record and alerts Engineering/Security.
+- **Target Behavior**: Creates DynamoDB run-state, idempotency (24h TTL), rollback cache (90d TTL), and result tables. Deploys Step Functions Standard state machine invoking Python workers and polling results directly from DynamoDB.
+- **Known Drift**: Remove any SQS-based detection queue or result-polling loop in the default execution path. The `VpcAlbCallerLambda` performs synchronous calls to `/v1/detect`, `/v1/decide`, and `/v1/verify` directly. SQS/DLQ are restricted to alert retry and `finops-watch-rollback` notifications.
 
 ### `modules/alerting`
-
-Creates separate business and engineering alert routes.
-
-Resources:
-
-- Finance SNS topic.
-- Engineering SNS topic.
-- Optional email subscriptions supplied by variables.
-- KMS encryption for SNS topics.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `finance_email_subscriptions`
-- `engineering_email_subscriptions`
-- `sns_kms_key_arn`
-- `tags`
-
-Outputs:
-
-- `finance_topic_arn`
-- `engineering_topic_arn`
-
-Security requirements:
-
-- Finance and Engineering routes must not share a topic.
-- SNS topics must be encrypted.
+- **Target Behavior**: Separate, encrypted SNS topics for Finance and Engineering.
+- **Known Drift**: None.
 
 ### `modules/observability`
-
-Creates platform visibility for Step Functions, Lambda, lakehouse freshness, ECS/Fargate, and AI Engine hosting.
-
-Resources:
-
-- CloudWatch dashboard.
-- Metric alarms:
-  - workflow failed
-  - AI client timeout
-  - AI Engine endpoint unavailable
-  - audit write failed
-  - stale workflow over 26h
-  - ECS Service CPU utilization high
-  - ECS Service Memory utilization high
-  - drift detected custom metric emitted by CI
-- Log metric filters for structured Lambda status logs.
-- Container Insights log groups or integration hooks.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `state_machine_arn`
-- `lambda_function_names`
-- `ecs_cluster_name`
-- `ecs_service_name`
-- `ai_engine_internal_endpoint`
-- `engineering_topic_arn`
-- `finance_topic_arn`
-- `log_retention_days`
-- `tags`
-
-Outputs:
-
-- `dashboard_name`
-- `alarm_names`
+- **Target Behavior**: CloudWatch operational dashboard and alarms for workflow failures, ALB request errors, AI Engine unavailable, stale telemetry (>26h), and CI drift detection custom metric.
+- **Known Drift**: Ensure alarms are aligned with synchronous ALB error indicators rather than asynchronous queue metrics.
 
 ### `modules/dashboard`
-
-Creates dashboard infrastructure hooks without owning dashboard application code.
-
-Resources:
-
-- Athena named queries for finance-friendly cost views.
-- Optional QuickSight resource definitions behind `enable_quicksight = false`.
-
-Inputs:
-
-- `project_name`
-- `environment`
-- `glue_database_name`
-- `athena_workgroup_name`
-- `enable_quicksight`
-- `tags`
-
-Outputs:
-
-- `athena_named_query_ids`
-- `quicksight_enabled`
-
-Rule:
-
-- Do not create a dashboard frontend here. Runtime dashboard app config belongs in `tf2-finops-gitops`.
+- **Target Behavior**: S3 asset hosting bucket, CloudFront distribution with Origin Access Control (OAC), Cognito user/identity pools, and Athena named queries for finance usability.
+- **Known Drift**: None.
 
 ---
 
-## 4. Environment Composition Contract
+## 3. Backlog Implementation Backlog
 
-Each environment root calls all modules and provides only environment-specific values.
+### [x] Task 1: Baseline Repository Hygiene
+- **Status**: Completed & Maintained.
+- **Details**: Local validation scripts (`validate.ps1`), packaging scripts, `.gitignore`, `.pre-commit-config.yaml`, and TFLint configurations are in place.
 
-### Sandbox
+### [x] Task 2: Bootstrap Remote State and GitHub OIDC
+- **Status**: Completed & Maintained.
+- **Details**: Local bootstrap executes cleanly. OIDC deploy roles are provisioned. Long-lived state runs on S3 with `use_lockfile = true` and no DynamoDB lock table.
 
-- Backend key: `sandbox/terraform.tfstate`
-- `single_nat_gateway = true`
-- `containment_apply_enabled = true` only for non-prod/synthetic examples.
-- `scheduler_expression = "rate(24 hours)"`
-- Log retention: 14 days
-- Minimal ECS Fargate sizing:
-  - Fargate task count: min 1, max 2.
-  - Fargate capacity provider strategy mapping FARGATE and FARGATE_SPOT.
-- Email subscriptions can be empty by default.
-- Used for base build, W12 testing, and synthetic E2E runs.
+### [x] Task 3: Lambda Worker Python Stubs and Tests
+- **Status**: Completed & Maintained.
+- **Details**: Python 3.13 adapter functions (`state`, `cost_puller`, `normalizer`, `router`, `containment_worker`, `audit_writer`, and `vpc_alb_caller`) are present. Pytest unit suite validates the code. Stale `ai_client` references are deleted.
 
-### Staging
+### [ ] Task 4: Networking Module Implementation
+- **Status**: Scheduled.
+- **Target**: Set up VPC, subnets, route tables, security groups, and VPC endpoint interfaces. Define route configurations to private internal ALB.
 
-- Backend key: `staging/terraform.tfstate`
-- `single_nat_gateway = false`
-- `containment_apply_enabled = false`
-- `scheduler_expression = "rate(24 hours)"`
-- Log retention: 30 days
-- ECS service task scaling using Fargate and Fargate Spot capacity providers.
-- Used for AI contract validation, AIOps container artifact validation, E2E testing, and chaos/failure tests.
+### [ ] Task 5: Lakehouse Storage Implementation
+- **Status**: Scheduled.
+- **Target**: Set up raw, curated, and audit buckets. Configure S3 versioning, lifecycle rules, KMS SSE-KMS, and S3 Object Lock. Apply `destroyable` guardrails.
 
-### Prod
+### [ ] Task 6: IAM Permissions & Boundaries
+- **Status**: Scheduled.
+- **Target**: Set up IAM roles for Lambda adapters, Step Functions execution, and scheduler. Define the explicit deny permissions boundary to guard production assets.
 
-- Backend key: `prod/terraform.tfstate`
-- `single_nat_gateway = false`
-- `containment_apply_enabled = false`
-- `scheduler_expression = "rate(24 hours)"`
-- Log retention: 30 days
-- ECS tasks, internal ALB, and Route 53 DNS are private only.
-- Critical resources use `prevent_destroy`.
-- Apply only through GitHub environment approval.
-- Production containment is tag, suggest, or dry-run only.
+### [ ] Task 7: ECR & Private Lambda Container AI Runtime (`modules/ai-runtime-lambda`)
+- **Status**: Scheduled.
+- **Target**: Provision ECR repository with scan-on-push. Deploy private internal ALB with self-signed certificate. Route 53 private DNS records. Deploys AI Engine Request Lambda and Worker Lambda as container functions.
 
-Each root must expose stable outputs for:
+### [ ] Task 8: Compute Lambda Configuration
+- **Status**: Scheduled.
+- **Target**: Package and upload zip-based Python Lambdas. Configure VPC bindings, memory limits, log retention, and stable/canary weighted aliases.
 
-- S3 bucket names and ARNs.
-- DynamoDB table names and ARNs.
-- ECS cluster name and ECS service name.
-- ECR repository URL.
-- AI Engine internal endpoint URL.
-- Step Functions ARN.
-- EventBridge Scheduler ARN.
-- Lambda names and ARNs.
-- SNS topic ARNs.
-- CloudWatch dashboard name.
+### [ ] Task 9: Step Functions Orchestration & Control Flow
+- **Status**: Scheduled.
+- **Target**: Deploy DynamoDB tables (`finops-idempotency-{env}`, `finops-rollback-cache`). Write Step Functions ASL containing synchronous `VpcAlbCallerLambda` invocations, idempotency checks, and fail-closed error transitions.
 
-Module call order:
+### [ ] Task 10: Alerting, Observability, and Dashboard Modules
+- **Status**: Scheduled.
+- **Target**: Encrypted SNS topics. CloudWatch operational dashboard and alarms. S3 asset hosting, CloudFront OAC distribution, and Cognito pools for dashboard users.
 
-1. networking
-2. lakehouse
-3. alerting
-4. base IAM
-5. ai_runtime_lambda
-6. compute-lambda
-7. orchestration
-8. observability
-9. dashboard.
+### [ ] Task 11: Environment Roots Composition
+- **Status**: Scheduled.
+- **Target**: Set up environment files under `environments/sandbox/`, `staging/`, and `prod/` calling modules with appropriate variables. Ensure staging/prod are protected from teardown.
+
+### [ ] Task 12: CI/CD GitHub Actions & Drift Detection
+- **Status**: Scheduled.
+- **Target**: GitHub Actions workflow configurations for CI validation, artifact-based plans/applies, and daily scheduled drift detection check with alerting.
+
+### [ ] Task 13: E2E Verification & Handoff
+- **Status**: Scheduled.
+- **Target**: Execute `validate.ps1`, verify dry-run containment safety, ensure no hardcoded secrets, and generate output parameters for GitOps handoff.
 
 ---
 
-## 5. Task Breakdown
-
-### Task 1: Baseline Repository Hygiene
-
-**Files:**
-
-- Create: `.gitignore`
-- Create: `.terraform-version`
-- Create: `.tflint.hcl`
-- Create: `.pre-commit-config.yaml`
-- Create: `Makefile`
-- Create: `scripts/validate.ps1`
-- Create: `scripts/package-lambdas.ps1`
-- Modify: `README.md` only if the user explicitly expands scope beyond `IMPLEMENTATION.md`
-
-Steps:
-
-- [ ] Add `.gitignore` entries for `.terraform/`, `*.tfstate`, `*.tfstate.*`, `*.tfvars`, `crash.log`, `tfplan`, `tfplan.json`, `.env`, `.build/`, Lambda package zips, and local editor/system files.
-- [ ] Add `.terraform-version` with `1.15.6`.
-- [ ] Configure TFLint with AWS plugin enabled and Terraform ruleset enabled.
-- [ ] Add pre-commit hooks for Terraform fmt, validate, tflint, and basic trailing whitespace checks.
-- [ ] Add `scripts/validate.ps1` to run `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`, `tflint`, `trivy config .`, `checkov -d . --framework terraform`, and `cd lambda_src && python -m pytest`.
-- [ ] Add `scripts/package-lambdas.ps1` to create local Lambda zip artifacts under `.build/lambda/`.
-- [ ] If README alignment is in scope, update `README.md` with usage flow: bootstrap first, then environment init/plan/apply through CI.
-
-Validation:
-
-```powershell
-.\scripts\validate.ps1
-```
-
-Expected before Terraform files exist: script should fail with a clear message naming missing roots. After later tasks, it should pass.
-
-### Task 2: Bootstrap Remote State and GitHub OIDC
-
-**Files:**
-
-- Create: `bootstrap/README.md`
-- Create: `bootstrap/backend.tf`
-- Create: `bootstrap/versions.tf`
-- Create: `bootstrap/providers.tf`
-- Create: `bootstrap/variables.tf`
-- Create: `bootstrap/locals.tf`
-- Create: `bootstrap/main.tf`
-- Create: `bootstrap/outputs.tf`
-
-Steps:
-
-- [ ] Configure provider version constraints and default AWS tags.
-- [ ] Create KMS key and alias for Terraform state encryption.
-- [ ] Create S3 state bucket named from `project_name`, `account_id`, and `aws_region`.
-- [ ] Enable versioning, SSE-KMS, bucket key, object ownership, and public access block.
-- [ ] Add bucket policy denying insecure transport.
-- [ ] Add `lifecycle { prevent_destroy = true }` to state bucket and KMS key.
-- [ ] Create GitHub OIDC provider for `token.actions.githubusercontent.com`.
-- [ ] Create deploy roles for sandbox, staging, and prod with branch/environment-restricted trust.
-- [ ] Output state bucket name, state KMS key ARN, and deploy role ARNs.
-
-Validation:
-
-```powershell
-terraform -chdir=bootstrap fmt -check
-terraform -chdir=bootstrap init
-terraform -chdir=bootstrap validate
-terraform -chdir=bootstrap plan -out=bootstrap.tfplan
-```
-
-Apply rule:
-
-- Only run `terraform -chdir=bootstrap apply bootstrap.tfplan` after reviewing the plan.
-- After bootstrap apply, migrate bootstrap itself to the S3 backend in a separate commit.
-
-### Task 3: Lambda Worker Stubs and Tests
-
-**Files:**
-
-- Create all files under `lambda_src/`.
-
-Steps:
-
-- [ ] Create shared validation helper requiring `run_id`, `correlation_id`, `cost_period`, `environment`, and `source_data_version`.
-- [ ] Create shared response helper returning `status`, `run_id`, `correlation_id`, `worker`, and `details`.
-- [ ] Implement `cost_puller/main.go` to return a synthetic `raw_data_uri`.
-- [ ] Implement `normalizer/main.go` to return a synthetic `curated_data_uri`.
-- [ ] Implement `ai_client/main.go` to call the configured internal AI Engine endpoint only when endpoint URL, secret name, and contract version are present.
-- [ ] Make `ai_client/main.go` return `ai_unavailable` or `contract_invalid` on missing endpoint config, timeout, schema mismatch, or unsafe recommendation.
-- [ ] Implement `router/main.go` to produce separate Finance and Engineering route decisions.
-- [ ] Implement `containment_worker/main.go` to force `dry-run` for `environment = "prod"` regardless of requested action.
-- [ ] Implement `audit_writer/main.go` to return an `audit_uri`.
-- [ ] Add tests proving every handler accepts the shared contract.
-- [ ] Add tests proving AI unavailable does not produce containment apply.
-- [ ] Add tests proving prod containment cannot return `apply`.
-
-Validation:
-
-```powershell
-Push-Location lambda_src; python -m pytest; Pop-Location
-```
-
-Expected: all tests pass without AWS credentials.
-
-### Task 4: Networking Module
-
-**Files:**
-
-- Create: `modules/networking/*`
-
-Steps:
-
-- [ ] Implement VPC, subnets, internet gateway, NAT, routes, and route table associations.
-- [ ] Implement Lambda, ECS task, internal load balancer, and endpoint security groups with separate rule resources.
-- [ ] Implement S3 and DynamoDB gateway endpoints.
-- [ ] Implement KMS, Secrets Manager, Athena, CloudWatch Logs, X-Ray, STS, ECR API, ECR Docker registry, SQS, and Bedrock runtime interface endpoints.
-- [ ] Add variable validations for subnet counts and CIDR shape.
-- [ ] Add outputs listed in the module contract.
-- [ ] Add `README.md` with input/output tables and example module call.
-
-Validation:
-
-```powershell
-terraform fmt -check -recursive modules/networking
-```
-
-Validate through `environments/sandbox` after environment composition exists.
-
-### Task 5: Lakehouse Module
-
-**Files:**
-
-- Create: `modules/lakehouse/*`
-
-Steps:
-
-- [ ] Implement KMS keys and aliases for data, audit, and DynamoDB encryption.
-- [ ] Implement lakehouse bucket with raw and curated prefixes represented by documented key conventions.
-- [ ] Implement audit bucket with Object Lock enabled.
-- [ ] Enable versioning, SSE-KMS, lifecycle, public access blocks, and TLS-only policies.
-- [ ] Implement Glue database.
-- [ ] Implement Athena workgroup with encrypted output and bytes-scanned cutoff.
-- [ ] Add outputs listed in the module contract.
-- [ ] Document S3 prefix conventions:
-  - `cost/raw/`
-  - `cost/curated/`
-  - `ownership/`
-  - `anomaly/`
-  - `alert/`
-  - `containment/`
-  - `audit/`
-  - `ai/features/`
-  - `ai/checkpoints/`
-
-Validation:
-
-```powershell
-terraform fmt -check -recursive modules/lakehouse
-```
-
-### Task 6: IAM Module
-
-**Files:**
-
-- Create: `modules/iam/*`
-
-Steps:
-
-- [ ] Create policy documents using `aws_iam_policy_document`.
-- [ ] Create Step Functions role with Lambda invoke, DynamoDB access, SNS publish, CloudWatch logging, X-Ray permissions, and internal AI invocation permissions where applicable.
-- [ ] Create EventBridge Scheduler role.
-- [ ] Create one Lambda role per worker class.
-- [ ] Create ECS task execution and task roles.
-- [ ] Create SigV4 CDO caller role for AI Engine service invocation.
-- [ ] Scope S3 permissions by bucket and prefix.
-- [ ] Scope DynamoDB permissions by exact table ARNs.
-- [ ] Scope Secrets Manager access to the AI Engine secret only.
-- [ ] Create explicit deny boundary for unsafe actions.
-- [ ] Ensure prod containment role cannot stop instances or apply quota changes.
-- [ ] Output role ARNs and policy JSON documents for member-account setup.
-
-Validation:
-
-```powershell
-checkov -d modules/iam --framework terraform
-```
-
-Expected: no wildcard-admin or wildcard-trust findings.
-
-### Task 7: ECS Fargate AI Engine Hosting Module
-
-**Files:**
-
-- Create: `modules/ai-runtime-lambda/*`
-- Create or update: `docs/progress/ai_runtime_lambda_progress.md`
-- Create or update: `docs/progress/ai_runtime_lambda_progress_vi.md`
-
-Steps:
-
-- [x] Create ECS Cluster with Container Insights enabled.
-- [x] Configure ECS Capacity Provider strategy supporting FARGATE and FARGATE_SPOT capacity providers.
-- [x] Provision an internal HTTPS Application Load Balancer with self-signed certificate.
-- [x] Set up Route 53 private hosted zone and record alias for `ai-engine` service DNS lookup.
-- [x] Provision ECR repository with scan-on-push and immutability enforced.
-- [x] Configure task execution role and task role with SQS and CloudWatch log access.
-- [x] Set up ECS task definition with logging options and service configuration.
-- [x] Set up Service Autoscaling based on CPU and memory utilization.
-- [x] Update paired English and Vietnamese ECS progress files with identical facts and section order.
-
-Validation:
-
-```powershell
-terraform fmt -check -recursive modules/ai-runtime-lambda
-trivy config modules/ai-runtime-lambda
-checkov -d modules/ai-runtime-lambda --framework terraform
-```
-
-### Task 8: Compute Lambda Module
-
-**Files:**
-
-- Create: `modules/compute-lambda/*`
-
-Steps:
-
-- [ ] Package Lambda source with `archive_file` or consume artifacts from `.build/lambda/`.
-- [ ] Create six Lambda functions with environment variables wired from module inputs.
-- [ ] Configure VPC attachment to private subnets and Lambda security group.
-- [ ] Configure `ai-client` with internal AI Engine endpoint, contract version, timeout, retry attempts, and secret name.
-- [ ] Set runtime to `python3.13` and deploy Python zip artifacts with handler `workers.<worker>.handler.handle_request`.
-- [ ] Set timeout and memory per worker:
-  - cost puller: 120 seconds, 512 MB
-  - normalizer: 120 seconds, 512 MB
-  - AI client: 30 seconds, 256 MB
-  - router: 30 seconds, 256 MB
-  - containment worker: 60 seconds, 256 MB
-  - audit writer: 30 seconds, 256 MB
-- [ ] Enable X-Ray active tracing.
-- [ ] Create CloudWatch log groups with retention from input.
-- [ ] Create `stable` and `canary` aliases.
-- [ ] Keep CodeDeploy optional behind `enable_codedeploy_canary`.
-
-Validation:
-
-```powershell
-.\scripts\package-lambdas.ps1
-terraform fmt -check -recursive modules/compute-lambda
-```
-
-### Task 9: Orchestration Module
-
-**Files:**
-
-- Create: `modules/orchestration/*`
-
-Steps:
-
-- [ ] Create DynamoDB tables using on-demand billing and CMK encryption.
-- [ ] Use stable table names that include project and environment.
-- [ ] Define keys:
-  - run state: `idempotency_key`
-  - anomaly records: `anomaly_id`
-  - routing state: `route_id`
-  - containment audit index: `audit_id`
-  - dashboard materialized views: `view_id`
-- [ ] Create Step Functions ASL with worker invocation order.
-- [ ] Add AI Engine contract version into workflow input.
-- [ ] Add retry for transient Lambda failures.
-- [ ] Add catch path for AI timeout, unavailable endpoint, contract mismatch, and unsafe recommendation.
-- [ ] Add catch path for audit write failure.
-- [ ] Create EventBridge Scheduler with 24h default expression.
-- [ ] Output state machine ARN, scheduler ARN, and table metadata.
-
-Validation:
-
-```powershell
-terraform fmt -check -recursive modules/orchestration
-```
-
-### Task 10: Alerting, Observability, and Dashboard Modules
-
-**Files:**
-
-- Create: `modules/alerting/*`
-- Create: `modules/observability/*`
-- Create: `modules/dashboard/*`
-
-Steps:
-
-- [ ] Create separate encrypted SNS topics for Finance and Engineering.
-- [ ] Add optional email subscriptions controlled by variables.
-- [ ] Create CloudWatch alarms for workflow failure, AI timeout, AI Engine endpoint unavailable, audit write failure, stale workflow, ECS service health, task count, and drift-detected metrics emitted by CI.
-- [ ] Create CloudWatch dashboard for CDO operations, Lambda status, Step Functions state, ECS services, and AI Engine availability.
-- [ ] Create Athena named queries for finance-readable spend and anomaly views.
-- [ ] Keep QuickSight disabled by default.
-
-Validation:
-
-```powershell
-terraform fmt -check -recursive modules/alerting modules/observability modules/dashboard
-```
-
-### Task 11: Environment Roots
-
-**Files:**
-
-- Create all files under `environments/sandbox/`
-- Create all files under `environments/staging/`
-- Create all files under `environments/prod/`
-
-Steps:
-
-- [ ] Add S3 backend config using the bootstrap output bucket and `use_lockfile = true`.
-- [ ] Add providers with default tags.
-- [ ] Add common locals for names and tags.
-- [ ] Call modules in this order:
-  1. networking
-  2. lakehouse
-  3. alerting
-  4. base iam
-  5. ai_runtime_lambda
-  6. compute-lambda
-  7. orchestration
-  8. observability
-  9. dashboard
-- [ ] Add `terraform.tfvars.example` only; do not commit real `.tfvars`.
-- [ ] Set environment-specific containment behavior exactly as defined in Section 4.
-- [ ] Set environment-specific ECS service task sizing defaults.
-- [ ] Wire `modules/ai-runtime-lambda` outputs into IAM, Lambda, orchestration, and observability modules.
-- [ ] Add environment READMEs with init, plan, and apply commands.
-
-Validation:
-
-```powershell
-terraform -chdir=environments/sandbox init -backend=false
-terraform -chdir=environments/sandbox validate
-terraform -chdir=environments/staging init -backend=false
-terraform -chdir=environments/staging validate
-terraform -chdir=environments/prod init -backend=false
-terraform -chdir=environments/prod validate
-```
-
-### Task 12: GitHub Actions CI/CD
-
-**Files:**
-
-- Create: `.github/workflows/terraform-ci.yml`
-- Create: `.github/workflows/terraform-apply.yml`
-- Create: `.github/workflows/drift-detection.yml`
-
-Steps:
-
-- [ ] Add PR workflow for fmt, validate, tflint, Lambda tests, Trivy, and Checkov.
-- [ ] Add ECS/module-specific static checks for `modules/ai-runtime-lambda`.
-- [ ] Add AI contract compatibility check against the configured contract version and AIOps-provided schema artifact when available.
-- [ ] Add ECR scan-on-push requirement for AI Engine images.
-- [ ] Use GitHub OIDC role assumption; do not use static AWS keys.
-- [ ] Use normal `pull_request`, not `pull_request_target`.
-- [ ] Avoid direct `${{ github.event.* }}` interpolation inside shell commands; pass untrusted values through `env`.
-- [ ] Pin third-party non-GitHub actions to full commit SHAs during implementation.
-- [ ] Add plan job that uploads `tfplan` as a restricted artifact.
-- [ ] Add apply workflow that downloads and applies the reviewed plan artifact.
-- [ ] Configure sandbox apply from `develop`, staging apply from `main`, and prod apply through GitHub environment approval.
-- [ ] Add scheduled drift detection using `terraform plan -detailed-exitcode`; alert or create issue on exit code 2; never auto-apply drift.
-
-Validation:
-
-```powershell
-trivy config .github/workflows
-```
-
-### Task 13: Final Validation and Evidence
-
-**Files:**
-
-- Modify: progress files relevant to implemented features.
-- Modify: `README.md` only if the user requests documentation alignment beyond this implementation plan.
-
-Steps:
-
-- [ ] Run the repository validation script.
-- [ ] Run environment init and validate with `-backend=false`.
-- [ ] Run `terraform fmt -check -recursive`.
-- [ ] Run `tflint --recursive`.
-- [ ] Run `trivy config .`.
-- [ ] Run `checkov -d . --framework terraform`.
-- [ ] Run `trivy config modules/ai-runtime-lambda`.
-- [ ] Run `checkov -d modules/ai-runtime-lambda --framework terraform`.
-- [ ] Run `Push-Location lambda_src; python -m pytest; Pop-Location`.
-- [ ] Capture outputs in a local evidence note or PR comment.
-- [ ] Confirm no tracked files include real secrets, `.tfvars`, state, or plan JSON.
-- [ ] Record any stale mismatch in `README.md` or in-repo docs compared with `../tf2-finops-docs`.
-
-Validation command:
-
-```powershell
-.\scripts\validate.ps1
-```
-
-Acceptance criteria:
-
-- All Terraform roots validate locally with `-backend=false`.
-- Lambda tests pass without AWS credentials.
-- ECS module static checks pass or findings are documented with accepted capstone rationale.
-- No security scan finding contradicts the hard guardrails.
-- The AI Engine endpoint is private by design.
-- ECR repositories have scan-on-push enabled.
-- IRSA roles are scoped by service account and namespace.
-- Prod containment is tag/suggest/dry-run only.
-- The repo can produce a reviewed plan for `sandbox` after bootstrap is applied.
+## 4. Rollback and Recovery Notes
+
+- **Git Reverts**: The primary rollback for IaC configurations is a normal Git revert of the corresponding pull request.
+- **Staging/Prod Approvals**: Applies to staging and production are strictly performed via CI using reviewed plan artifacts.
+- **Lambda Recovery**: Lambda functions use stable version aliases. Code rollback is executed by pointing the alias back to the previous version or re-deploying the previous Git commit.
+- **Step Functions Recovery**: Apply the previous state machine definition from Git.
+- **AI Workload Recovery**: To roll back the container runtime, update the module configuration with the previous immutable image digest.
+- **Containment Rollback Execution**: Rollbacks execute using the cached Boto3 payload from the `finops-rollback-cache` table, which is retained for 90 days. The SQS queue `finops-watch-rollback` is strictly for audit completion notifications, not dispatch.
+- **Data Protection**: Remote state bucket, KMS keys, audit buckets, lakehouse buckets, and primary DynamoDB tables are protected by `prevent_destroy` sentinel resources when `destroyable = false`.
 
 ---
 
-## 6. Rollback and Recovery Notes
+## 5. Implementation Defaults & Guardrails
 
-- Do not apply directly to staging or prod from a laptop.
-- All staging/prod applies must use reviewed plan artifacts in CI.
-- To roll back non-destructive changes, revert the PR and apply the previous reviewed plan.
-- To roll back Lambda code, use alias rollback or re-apply the previous Terraform revision.
-- To roll back Step Functions, re-apply the previous state machine definition from Git.
-- To roll back ECS workload desired state, update the task definition with the previous immutable image digest or revert the commit in this repo.
-- To roll back ECS infrastructure, review the Terraform plan carefully and preserve cluster, services, IAM, and data dependencies unless a full teardown is explicitly approved.
-- Do not delete state bucket, KMS state key, audit bucket, lakehouse bucket, ECR repositories, or DynamoDB tables during normal rollback.
-- If a lock is stuck, investigate active CI/local Terraform processes before using `terraform force-unlock`.
-- Keep S3 state bucket versioning enabled; state recovery uses object version restore, not manual state editing.
-
----
-
-## 7. Implementation Defaults
-
-- Terraform over AWS SAM, CDK, CloudFormation, or Pulumi for platform IaC.
-- S3 native lockfile over DynamoDB lock table.
-- Lambda for CDO adapters and policy workers.
-- ECS/Fargate for CDO-hosted AIOps AI Engine runtime and batch workloads.
-- Fargate capacity provider for stable workloads, and Fargate Spot capacity provider for batch/worker workloads.
-- ECR scan-on-push for AIOps-provided images with immutability enforced.
-- IAM task execution role and task role for task-level AWS access.
-- Private internal AI Engine endpoint only.
-- CloudWatch-native observability plus Container Insights for capstone scope.
-- QuickSight disabled by default until dashboard ownership is confirmed.
-- Synthetic data path enabled by default.
-- Prod containment apply disabled by default and must remain disabled.
-- `prevent_destroy` on state, audit, lakehouse, KMS, ECR repositories, and core DynamoDB resources.
-
----
-
-## 8. Final Self-Review Checklist
-
-- [ ] No real secret values in HCL, YAML, README, examples, or tests.
-- [ ] No committed `*.tfvars`, state files, plan files, or plan JSON.
-- [ ] No wildcard IAM admin policies.
-- [ ] No wildcard trust policy principals.
-- [ ] No public S3 buckets.
-- [ ] No public AI Engine endpoint.
-- [ ] All S3 buckets encrypted and versioned.
-- [ ] DynamoDB tables encrypted with CMK.
-- [ ] ECS volumes/ephemeral storage encrypted.
-- [ ] ECR scan-on-push enabled for AI Engine repositories.
-- [ ] ECS execution role and task role configured for SQS, ECR, and CloudWatch Logs.
-- [ ] AI Engine tasks do not rely on broad execution roles.
-- [ ] ECS tasks utilize Fargate and Fargate Spot capacity providers.
-- [ ] SNS topics encrypted.
-- [ ] GitHub Actions use OIDC and environment approval for prod.
-- [ ] Drift detection alerts instead of auto-applying.
-- [ ] Prod containment is tag/suggest/dry-run only.
-- [ ] AI unavailable, timeout, schema mismatch, and unsafe recommendation paths fail closed.
-- [ ] Audit retention is at least 90 days.
-- [ ] `terraform fmt -check -recursive` passes.
-- [ ] `terraform validate` passes for bootstrap and each environment.
-- [ ] `tflint --recursive` passes.
-- [ ] `trivy config .` passes or findings are documented with accepted capstone rationale.
-- [ ] `checkov -d . --framework terraform` passes or findings are documented with accepted capstone rationale.
-- [ ] `trivy config modules/ai-runtime-lambda` passes or findings are documented with accepted capstone rationale.
-- [ ] `checkov -d modules/ai-runtime-lambda --framework terraform` passes or findings are documented with accepted capstone rationale.
-- [ ] `Push-Location lambda_src; python -m pytest; Pop-Location` passes.
+- **Platform Target**: Terraform is the exclusive platform IaC tool for AWS infrastructure.
+- **Remote Locking**: S3 native lockfile (`use_lockfile = true`) is used. No DynamoDB locking table.
+- **AI Engine Integration**: Synchronous invocations via `vpc_alb_caller` Lambda -> private internal HTTPS ALB -> AI Request Lambda live alias.
+- **No Async Polling**: No SQS-based detection queue or DynamoDB-polling loops.
+- **Containment Safety**: Dry-run by default. Automated containment must **NEVER** terminate prod instances, delete data, or modify IAM roles/policies.
+- **Audit Trails**: compliance-mode S3 Object Lock audit retention (min 90 days) in staging and prod. Sandbox defaults to teardown-compatible settings.
+- **VPC Security**: Egress rules are separate security group resources. No public IPs or public function URLs.
+- **Telemetry Fallback**: CUR `S3_POINTER` is the default. Cost Explorer fallback (`RAW_JSON`) triggers only after a CUR delay of > 36 hours. Telemetry quality issues force a fail-closed / dry-run degradation.

@@ -1,5 +1,7 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+data "aws_canonical_user_id" "current" {}
+data "aws_cloudfront_log_delivery_canonical_user_id" "this" {}
 
 locals {
   queries = {
@@ -109,6 +111,7 @@ EOF
   }
 }
 
+
 resource "aws_athena_named_query" "queries" {
   for_each    = local.queries
   name        = "${var.project_name}-${var.environment}-${replace(each.key, "_", "-")}"
@@ -127,7 +130,7 @@ locals {
 # 1. Private S3 bucket for static dashboard assets (replaceable)
 resource "aws_s3_bucket" "dashboard_assets" {
   bucket        = "${var.project_name}-${var.environment}-dashboard-assets"
-  force_destroy = true
+  force_destroy = var.destroyable
   tags          = var.tags
 }
 
@@ -195,9 +198,19 @@ resource "aws_s3_bucket_replication_configuration" "dashboard_assets" {
     id     = "replicate-assets"
     status = "Enabled"
 
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+
     destination {
       bucket        = var.dashboard_assets_replica_bucket_arn
       storage_class = "STANDARD"
+
+      encryption_configuration {
+        replica_kms_key_id = var.dashboard_replica_kms_key_arn
+      }
     }
   }
 
@@ -275,9 +288,19 @@ resource "aws_s3_bucket_replication_configuration" "dashboard_data" {
     id     = "replicate-data"
     status = "Enabled"
 
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+
     destination {
       bucket        = var.dashboard_data_replica_bucket_arn
       storage_class = "STANDARD"
+
+      encryption_configuration {
+        replica_kms_key_id = var.dashboard_replica_kms_key_arn
+      }
     }
   }
 
@@ -302,6 +325,128 @@ resource "aws_s3_bucket_cors_configuration" "dashboard_data" {
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
+}
+
+# Dedicated CloudFront logs S3 bucket
+resource "aws_s3_bucket" "cloudfront_logs" {
+  # checkov:skip=CKV_AWS_18: "CloudFront logs bucket should not have access logging enabled to avoid infinite logging loops"
+  # checkov:skip=CKV_AWS_144: "Cross-region replication is not required for standard CloudFront logs"
+  # checkov:skip=CKV_AWS_145: "KMS encryption is not supported for standard CloudFront log delivery (requires SSE-S3)"
+  # checkov:skip=CKV2_AWS_62: "Event notifications are not required for standard CloudFront logs"
+  bucket        = "${var.project_name}-${var.environment}-cloudfront-logs"
+  force_destroy = var.destroyable
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "cloudfront_logs" {
+  bucket                  = aws_s3_bucket.cloudfront_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# trivy:ignore:AVD-AWS-0132
+# trivy:ignore:AWS-0132
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 90
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "cloudfront_logs" {
+  # checkov:skip=CKV2_AWS_65: "ACLs are required for CloudFront log delivery"
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_acl" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+
+  depends_on = [aws_s3_bucket_ownership_controls.cloudfront_logs]
+
+  access_control_policy {
+    grant {
+      grantee {
+        id   = data.aws_canonical_user_id.current.id
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+
+    grant {
+      grantee {
+        id   = data.aws_cloudfront_log_delivery_canonical_user_id.this.id
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+
+    owner {
+      id = data.aws_canonical_user_id.current.id
+    }
+  }
+}
+
+data "aws_iam_policy_document" "cloudfront_logs_policy" {
+  statement {
+    sid    = "DenyHTTP"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.cloudfront_logs.arn,
+      "${aws_s3_bucket.cloudfront_logs.arn}/*"
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "cloudfront_logs" {
+  bucket = aws_s3_bucket.cloudfront_logs.id
+  policy = data.aws_iam_policy_document.cloudfront_logs_policy.json
 }
 
 # 3. CloudFront Distribution with Origin Access Control (OAC) and WAFv2
@@ -409,6 +554,8 @@ resource "aws_wafv2_web_acl" "cloudfront" {
   tags = var.tags
 }
 
+
+
 resource "aws_cloudfront_distribution" "dashboard" {
   # checkov:skip=CKV_AWS_310: "Origin failover is enabled via origin_group"
   # checkov:skip=CKV2_AWS_42: "Custom SSL certificate is conditionally configured via cloudfront_acm_certificate_arn variable"
@@ -441,6 +588,36 @@ resource "aws_cloudfront_distribution" "dashboard" {
     }
   }
 
+  origin {
+    domain_name              = aws_s3_bucket.dashboard_data.bucket_regional_domain_name
+    origin_id                = "S3-DashboardData"
+    origin_access_control_id = aws_cloudfront_origin_access_control.dashboard.id
+  }
+
+  origin {
+    domain_name              = "${local.replica_data_bucket_name}.s3.ap-southeast-2.amazonaws.com"
+    origin_id                = "S3-DashboardDataReplica"
+    origin_access_control_id = aws_cloudfront_origin_access_control.dashboard.id
+  }
+
+  origin_group {
+    origin_id = "OriginGroup-DashboardData"
+
+    failover_criteria {
+      status_codes = [500, 502, 503, 504, 403, 404]
+    }
+
+    member {
+      origin_id = "S3-DashboardData"
+    }
+
+    member {
+      origin_id = "S3-DashboardDataReplica"
+    }
+  }
+
+
+
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
@@ -448,7 +625,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
   aliases             = var.cloudfront_acm_certificate_arn != "" ? var.cloudfront_aliases : []
 
   logging_config {
-    bucket          = "${var.s3_logging_bucket_id}.s3.amazonaws.com"
+    bucket          = aws_s3_bucket.cloudfront_logs.bucket_domain_name
     include_cookies = false
     prefix          = "cloudfront/"
   }
@@ -470,7 +647,41 @@ resource "aws_cloudfront_distribution" "dashboard" {
     min_ttl                = 0
     default_ttl            = 3600
     max_ttl                = 86400
+
+    lambda_function_association {
+      event_type   = "viewer-request"
+      lambda_arn   = aws_lambda_function.edge_viewer_auth.qualified_arn
+      include_body = false
+    }
   }
+
+  ordered_cache_behavior {
+    path_pattern               = "/${var.dashboard_data_prefix}*"
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = "OriginGroup-DashboardData"
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+
+    lambda_function_association {
+      event_type   = "viewer-request"
+      lambda_arn   = aws_lambda_function.edge_viewer_auth.qualified_arn
+      include_body = false
+    }
+  }
+
+
 
   restrictions {
     geo_restriction {
@@ -487,6 +698,8 @@ resource "aws_cloudfront_distribution" "dashboard" {
   }
 
   tags = var.tags
+
+  depends_on = [aws_s3_bucket_acl.cloudfront_logs]
 }
 
 # S3 Bucket Policies enforcing TLS and restricting asset bucket to CloudFront OAC
@@ -533,6 +746,22 @@ resource "aws_s3_bucket_policy" "dashboard_assets" {
 }
 
 data "aws_iam_policy_document" "dashboard_data_policy" {
+  statement {
+    sid    = "AllowCloudFrontOAC"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.dashboard_data.arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.dashboard.arn]
+    }
+  }
+
   statement {
     sid    = "DenyHTTP"
     effect = "Deny"
@@ -583,10 +812,16 @@ resource "aws_cognito_user_pool_client" "dashboard" {
   name         = "${var.project_name}-${var.environment}-user-pool-client"
   user_pool_id = aws_cognito_user_pool.dashboard.id
 
-  allowed_oauth_flows                  = ["code", "implicit"]
-  allowed_oauth_scopes                 = ["phone", "email", "openid", "profile", "aws.cognito.signin.user.admin"]
-  callback_urls                        = ["https://${aws_cloudfront_distribution.dashboard.domain_name}"]
-  logout_urls                          = ["https://${aws_cloudfront_distribution.dashboard.domain_name}"]
+  allowed_oauth_flows  = ["code"]
+  allowed_oauth_scopes = ["phone", "email", "openid", "profile"]
+  callback_urls = concat(
+    ["https://${aws_cloudfront_distribution.dashboard.domain_name}/oauth2/callback"],
+    [for alias in var.cloudfront_aliases : "https://${alias}/oauth2/callback"]
+  )
+  logout_urls = concat(
+    ["https://${aws_cloudfront_distribution.dashboard.domain_name}/logout"],
+    [for alias in var.cloudfront_aliases : "https://${alias}/logout"]
+  )
   supported_identity_providers         = ["COGNITO"]
   allowed_oauth_flows_user_pool_client = true
 
@@ -595,6 +830,15 @@ resource "aws_cognito_user_pool_client" "dashboard" {
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_USER_SRP_AUTH"
   ]
+}
+
+resource "aws_ssm_parameter" "cognito_client_id" {
+  name        = "/${var.project_name}/${var.environment}/dashboard/cognito_client_id"
+  type        = "SecureString"
+  value       = aws_cognito_user_pool_client.dashboard.id
+  description = "Cognito User Pool Client ID for Dashboard"
+  key_id      = var.dashboard_kms_key_arn
+  tags        = var.tags
 }
 
 resource "aws_cognito_user_pool_domain" "dashboard" {
@@ -609,8 +853,26 @@ resource "aws_cognito_identity_pool" "dashboard" {
   cognito_identity_providers {
     client_id               = aws_cognito_user_pool_client.dashboard.id
     provider_name           = aws_cognito_user_pool.dashboard.endpoint
-    server_side_token_check = false
+    server_side_token_check = true
   }
+}
+
+resource "aws_cognito_user_group" "finance" {
+  name         = var.group_name_finance
+  user_pool_id = aws_cognito_user_pool.dashboard.id
+  description  = "Finance read-only access"
+}
+
+resource "aws_cognito_user_group" "engineering" {
+  name         = var.group_name_engineering
+  user_pool_id = aws_cognito_user_pool.dashboard.id
+  description  = "Engineering operator access"
+}
+
+resource "aws_cognito_user_group" "cdo" {
+  name         = var.group_name_cdo
+  user_pool_id = aws_cognito_user_pool.dashboard.id
+  description  = "CDO admin access"
 }
 
 data "aws_iam_policy_document" "authenticated_trust" {
@@ -681,6 +943,7 @@ resource "aws_s3_object" "runtime_config" {
     cloudfront_domain   = aws_cloudfront_distribution.dashboard.domain_name
   })
 }
+
 
 # 6. Optional QuickSight Data Source (disabled by default)
 resource "aws_quicksight_data_source" "athena" {
@@ -763,10 +1026,113 @@ resource "aws_iam_role_policy" "replication" {
         Resource = [
           var.dashboard_kms_key_arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = [
+          var.dashboard_replica_kms_key_arn
+        ]
       }
     ]
   })
 }
+
+# Lambda@Edge IAM Role and Policies
+resource "aws_iam_role" "edge_auth" {
+  name = "${var.project_name}-${var.environment}-edge-auth-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = [
+          "lambda.amazonaws.com",
+          "edgelambda.amazonaws.com"
+        ]
+      }
+    }]
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "edge_auth" {
+  name = "${var.project_name}-${var.environment}-edge-auth-policy"
+  role = aws_iam_role.edge_auth.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter"
+        ]
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/${var.environment}/dashboard/cognito_client_id"
+        ]
+      }
+    ]
+  })
+}
+
+# Dynamic package for Lambda@Edge dashboard auth
+data "archive_file" "dashboard_auth" {
+  type        = "zip"
+  output_path = "${path.module}/../../.build/lambda/dashboard_auth_deploy.zip"
+
+  source {
+    content  = file("${path.module}/../../lambda_src/edge/dashboard_auth/viewer_auth.py")
+    filename = "viewer_auth.py"
+  }
+
+
+
+  source {
+    content  = <<EOF
+COGNITO_DOMAIN          = "${aws_cognito_user_pool_domain.dashboard.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+COGNITO_CLIENT_ID_PARAM = "/${var.project_name}/${var.environment}/dashboard/cognito_client_id"
+USER_POOL_ID            = "${aws_cognito_user_pool.dashboard.id}"
+REGION                  = "${data.aws_region.current.name}"
+TARGET_REGION           = "${data.aws_region.current.name}"
+TARGET_SERVICE          = "lambda"
+EOF
+    filename = "config.py"
+  }
+}
+
+resource "aws_lambda_function" "edge_viewer_auth" {
+  # checkov:skip=CKV_AWS_50: "Lambda@Edge does not support X-Ray active tracing"
+  # checkov:skip=CKV_AWS_115: "Lambda@Edge does not support reserved concurrency"
+  # checkov:skip=CKV_AWS_116: "Lambda@Edge does not support DLQs"
+  # checkov:skip=CKV_AWS_117: "Lambda@Edge must not be deployed inside a VPC"
+  # checkov:skip=CKV_AWS_272: "Code signing is not configured for edge authentication handlers"
+  provider         = aws.us_east_1
+  function_name    = "${var.project_name}-${var.environment}-edge-viewer-auth"
+  description      = "Lambda@Edge for dashboard authentication using Cognito"
+  role             = aws_iam_role.edge_auth.arn
+  handler          = "viewer_auth.handler"
+  runtime          = "python3.12"
+  filename         = data.archive_file.dashboard_auth.output_path
+  source_code_hash = data.archive_file.dashboard_auth.output_base64sha256
+  publish          = true
+
+  tags = var.tags
+}
+
+
 
 resource "terraform_data" "destroy_guard" {
   count = var.destroyable ? 0 : 1

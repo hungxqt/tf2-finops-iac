@@ -4,45 +4,58 @@
 Hoàn thành
 
 ## Phạm vi
-Cập nhật luồng Step Functions để phù hợp với kho lưu trữ docs/tf2-finops mới: `/v1/detect` đồng bộ, `/v1/decide` đồng bộ để lập kế hoạch hành động, `/v1/verify` để xác thực kết quả, kiểm toán authoritative qua S3, bộ nhớ đệm rollback cache và cơ chế idempotency hot-path trên DynamoDB, loại bỏ việc polling phát hiện qua `/v1/status` trong ASL, và hoạt động bảo toàn đóng (fail-closed) cho containment.
+Cập nhật luồng Step Functions và các thành phần orchestration để thiết lập cơ chế kích hoạt EventBridge Scheduler sau khi apply (activation guard). Điều này đảm bảo EventBridge Scheduler luôn được tạo ở trạng thái DISABLED theo mặc định để ngăn chặn việc tự động chạy workflow ngay sau khi triển khai hạ tầng. Việc kích hoạt chạy hàng ngày chỉ được thực hiện thông qua việc cập nhật biến cấu hình sang ENABLED trong một bản thay đổi kế hoạch (plan) có kiểm duyệt.
 
-Cụ thể, đã sửa đổi định nghĩa và tài liệu state machine để điều hướng rõ ràng thông qua Lambda trung gian VPC ALB caller:
-- Step Functions -> VpcAlbCallerLambda -> HTTPS private internal ALB -> AI Engine Request Lambda
-- Đổi tên placeholder `${ai_request_lambda_arn}` thành `${vpc_alb_caller_lambda_arn}` trong các trạng thái `InvokeDetect`, `InvokeDecide`, và `ReportVerifyResult`.
-- Thêm các bình luận (Comment) giải thích bên trong các trạng thái mô tả luồng định tuyến qua ALB.
-- Loại bỏ ánh xạ trực tiếp `ai_request` không sử dụng khỏi danh sách `lambda_function_arns` của môi trường để Step Functions chỉ nhận quyền gọi VPC ALB caller helper.
-- Cập nhật các bài kiểm thử đơn vị Python và kịch bản kết xuất tài liệu để xác thực cấu trúc mới.
+Cụ thể:
+- Thêm biến đầu vào dạng boolean `scheduler_enabled` (mặc định: `false`) vào `modules/orchestration` và các thư mục môi trường (`sandbox`, `staging`, `prod`).
+- Thiết lập thuộc tính `state` của `aws_scheduler_schedule.run_workflow` dựa trên biểu thức `var.scheduler_enabled ? "ENABLED" : "DISABLED"`.
+- Cấu hình giá trị `scheduler_enabled = false` trong tệp `terraform.tfvars.example` của mỗi môi trường.
+- Thêm output `scheduler_state` vào module orchestration và tất cả output môi trường.
+- Cập nhật tài liệu hướng dẫn (`modules/orchestration/README.md`, `docs/GUIDES.md`, và `docs/GUIDES_vi.md`) để làm rõ rằng việc triển khai ban đầu không kích hoạt chạy tự động Step Functions.
+- Thêm các kiểm tra tự động bằng Python để xác thực cấu hình biến, outputs của scheduler và ngăn chặn việc tự động kích hoạt chạy workflow.
 
 ## Các file đã thay đổi
-- [docs/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/statemachine.json)
-- [modules/orchestration/statemachine.json](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/statemachine.json)
+- [modules/orchestration/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/variables.tf)
 - [modules/orchestration/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/main.tf)
-- [modules/orchestration/iam.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/iam.tf)
 - [modules/orchestration/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/outputs.tf)
+- [environments/sandbox/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/variables.tf)
 - [environments/sandbox/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/main.tf)
+- [environments/sandbox/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/outputs.tf)
+- [environments/sandbox/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/sandbox/terraform.tfvars.example)
+- [environments/staging/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/variables.tf)
 - [environments/staging/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/main.tf)
+- [environments/staging/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/outputs.tf)
+- [environments/staging/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/staging/terraform.tfvars.example)
+- [environments/prod/variables.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/variables.tf)
 - [environments/prod/main.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/main.tf)
-- [scripts/render-static-asl.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/scripts/render-static-asl.py)
-- [lambda_src/tests/test_state_machine.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_state_machine.py)
-- [lambda_src/tests/test_step_function_lambda_coverage.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_step_function_lambda_coverage.py)
+- [environments/prod/outputs.tf](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/outputs.tf)
+- [environments/prod/terraform.tfvars.example](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/environments/prod/terraform.tfvars.example)
+- [modules/orchestration/README.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/modules/orchestration/README.md)
+- [docs/GUIDES.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/GUIDES.md)
+- [docs/GUIDES_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/GUIDES_vi.md)
+- [lambda_src/tests/test_scheduler_configuration.py](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/lambda_src/tests/test_scheduler_configuration.py)
 
 ## Lệnh kiểm tra
 ```powershell
-terraform fmt -check -recursive
+terraform fmt -check -recursive modules/orchestration environments/sandbox environments/staging environments/prod
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
-python scripts/render-static-asl.py
-Push-Location lambda_src; python -m pytest; Pop-Location
+terraform -chdir=environments/staging init -backend=false
+terraform -chdir=environments/staging validate
+terraform -chdir=environments/prod init -backend=false
+terraform -chdir=environments/prod validate
+Push-Location lambda_src; python -m pytest -v -p no:cacheprovider tests/test_scheduler_configuration.py; Pop-Location
 ```
 
 ## Kết quả
 - `terraform fmt -check -recursive`: Thành công (Tất cả các tệp đều được định dạng đúng)
 - `environments/sandbox validate`: Thành công (Cấu hình hợp lệ)
-- Các kiểm tra Python Lambda: Thành công (Tất cả 40 kiểm tra đều vượt qua, bao gồm các bài kiểm tra state machine và lambda coverage mới xác thực luồng VPC ALB caller)
-- Quét Checkov: Thành công (Tất cả các chính sách tiêu chuẩn đều được xác minh)
+- `environments/staging validate`: Thành công (Cấu hình hợp lệ)
+- `environments/prod validate`: Thành công (Cấu hình hợp lệ)
+- Các kiểm tra Python: Thành công (Cả 3 kiểm tra mới đều vượt qua để xác thực cấu hình `scheduler_enabled`, các tệp biến, giá trị mặc định trong `terraform.tfvars.example`, và kiểm tra ngăn chặn tự động kích hoạt workflow)
 
 ## Vướng mắc
 Không có
 
 ## Bước tiếp theo
-Tiến hành triển khai hoặc xác thực trên môi trường sandbox.
+Tiến hành tích hợp pipeline và thử nghiệm triển khai.

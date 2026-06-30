@@ -5,14 +5,20 @@ on:
     branches:
       - main
       - develop
+  workflow_dispatch:
+    inputs:
+      request_image_uri:
+        description: "ECR request image URI pinned to digest (optional, reads from SSM if empty)"
+        required: false
+        type: string
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  apply:
-    name: "Deploy Infrastructure"
+  plan:
+    name: "Generate Terraform Plan"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -23,14 +29,85 @@ jobs:
         with:
           terraform_version: "1.15.6"
 
-      # - name: Configure AWS Credentials
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-      #     aws-region: ap-southeast-1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ap-southeast-1
 
-      # - name: Download Plan Artifact and Apply
-      #   run: |
-      #     # Download reviewed tfplan artifact, then run:
-      #     # terraform -chdir=environments/sandbox init
-      #     # terraform -chdir=environments/sandbox apply sandbox.tfplan
+      - name: Resolve Request Image URI
+        id: resolve-uri
+        run: |
+          IMAGE_URI="${{ github.event.inputs.request_image_uri }}"
+          if [ -z "$IMAGE_URI" ]; then
+            echo "No image URI input provided, reading from SSM parameter..."
+            IMAGE_URI=$(aws ssm get-parameter --name "/tf2-finops/sandbox/request_image_uri" --query "Parameter.Value" --output text)
+          fi
+          echo "Using Request Image URI: $IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        run: terraform -chdir=environments/sandbox init
+
+      - name: Terraform Plan
+        run: |
+          terraform -chdir=environments/sandbox plan \
+            -var="request_image_uri=${{ steps.resolve-uri.outputs.image_uri }}" \
+            -out=sandbox.tfplan
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-tfplan
+          path: environments/sandbox/sandbox.tfplan
+          retention-days: 7
+
+  apply:
+    name: "Deploy Infrastructure & CodeDeploy Rollout"
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.6"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ap-southeast-1
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sandbox-tfplan
+          path: environments/sandbox
+
+      - name: Terraform Init
+        run: terraform -chdir=environments/sandbox init
+
+      - name: Terraform Apply
+        run: terraform -chdir=environments/sandbox apply -input=false sandbox.tfplan
+
+      - name: Run CodeDeploy traffic shift
+        shell: pwsh
+        run: |
+          # Read terraform outputs
+          $outputs = terraform -chdir=environments/sandbox output -json | ConvertFrom-Json
+          $appName = $outputs.codedeploy_app_name.value
+          $depGroupName = $outputs.codedeploy_deployment_group_name.value
+          $funcName = $outputs.request_lambda_function_name.value
+          $aliasName = $outputs.request_lambda_alias_name.value
+          $targetVersion = $outputs.request_lambda_latest_version.value
+          
+          # Start CodeDeploy deployment and wait for completion
+          ./scripts/start-ai-lambda-codedeploy.ps1 `
+            -ApplicationName $appName `
+            -DeploymentGroupName $depGroupName `
+            -FunctionName $funcName `
+            -AliasName $aliasName `
+            -TargetVersion $targetVersion

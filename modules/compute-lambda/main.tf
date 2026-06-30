@@ -7,27 +7,45 @@ locals {
 
   worker_configs = {
     state = {
+      description = "FinOps Watch worker - manages state tracking and error budgets"
       timeout     = 30
       memory_size = 256
       env = {
-        RUN_STATE_TABLE_NAME = lookup(var.dynamodb_table_names, "run_state", "")
+        RUN_STATE_TABLE_NAME    = lookup(var.dynamodb_table_names, "run_state", "")
+        ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")
       }
     }
     cost_puller = {
+      description = "FinOps Watch worker - pulls cost telemetry from CUR or Cost Explorer"
       timeout     = 120
       memory_size = 512
       env = {
-        LAKEHOUSE_BUCKET_NAME = var.lakehouse_bucket_name
+        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
+        CUR_SOURCE_BUCKET          = var.cur_source_bucket
+        CUR_SOURCE_PREFIX          = var.cur_source_prefix
+        CUR_DELAY_THRESHOLD_HOURS  = tostring(var.cur_delay_threshold_hours)
+        CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
+        TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
+        TELEMETRY_MEMBER_ROLE_NAME = var.telemetry_member_role_name
+        CUR_EXPORTS_JSON           = var.cur_exports_json
       }
     }
     normalizer = {
+      description = "FinOps Watch worker - validates and normalizes telemetry data"
       timeout     = 120
       memory_size = 512
       env = {
-        LAKEHOUSE_BUCKET_NAME = var.lakehouse_bucket_name
+        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
+        RUN_STATE_TABLE_NAME       = lookup(var.dynamodb_table_names, "run_state", "")
+        ATHENA_WORKGROUP_NAME      = var.athena_workgroup_name
+        GLUE_DATABASE_NAME         = var.glue_database_name
+        GLUE_TABLE_NAME            = var.cur_data_table_name
+        ATHENA_RESULTS_BUCKET_NAME = var.athena_results_bucket_name
+        CUR_RAW_EXPORT_PREFIX      = var.cur_raw_export_prefix
       }
     }
     router = {
+      description = "FinOps Watch worker - routes alerts and decisions based on policy"
       timeout     = 30
       memory_size = 256
       env = {
@@ -35,6 +53,7 @@ locals {
       }
     }
     audit_writer = {
+      description = "FinOps Watch worker - writes containment audit records to S3 and DynamoDB"
       timeout     = 30
       memory_size = 256
       env = {
@@ -43,19 +62,27 @@ locals {
       }
     }
     containment_worker = {
-      timeout     = 60
+      description = "FinOps Watch worker - executes containment actions and manages rollback cache"
+      timeout     = 120
       memory_size = 256
       env = {
         CONTAINMENT_APPLY_ENABLED = tostring(var.containment_apply_enabled)
+        ROLLBACK_CACHE_TABLE      = lookup(var.dynamodb_table_names, "rollback_cache", "")
+        DASHBOARD_CACHE_TABLE     = lookup(var.dynamodb_table_names, "dashboard_views", "")
+        AUDIT_BUCKET_NAME         = var.audit_bucket_name
       }
     }
     vpc_alb_caller = {
+      description = "FinOps Watch worker - invokes AI Engine synchronous endpoints via VPC ALB"
       timeout     = 90
       memory_size = 256
       env = {
-        ALB_BASE_URL            = var.alb_base_url
-        SIGV4_SERVICE_NAME      = var.sigv4_service_name
-        REQUEST_TIMEOUT_SECONDS = "60"
+        ALB_BASE_URL              = var.alb_base_url
+        ALLOW_INSECURE_ALB_HTTP   = tostring(var.allow_insecure_alb_http)
+        SIGV4_SERVICE_NAME        = var.sigv4_service_name
+        REQUEST_TIMEOUT_SECONDS   = "60"
+        IDEMPOTENCY_TABLE_NAME    = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
+        RAW_JSON_INLINE_MAX_BYTES = tostring(var.raw_json_inline_max_bytes)
       }
     }
   }
@@ -84,6 +111,19 @@ resource "aws_vpc_security_group_egress_rule" "lambda_https" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "Allow HTTPS outbound traffic from Lambda"
+}
+
+# Allow outbound HTTP (port 80) from Lambda to internal ALB (Sandbox override)
+# trivy:ignore:AVD-AWS-0104
+# trivy:ignore:AWS-0104
+resource "aws_vpc_security_group_egress_rule" "lambda_http" {
+  count             = var.allow_insecure_alb_http ? 1 : 0
+  security_group_id = aws_security_group.lambda.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  description       = "Allow HTTP outbound traffic from Lambda (Sandbox override)"
 }
 
 # Ingress rule for VPC Endpoint Security Group allowing ingress from Lambda security group
@@ -126,6 +166,7 @@ resource "aws_sqs_queue" "lambda_dlq" {
 resource "aws_lambda_function" "workers" {
   for_each      = toset(local.workers)
   function_name = "${var.project_name}-${var.environment}-${each.key}"
+  description   = local.worker_configs[each.key].description
   role          = lookup(var.lambda_role_arns, each.key, "")
   handler       = "workers.${each.key}.handler.handle_request"
   runtime       = "python3.13"
@@ -154,11 +195,15 @@ resource "aws_lambda_function" "workers" {
     mode = "Active"
   }
 
-  reserved_concurrent_executions = 10
+  reserved_concurrent_executions = var.reserved_concurrent_executions
 
   environment {
     variables = local.worker_configs[each.key].env
   }
+
+  depends_on = [
+    aws_cloudwatch_log_group.logs
+  ]
 
   tags = var.tags
 }
@@ -166,7 +211,7 @@ resource "aws_lambda_function" "workers" {
 # CloudWatch Log Groups with retention and encryption
 resource "aws_cloudwatch_log_group" "logs" {
   for_each          = toset(local.workers)
-  name              = "/aws/lambda/${aws_lambda_function.workers[each.key].function_name}"
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-${each.key}"
   retention_in_days = 365
   kms_key_id        = var.cloudwatch_log_kms_key_arn
   tags              = var.tags

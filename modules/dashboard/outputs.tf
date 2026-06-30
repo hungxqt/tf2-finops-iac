@@ -52,3 +52,24 @@ output "quicksight_enabled" {
   description = "Boolean flag indicating whether QuickSight resources were enabled"
   value       = var.enable_quicksight
 }
+
+output "edge_auth_viewer_lambda_qualified_arn" {
+  description = "The qualified ARN of the viewer request authentication Lambda@Edge function"
+  value       = aws_lambda_function.edge_viewer_auth.qualified_arn
+}
+
+output "cognito_group_names" {
+  description = "The names of the Cognito user groups created"
+  value = [
+    aws_cognito_user_group.finance.name,
+    aws_cognito_user_group.engineering.name,
+    aws_cognito_user_group.cdo.name
+  ]
+}
+
+output "cloudfront_log_bucket_name" {
+  description = "The name of the dedicated CloudFront logs S3 bucket"
+  value       = aws_s3_bucket.cloudfront_logs.id
+}
+
+

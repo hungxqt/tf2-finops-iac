@@ -1,7 +1,12 @@
 import pytest
 import os
+import uuid
 from workers.state import handler
 import finops_common
+
+
+def expected_tenant_id(account_id):
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{account_id}"))
 
 def test_state_simulation_check():
     # Simulation mode check without PRIOR state
@@ -108,7 +113,8 @@ def test_state_prepare_run_context():
     
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
-    assert resp["tenant_id"] == "123456"
+    assert resp["tenant_id"] == expected_tenant_id("123456")
+    uuid.UUID(resp["correlation_id"])
     assert resp["is_ad_hoc"] is True
     assert resp["ai_contract_version"] == "v2"
     assert "run_id" in resp
@@ -116,6 +122,7 @@ def test_state_prepare_run_context():
     assert resp["force_dry_run"] is False
     assert resp["cur_retry"]["max"] == 4
     assert resp["ai_retry"]["max"] == 6
+    assert resp["ce_retry"]["max"] == 3
 
 def test_state_prepare_nested_input():
     event_data = {
@@ -128,9 +135,10 @@ def test_state_prepare_nested_input():
     }
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
-    assert resp["tenant_id"] == "999888"
+    assert resp["tenant_id"] == expected_tenant_id("999888")
     assert resp["is_ad_hoc"] is True
     assert resp["ai_contract_version"] == "v1.0"
+    assert resp["ce_retry"]["max"] == 3
 
 def test_state_prepare_defaulting():
     event_data = {
@@ -142,6 +150,75 @@ def test_state_prepare_defaulting():
     resp = handler.handle_request(event_data, None)
     assert resp["status"] == "OK"
     assert resp["is_ad_hoc"] is False  # Defaults to False
+
+
+def test_state_prepare_scheduled_multi_account():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": ["222222222222", "333333333333"],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "111111111111"
+    assert resp["analysis_targets"] == [
+        {"account_id": "222222222222", "tenant_id": handler._default_tenant_id("222222222222")},
+        {"account_id": "333333333333", "tenant_id": handler._default_tenant_id("333333333333")}
+    ]
+    assert resp["account_id"] == "111111111111"
+    assert resp["is_ad_hoc"] is False
+
+def test_state_prepare_manual_fallback():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "444444444444",
+            "is_ad_hoc": True
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "444444444444"
+    assert resp["analysis_targets"] == [{"account_id": "444444444444", "tenant_id": resp["tenant_id"]}]
+    assert resp["account_id"] == "444444444444"
+    assert resp["is_ad_hoc"] is True
+
+def test_state_prepare_legacy_double_wrapped():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "operation": "prepare",
+            "input": {
+                "management_account_id": "093490087544",
+                "analysis_targets": ["336805808730"],
+                "trigger_type": "scheduled",
+                "is_ad_hoc": False
+            }
+        }
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["management_account_id"] == "093490087544"
+    assert resp["analysis_targets"] == [{"account_id": "336805808730", "tenant_id": handler._default_tenant_id("336805808730")}]
+    assert resp["account_id"] == "093490087544"
+    assert resp["is_ad_hoc"] is False
+
+def test_state_prepare_scheduled_missing_targets_fails():
+    event_data = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": [],
+            "trigger_type": "scheduled"
+        }
+    }
+    with pytest.raises(ValueError, match="Scheduled run contains no analysis targets"):
+        handler.handle_request(event_data, None)
+
 
 
 def test_state_check_quota():
@@ -165,7 +242,7 @@ def test_state_check_quota():
 
 
 def test_state_check_error_budget():
-    # 1. Budget locked
+    # 1. Budget locked (simulation)
     event_data = {
         "run_id": "run-1",
         "correlation_id": "corr-1",
@@ -178,6 +255,10 @@ def test_state_check_error_budget():
     assert resp["status"] == "LOCKED"
     assert resp["locked"] is True
     assert resp["force_dry_run"] is True
+    # New fields must be present
+    assert "containment_status" in resp
+    assert "rollback_rate_30d_pct" in resp
+    assert "lock_threshold_pct" in resp
 
     # 2. Budget OK
     event_data["simulate_error_budget_locked"] = False
@@ -185,4 +266,219 @@ def test_state_check_error_budget():
     assert resp2["status"] == "OK"
     assert resp2["locked"] is False
     assert resp2["force_dry_run"] is False
+
+
+def test_state_error_budget_real_dynamodb_lookup():
+    """check_error_budget reads the real DynamoDB error budget table when configured."""
+    os.environ["ERROR_BUDGET_TABLE_NAME"] = "finops-error-budget-test"
+    # Reuse the run_state table env to trigger real DDB client mode in get_ddb_client
+    os.environ["RUN_STATE_TABLE_NAME"] = "finops-run-state-test"
+
+    db_items = {}
+
+    def fake_get_item(table_name, key):
+        return db_items.get(key.get("tenant_id"))
+
+    handler.ddb_client = finops_common.FakeDynamoDB(
+        get_item_func=fake_get_item,
+        put_item_func=lambda table, item: None
+    )
+
+    event_data = {
+        "run_id": "run-budget-1",
+        "correlation_id": "corr-budget-1",
+        "cost_period": "2026-06",
+        "operation": "check_error_budget",
+        "tenant_id": "budget-tenant-1",
+    }
+
+    # 1. No item in table → budget OK
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "OK"
+    assert resp["locked"] is False
+    assert resp["rollback_rate_30d_pct"] == 0.0
+
+    # 2. Item present with locked=True
+    db_items["budget-tenant-1"] = {
+        "tenant_id": "budget-tenant-1",
+        "locked": True,
+        "containment_status": "LOCKED",
+        "rollback_rate_30d_pct": 5.0,
+    }
+    resp2 = handler.handle_request(event_data, None)
+    assert resp2["status"] == "LOCKED"
+    assert resp2["locked"] is True
+    assert resp2["containment_status"] == "LOCKED"
+    assert resp2["rollback_rate_30d_pct"] == 5.0
+    assert resp2["force_dry_run"] is True
+
+    del os.environ["ERROR_BUDGET_TABLE_NAME"]
+    del os.environ["RUN_STATE_TABLE_NAME"]
+    handler.ddb_client = None
+
+
+def test_state_error_budget_prod_threshold_triggers_lock():
+    """For prod environment, rollback_rate >= 1% triggers automatic lock."""
+    os.environ["ERROR_BUDGET_TABLE_NAME"] = "finops-error-budget-test"
+    os.environ["RUN_STATE_TABLE_NAME"] = "finops-run-state-test"
+    os.environ["ENVIRONMENT"] = "prod"
+
+    def fake_get_item(table_name, key):
+        return {
+            "tenant_id": "tenant-prod",
+            "locked": False,           # not pre-locked
+            "rollback_rate_30d_pct": 1.5,  # exceeds 1% threshold
+            "containment_status": "ELEVATED",
+        }
+
+    handler.ddb_client = finops_common.FakeDynamoDB(
+        get_item_func=fake_get_item,
+        put_item_func=lambda table, item: None
+    )
+
+    event_data = {
+        "run_id": "run-prod",
+        "correlation_id": "corr-prod",
+        "cost_period": "2026-06",
+        "operation": "check_error_budget",
+        "tenant_id": "tenant-prod",
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["locked"] is True, "prod: rollback_rate >= 1% must trigger lock"
+    assert resp["lock_threshold_pct"] == 1.0
+    assert resp["force_dry_run"] is True
+
+    del os.environ["ENVIRONMENT"]
+    del os.environ["ERROR_BUDGET_TABLE_NAME"]
+    del os.environ["RUN_STATE_TABLE_NAME"]
+    handler.ddb_client = None
+
+
+def test_state_error_budget_staging_threshold():
+    """For staging environment, rollback_rate >= 10% triggers automatic lock."""
+    os.environ["ERROR_BUDGET_TABLE_NAME"] = "finops-error-budget-staging"
+    os.environ["RUN_STATE_TABLE_NAME"] = "finops-run-state-staging"
+    os.environ["ENVIRONMENT"] = "staging"
+
+    def fake_get_item(table_name, key):
+        return {
+            "tenant_id": "tenant-staging",
+            "locked": False,
+            "rollback_rate_30d_pct": 9.9,  # below threshold
+            "containment_status": "OK",
+        }
+
+    handler.ddb_client = finops_common.FakeDynamoDB(
+        get_item_func=fake_get_item,
+        put_item_func=lambda table, item: None
+    )
+
+    event_data = {
+        "run_id": "run-stg",
+        "correlation_id": "corr-stg",
+        "cost_period": "2026-06",
+        "operation": "check_error_budget",
+        "tenant_id": "tenant-staging",
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["locked"] is False, "staging: rollback_rate < 10% must not trigger lock"
+    assert resp["lock_threshold_pct"] == 10.0
+
+    del os.environ["ENVIRONMENT"]
+    del os.environ["ERROR_BUDGET_TABLE_NAME"]
+    del os.environ["RUN_STATE_TABLE_NAME"]
+    handler.ddb_client = None
+
+
+def test_state_error_budget_sandbox_no_automatic_lock():
+    """For sandbox/dev environment, threshold is None and no automatic lock is applied."""
+    os.environ["ERROR_BUDGET_TABLE_NAME"] = "finops-error-budget-sandbox"
+    os.environ["RUN_STATE_TABLE_NAME"] = "finops-run-state-sandbox"
+    os.environ["ENVIRONMENT"] = "sandbox"
+
+    def fake_get_item(table_name, key):
+        return {
+            "tenant_id": "tenant-sbx",
+            "locked": False,
+            "rollback_rate_30d_pct": 99.0,  # very high but sandbox has no automatic lock
+            "containment_status": "OK",
+        }
+
+    handler.ddb_client = finops_common.FakeDynamoDB(
+        get_item_func=fake_get_item,
+        put_item_func=lambda table, item: None
+    )
+
+    event_data = {
+        "run_id": "run-sbx",
+        "correlation_id": "corr-sbx",
+        "cost_period": "2026-06",
+        "operation": "check_error_budget",
+        "tenant_id": "tenant-sbx",
+    }
+    resp = handler.handle_request(event_data, None)
+    assert resp["locked"] is False, "sandbox: automatic lock must not be applied regardless of rate"
+    assert resp["lock_threshold_pct"] is None
+
+    del os.environ["ENVIRONMENT"]
+    del os.environ["ERROR_BUDGET_TABLE_NAME"]
+    del os.environ["RUN_STATE_TABLE_NAME"]
+    handler.ddb_client = None
+
+
+def test_state_prepare_propagation_details():
+    # 1. State Lambda scheduled multi-account prepare returns each target with deterministic per-account tenant_id.
+    event_data_multi = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": ["222222222222", "333333333333"],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp_multi = handler.handle_request(event_data_multi, None)
+    assert resp_multi["status"] == "OK"
+    targets = resp_multi["analysis_targets"]
+    assert len(targets) == 2
+    assert targets[0]["account_id"] == "222222222222"
+    assert targets[0]["tenant_id"] == handler._default_tenant_id("222222222222")
+    assert targets[1]["account_id"] == "333333333333"
+    assert targets[1]["tenant_id"] == handler._default_tenant_id("333333333333")
+
+    # 2. Manual single-account fallback still gets one target with matching tenant_id.
+    event_data_manual = {
+        "operation": "prepare",
+        "input": {
+            "account_id": "444444444444",
+            "tenant_id": "my-special-tenant",
+            "is_ad_hoc": True
+        }
+    }
+    resp_manual = handler.handle_request(event_data_manual, None)
+    assert resp_manual["status"] == "OK"
+    assert resp_manual["tenant_id"] == "my-special-tenant"
+    assert resp_manual["analysis_targets"] == [{"account_id": "444444444444", "tenant_id": "my-special-tenant"}]
+
+    # 3. Explicit target-level tenant_id is preserved.
+    event_data_explicit = {
+        "operation": "prepare",
+        "input": {
+            "management_account_id": "111111111111",
+            "analysis_targets": [
+                {"account_id": "222222222222", "tenant_id": "explicit-tenant-2"},
+                "333333333333"
+            ],
+            "trigger_type": "scheduled",
+            "is_ad_hoc": False
+        }
+    }
+    resp_explicit = handler.handle_request(event_data_explicit, None)
+    assert resp_explicit["status"] == "OK"
+    explicit_targets = resp_explicit["analysis_targets"]
+    assert len(explicit_targets) == 2
+    assert explicit_targets[0]["account_id"] == "222222222222"
+    assert explicit_targets[0]["tenant_id"] == "explicit-tenant-2"
+    assert explicit_targets[1]["account_id"] == "333333333333"
+    assert explicit_targets[1]["tenant_id"] == handler._default_tenant_id("333333333333")
 

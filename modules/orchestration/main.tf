@@ -176,30 +176,7 @@ resource "aws_dynamodb_table" "error_budget" {
   tags = var.tags
 }
 
-# - AI results table (Hash key: audit_id)
-resource "aws_dynamodb_table" "ai_results" {
-  name         = "${var.project_name}-${var.environment}-ai-results"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "audit_id"
 
-  attribute {
-    name = "audit_id"
-    type = "S"
-  }
-
-  server_side_encryption {
-    enabled     = true
-    kms_key_arn = var.ddb_kms_key_arn
-  }
-
-  point_in_time_recovery {
-    enabled = true
-  }
-
-
-
-  tags = var.tags
-}
 
 # - Rollback Cache table (Hash key: anomaly_id)
 resource "aws_dynamodb_table" "rollback_cache" {
@@ -231,9 +208,46 @@ resource "aws_dynamodb_table" "rollback_cache" {
   tags = var.tags
 }
 
+# - AI payload idempotency hot path (Hash key: idempotency_key, TTL: ttl_expiry)
+# Separate from run_state: this table is the contract idempotency store for /v1/detect,
+# /v1/decide, and /v1/verify; run_state remains Step Functions run-control only.
+resource "aws_dynamodb_table" "ai_payload_idempotency" {
+  name         = "finops-idempotency-${var.environment}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "idempotency_key"
+
+  attribute {
+    name = "idempotency_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl_expiry"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
 # CloudWatch Log Group for Step Functions execution logs
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-workflow"
+  retention_in_days = 365
+  kms_key_id        = var.cloudwatch_log_kms_key_arn
+  tags              = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "feedback_sfn" {
+  name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-human-feedback"
   retention_in_days = 365
   kms_key_id        = var.cloudwatch_log_kms_key_arn
   tags              = var.tags
@@ -254,15 +268,38 @@ resource "aws_sfn_state_machine" "workflow" {
     containment_worker_lambda_arn    = var.lambda_function_arns["containment_worker"]
     finance_alerts_sns_topic_arn     = var.finance_alerts_topic_arn
     engineering_alerts_sns_topic_arn = var.engineering_alerts_topic_arn
-    account_policy_table_name        = aws_dynamodb_table.account_policy.name
-    results_table_name               = aws_dynamodb_table.ai_results.name
-    rollback_cache_table_name        = aws_dynamodb_table.rollback_cache.name
-    rollback_status_queue_url        = aws_sqs_queue.rollback_status_queue.id
-    ai_engine_contract_version       = var.ai_engine_contract_version
+
+    account_policy_table_name  = aws_dynamodb_table.account_policy.name
+    rollback_cache_table_name  = aws_dynamodb_table.rollback_cache.name
+    rollback_status_queue_url  = aws_sqs_queue.rollback_status_queue.id
+    ai_engine_contract_version = var.ai_engine_contract_version
+    cur_retry_interval_seconds = var.cur_retry_interval_seconds
   })))
 
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+
+  tracing_configuration {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
+resource "aws_sfn_state_machine" "feedback" {
+  name     = "${var.project_name}-${var.environment}-human-feedback"
+  role_arn = aws_iam_role.step_functions.arn
+
+  definition = jsonencode(jsondecode(templatefile("${path.module}/feedback_statemachine.json", {
+    vpc_alb_caller_lambda_arn = var.lambda_function_arns["vpc_alb_caller"]
+    audit_writer_lambda_arn   = var.lambda_function_arns["audit_writer"]
+  })))
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.feedback_sfn.arn}:*"
     include_execution_data = true
     level                  = "ALL"
   }
@@ -280,6 +317,7 @@ resource "aws_scheduler_schedule" "run_workflow" {
   description = "Triggers the Step Functions workflow on a schedule"
   group_name  = "default"
   kms_key_arn = var.scheduler_kms_key_arn
+  state       = var.scheduler_enabled ? "ENABLED" : "DISABLED"
 
   schedule_expression = var.scheduler_expression
 
@@ -292,38 +330,24 @@ resource "aws_scheduler_schedule" "run_workflow" {
     role_arn = aws_iam_role.scheduler.arn
 
     input = jsonencode({
-      account_id   = data.aws_caller_identity.current.account_id
-      is_ad_hoc    = false
-      trigger_type = "scheduled"
+      management_account_id = data.aws_caller_identity.current.account_id
+      analysis_targets      = var.analysis_target_account_ids
+      is_ad_hoc             = false
+      trigger_type          = "scheduled"
     })
   }
 }
 
-# DLQ for the detection queue
-resource "aws_sqs_queue" "detection_dlq" {
-  name                              = "${var.project_name}-${var.environment}-detection-dlq"
-  kms_master_key_id                 = var.sqs_kms_key_arn
-  kms_data_key_reuse_period_seconds = 300
-  message_retention_seconds         = 1209600 # 14 days
-
-  tags = var.tags
+resource "terraform_data" "config_validation" {
+  lifecycle {
+    precondition {
+      condition     = !(var.scheduler_enabled && length(var.analysis_target_account_ids) == 0)
+      error_message = "EventBridge Scheduler is enabled but analysis_target_account_ids (telemetry_member_account_ids) is empty. At least one analysis target account ID is required when scheduler_enabled is true."
+    }
+  }
 }
 
-# Primary detection queue
-resource "aws_sqs_queue" "detection_queue" {
-  name                              = "${var.project_name}-${var.environment}-detection-queue"
-  kms_master_key_id                 = var.sqs_kms_key_arn
-  kms_data_key_reuse_period_seconds = 300
-  visibility_timeout_seconds        = 300
-  message_retention_seconds         = 1209600 # 14 days
 
-  redrive_policy = jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.detection_dlq.arn
-    maxReceiveCount     = 3
-  })
-
-  tags = var.tags
-}
 
 # Rollback/status queue
 resource "aws_sqs_queue" "rollback_status_queue" {

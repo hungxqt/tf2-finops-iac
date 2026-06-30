@@ -33,9 +33,19 @@ output "state_machine_arn" {
   value       = module.orchestration.state_machine_arn
 }
 
+output "feedback_state_machine_arn" {
+  description = "The ARN of the asynchronous human feedback Step Functions State Machine"
+  value       = module.orchestration.feedback_state_machine_arn
+}
+
 output "scheduler_arn" {
   description = "The ARN of the EventBridge Scheduler schedule"
   value       = module.orchestration.scheduler_arn
+}
+
+output "scheduler_state" {
+  description = "The state of the EventBridge Scheduler schedule"
+  value       = module.orchestration.scheduler_state
 }
 
 output "lambda_function_names" {
@@ -108,10 +118,11 @@ output "dashboard_athena_named_query_ids" {
   value       = module.dashboard.athena_named_query_ids
 }
 
-output "ecr_repository_url" {
-  description = "The ECR repository URL"
-  value       = module.ai_runtime_lambda.ecr_repository_url
+output "dashboard_cloudfront_log_bucket_name" {
+  description = "The name of the dedicated CloudFront logs S3 bucket"
+  value       = module.dashboard.cloudfront_log_bucket_name
 }
+
 
 output "request_lambda_function_name" {
   description = "The name of the AI Request Lambda function"
@@ -123,54 +134,14 @@ output "request_lambda_alias_arn" {
   value       = module.ai_runtime_lambda.request_lambda_alias_arn
 }
 
-output "worker_lambda_function_name" {
-  description = "The name of the AI Worker Lambda function"
-  value       = module.ai_runtime_lambda.worker_lambda_function_name
-}
-
-output "worker_lambda_alias_arn" {
-  description = "The ARN of the AI Worker Lambda live alias"
-  value       = module.ai_runtime_lambda.worker_lambda_alias_arn
-}
-
 output "request_execution_role_arn" {
   description = "The ARN of the AI Request Lambda execution role"
   value       = module.ai_runtime_lambda.request_execution_role_arn
 }
 
-output "worker_execution_role_arn" {
-  description = "The ARN of the AI Worker Lambda execution role"
-  value       = module.ai_runtime_lambda.worker_execution_role_arn
-}
-
-output "worker_event_source_mapping_uuid" {
-  description = "The UUID of the SQS worker event source mapping"
-  value       = module.ai_runtime_lambda.worker_event_source_mapping_uuid
-}
-
 output "ai_runtime_log_group_names" {
   description = "List of CloudWatch log group names created by the runtime"
   value       = module.ai_runtime_lambda.ai_runtime_log_group_names
-}
-
-output "detection_queue_url" {
-  description = "The URL of the primary detection SQS queue"
-  value       = module.orchestration.detection_queue_url
-}
-
-output "detection_queue_arn" {
-  description = "The ARN of the primary detection SQS queue"
-  value       = module.orchestration.detection_queue_arn
-}
-
-output "detection_dlq_url" {
-  description = "The URL of the detection SQS DLQ"
-  value       = module.orchestration.detection_dlq_url
-}
-
-output "detection_dlq_arn" {
-  description = "The ARN of the detection SQS DLQ"
-  value       = module.orchestration.detection_dlq_arn
 }
 
 output "rollback_status_queue_url" {
@@ -207,6 +178,27 @@ output "glue_catalog_tables" {
   description = "Map of Glue database and tables"
   value       = module.lakehouse.glue_catalog_tables
 }
+
+output "codedeploy_app_name" {
+  description = "The name of the CodeDeploy application"
+  value       = module.ai_runtime_lambda.codedeploy_app_name
+}
+
+output "codedeploy_deployment_group_name" {
+  description = "The name of the CodeDeploy deployment group"
+  value       = module.ai_runtime_lambda.codedeploy_deployment_group_name
+}
+
+output "request_lambda_alias_name" {
+  description = "The name of the request Lambda alias"
+  value       = module.ai_runtime_lambda.request_lambda_alias_name
+}
+
+output "request_lambda_latest_version" {
+  description = "The latest published version of the request Lambda function"
+  value       = module.ai_runtime_lambda.request_lambda_latest_version
+}
+
 
 
 

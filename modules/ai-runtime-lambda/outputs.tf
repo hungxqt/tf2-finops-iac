@@ -1,7 +1,3 @@
-output "ecr_repository_url" {
-  description = "The URL of the ECR repository"
-  value       = aws_ecr_repository.ai_engine.repository_url
-}
 
 output "request_lambda_function_name" {
   description = "The name of the AI Request Lambda function"
@@ -13,36 +9,15 @@ output "request_lambda_alias_arn" {
   value       = aws_lambda_alias.request.arn
 }
 
-output "worker_lambda_function_name" {
-  description = "The name of the AI Worker Lambda function"
-  value       = aws_lambda_function.worker.function_name
-}
-
-output "worker_lambda_alias_arn" {
-  description = "The ARN of the AI Worker Lambda live alias"
-  value       = aws_lambda_alias.worker.arn
-}
-
 output "request_execution_role_arn" {
   description = "The ARN of the AI Request Lambda execution role"
   value       = aws_iam_role.request.arn
 }
 
-output "worker_execution_role_arn" {
-  description = "The ARN of the AI Worker Lambda execution role"
-  value       = aws_iam_role.worker.arn
-}
-
-output "worker_event_source_mapping_uuid" {
-  description = "The UUID of the SQS worker event source mapping"
-  value       = aws_lambda_event_source_mapping.worker.uuid
-}
-
 output "ai_runtime_log_group_names" {
   description = "List of CloudWatch log group names created by the runtime"
   value = [
-    aws_cloudwatch_log_group.request.name,
-    aws_cloudwatch_log_group.worker.name
+    aws_cloudwatch_log_group.request.name
   ]
 }
 
@@ -61,3 +36,22 @@ output "alb_security_group_id" {
   value       = aws_security_group.alb.id
 }
 
+output "codedeploy_app_name" {
+  description = "The name of the CodeDeploy application"
+  value       = var.enable_codedeploy ? aws_codedeploy_app.request[0].name : null
+}
+
+output "codedeploy_deployment_group_name" {
+  description = "The name of the CodeDeploy deployment group"
+  value       = var.enable_codedeploy ? aws_codedeploy_deployment_group.request[0].deployment_group_name : null
+}
+
+output "request_lambda_alias_name" {
+  description = "The name of the request Lambda alias"
+  value       = aws_lambda_alias.request.name
+}
+
+output "request_lambda_latest_version" {
+  description = "The latest published version of the request Lambda function"
+  value       = aws_lambda_function.request.version
+}

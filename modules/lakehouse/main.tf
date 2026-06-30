@@ -3,6 +3,12 @@
 
 data "aws_caller_identity" "current" {}
 
+locals {
+  cur_data_export_source_account_ids = length(var.telemetry_member_account_ids) > 0 ? sort(distinct(var.telemetry_member_account_ids)) : [data.aws_caller_identity.current.account_id]
+  cur_export_bucket_name             = var.cur_export_bucket_name != "" ? var.cur_export_bucket_name : "tf2-finops-cur-export-bucket"
+  cur_export_bucket_arn              = "arn:aws:s3:::${local.cur_export_bucket_name}"
+}
+
 # Common KMS Key Policy Document
 data "aws_iam_policy_document" "kms_policy" {
   statement {
@@ -94,6 +100,7 @@ resource "aws_s3_bucket" "logging" {
   # checkov:skip=CKV_AWS_18: "Logging bucket does not need access logging itself"
   # checkov:skip=CKV_AWS_144: "Logging bucket does not need replication"
   # checkov:skip=CKV_AWS_21: "Logging bucket does not need versioning"
+  # checkov:skip=CKV_AWS_145: "S3 server access logging target bucket uses SSE-S3 because default SSE-KMS is not supported for S3 server access log delivery"
   # checkov:skip=CKV2_AWS_61: "Logging bucket does not need lifecycle configuration"
   # checkov:skip=CKV2_AWS_62: "Logging bucket does not need event notifications"
   bucket        = "${var.project_name}-${var.environment}-s3-logging"
@@ -112,19 +119,14 @@ resource "aws_s3_bucket_public_access_block" "logging" {
 resource "aws_s3_bucket_ownership_controls" "logging" {
   bucket = aws_s3_bucket.logging.id
   rule {
-    object_ownership = "BucketOwnerPreferred"
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
-resource "aws_s3_bucket_acl" "logging" {
-  depends_on = [
-    aws_s3_bucket_ownership_controls.logging,
-    aws_s3_bucket_public_access_block.logging,
-  ]
-  bucket = aws_s3_bucket.logging.id
-  acl    = "log-delivery-write"
-}
 
+
+# trivy:ignore:AVD-AWS-0132
+# trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "logging" {
   bucket = aws_s3_bucket.logging.id
   rule {
@@ -590,6 +592,153 @@ resource "aws_glue_catalog_table" "cur_data" {
   }
 }
 
+# Glue Catalog Table for Raw CUR 2.0 / Data Exports cost data
+resource "aws_glue_catalog_table" "raw_cur_data" {
+  name          = "raw_cur_data"
+  database_name = aws_glue_catalog_database.lakehouse.name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"                         = "parquet"
+    "projection.enabled"                     = "true"
+    "projection.billing_period.type"         = "date"
+    "projection.billing_period.range"        = "2024-01,2035-12"
+    "projection.billing_period.format"       = "yyyy-MM"
+    "projection.billing_period.interval"     = "1"
+    "projection.billing_period.interval.unit" = "MONTHS"
+    "storage.location.template"              = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+  }
+
+  partition_keys {
+    name = "billing_period"
+    type = "string"
+  }
+
+  storage_descriptor {
+    location      = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      name                  = "parquet"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns {
+      name = "bill_billing_period_start_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "bill_payer_account_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_account_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_line_item_type"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_start_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "line_item_usage_end_date"
+      type = "timestamp"
+    }
+
+    columns {
+      name = "line_item_product_code"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_type"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_operation"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_resource_id"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_usage_amount"
+      type = "double"
+    }
+
+    columns {
+      name = "pricing_unit"
+      type = "string"
+    }
+
+    columns {
+      name = "line_item_unblended_rate"
+      type = "double"
+    }
+
+    columns {
+      name = "line_item_unblended_cost"
+      type = "double"
+    }
+
+    columns {
+      name = "line_item_currency_code"
+      type = "string"
+    }
+
+    columns {
+      name = "product_product_name"
+      type = "string"
+    }
+
+    columns {
+      name = "product_region_code"
+      type = "string"
+    }
+
+    columns {
+      name = "product_instance_type"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_environment"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_owner"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_team"
+      type = "string"
+    }
+
+    columns {
+      name = "resource_tags_user_cost_center"
+      type = "string"
+    }
+  }
+}
+
 # Glue Catalog Table for Containment Audit Records
 resource "aws_glue_catalog_table" "containment_audit" {
   name          = "containment_audit"
@@ -931,5 +1080,176 @@ resource "terraform_data" "destroy_guard" {
   count = var.destroyable ? 0 : 1
   lifecycle {
     prevent_destroy = true
+  }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CUR 2.0 / AWS Data Exports Landing Bucket
+# This bucket receives raw CUR 2.0 exports written by bcm-data-exports.amazonaws.com.
+# It is distinct from the lakehouse bucket. cost_puller reads manifests and Parquet
+# files from here; no CDO-internal service writes to it.
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_s3_bucket" "cur_export" {
+  # checkov:skip=CKV_AWS_144: "CUR export landing bucket does not need cross-region replication (raw source only)"
+  # checkov:skip=CKV2_AWS_62: "CUR export landing bucket is polled by cost_puller and does not need event notifications"
+  count         = var.create_cur_export_bucket ? 1 : 0
+  bucket        = local.cur_export_bucket_name
+  force_destroy = var.destroyable
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "cur_export" {
+  count                   = var.create_cur_export_bucket ? 1 : 0
+  bucket                  = aws_s3_bucket.cur_export[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.data.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_logging" "cur_export" {
+  count         = var.create_cur_export_bucket ? 1 : 0
+  bucket        = aws_s3_bucket.cur_export[0].id
+  target_bucket = aws_s3_bucket.logging.id
+  target_prefix = "cur-export/"
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cur_export" {
+  count  = var.create_cur_export_bucket ? 1 : 0
+  bucket = aws_s3_bucket.cur_export[0].id
+
+  rule {
+    id     = "abort-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  dynamic "rule" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? var.telemetry_member_account_ids : (var.cur_raw_prefix != "" ? [var.cur_raw_prefix] : [])
+    content {
+      id     = "expire-raw-cur-${rule.value}"
+      status = "Enabled"
+      filter {
+        prefix = length(var.telemetry_member_account_ids) > 0 ? "${rule.value}/${var.cur_export_name}/" : "${rule.value}/"
+      }
+      expiration {
+        days = 90
+      }
+    }
+  }
+
+  dynamic "rule" {
+    for_each = length(var.telemetry_member_account_ids) == 0 && var.cur_raw_prefix == "" ? [1] : []
+    content {
+      id     = "expire-raw-cur-default"
+      status = "Enabled"
+      filter {}
+      expiration {
+        days = 90
+      }
+    }
+  }
+}
+
+# Bucket policy: allow bcm-data-exports to write only to raw CUR prefixes.
+# Deny all other writes and deny HTTP.
+# Per: https://docs.aws.amazon.com/cur/latest/userguide/dataexports-s3-bucket.html
+resource "aws_s3_bucket_policy" "cur_export" {
+  count      = var.create_cur_export_bucket ? 1 : 0
+  bucket     = aws_s3_bucket.cur_export[0].id
+  policy     = data.aws_iam_policy_document.cur_export[0].json
+  depends_on = [aws_s3_bucket_public_access_block.cur_export]
+}
+
+data "aws_iam_policy_document" "cur_export" {
+  count = var.create_cur_export_bucket ? 1 : 0
+
+  statement {
+    sid    = "DenyHTTP"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      local.cur_export_bucket_arn,
+      "${local.cur_export_bucket_arn}/*"
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  # Allow AWS Data Exports service to PUT raw CUR files under the configured prefix.
+  # aws:SourceArn and aws:SourceAccount conditions prevent confused-deputy attacks.
+  statement {
+    sid    = "AllowBCMDataExportsPut"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["bcm-data-exports.amazonaws.com"]
+    }
+    actions = [
+      "s3:PutObject"
+    ]
+    # Scope writes to the raw export prefix only; curated/, ai-input/, audit/, features/ are excluded.
+    resources = [
+      for acc in local.cur_data_export_source_account_ids : "${local.cur_export_bucket_arn}/*"
+    ]
+    condition {
+      test     = "StringLike"
+      variable = "aws:SourceArn"
+      values = [
+        for acc in local.cur_data_export_source_account_ids : "arn:aws:bcm-data-exports:us-east-1:${acc}:export/*"
+      ]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = local.cur_data_export_source_account_ids
+    }
+  }
+
+  # Deny writes to protected prefixes (curated, ai-input, audit, features) from all principals.
+  statement {
+    sid    = "DenyWritesToProtectedPrefixes"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:PutObject", "s3:DeleteObject"]
+    resources = [
+      "${local.cur_export_bucket_arn}/curated/*",
+      "${local.cur_export_bucket_arn}/ai-input/*",
+      "${local.cur_export_bucket_arn}/audit/*",
+      "${local.cur_export_bucket_arn}/features/*",
+    ]
   }
 }

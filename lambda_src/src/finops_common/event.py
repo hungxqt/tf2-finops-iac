@@ -87,7 +87,6 @@ class Response:
     payload_sha256: Optional[str] = None
     request_timestamp: Optional[str] = None
     telemetry_quality: Optional[float] = None
-    retry_after_seconds: Optional[int] = None
     force_dry_run: Optional[bool] = None
     details: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -109,8 +108,8 @@ class Response:
             severity=d.get("severity"),
             # khanh fix: FormatDecideResult trong statemachine gửi key "confidence_score", không phải "confidence"
             confidence=d.get("confidence") or d.get("confidence_score"),
-            execution_mode=d.get("execution_mode"),
-            containment_status=d.get("containment_status"),
+            execution_mode=d.get("execution_mode") or d.get("execution_mode_applied"),
+            containment_status=d.get("containment_status") or d.get("status"),
             audit_id=d.get("audit_id"),
             audit_uri=d.get("audit_uri"),
             route_target=d.get("route_target"),
@@ -120,7 +119,6 @@ class Response:
             payload_sha256=d.get("payload_sha256"),
             request_timestamp=d.get("request_timestamp"),
             telemetry_quality=d.get("telemetry_quality"),
-            retry_after_seconds=d.get("retry_after_seconds"),
             force_dry_run=d.get("force_dry_run"),
             details=d.get("details", {})
         )
@@ -171,8 +169,6 @@ class Response:
             d["request_timestamp"] = self.request_timestamp
         if self.telemetry_quality is not None:
             d["telemetry_quality"] = self.telemetry_quality
-        if self.retry_after_seconds is not None:
-            d["retry_after_seconds"] = self.retry_after_seconds
         if self.force_dry_run is not None:
             d["force_dry_run"] = self.force_dry_run
         return d
@@ -196,7 +192,6 @@ class Event:
     payload_sha256: str = ""
     request_timestamp: str = ""
     telemetry_quality: float = 0.0
-    retry_after_seconds: int = 0
     audit_id: str = ""
     force_dry_run: bool = False
 
@@ -233,7 +228,6 @@ class Event:
             payload_sha256=d.get("payload_sha256", ""),
             request_timestamp=d.get("request_timestamp", ""),
             telemetry_quality=d.get("telemetry_quality", 0.0),
-            retry_after_seconds=d.get("retry_after_seconds", 0),
             audit_id=d.get("audit_id", ""),
             force_dry_run=d.get("force_dry_run", False),
             cur_retry=CURRetryInfo.from_dict(d.get("cur_retry")),
@@ -268,7 +262,6 @@ class Event:
             "payload_sha256": self.payload_sha256,
             "request_timestamp": self.request_timestamp,
             "telemetry_quality": self.telemetry_quality,
-            "retry_after_seconds": self.retry_after_seconds,
             "audit_id": self.audit_id,
             "force_dry_run": self.force_dry_run,
         }

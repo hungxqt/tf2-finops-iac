@@ -60,4 +60,34 @@ foreach ($worker in $workers) {
     Remove-Item -Recurse -Force $TempDir
 }
 
+# 5. Package Lambda@Edge dashboard_auth
+Write-Host "Packaging Lambda@Edge: dashboard_auth..." -ForegroundColor Cyan
+$EdgeTempDir = Join-Path $PSScriptRoot "..\.build\temp_dashboard_auth"
+if (Test-Path $EdgeTempDir) {
+    Remove-Item -Recurse -Force $EdgeTempDir
+}
+New-Item -ItemType Directory -Force -Path $EdgeTempDir | Out-Null
+
+$EdgeSrcDir = Join-Path $LambdaSrcDir "edge\dashboard_auth"
+if (Test-Path $EdgeSrcDir) {
+    Copy-Item -Path (Join-Path $EdgeSrcDir "*.py") -Destination $EdgeTempDir -Force
+    
+    $EdgeZipPath = Join-Path $BuildDir "dashboard_auth.zip"
+    if (Test-Path $EdgeZipPath) {
+        Remove-Item -Force $EdgeZipPath
+    }
+    
+    Push-Location $EdgeTempDir
+    try {
+        Compress-Archive -Path * -DestinationPath $EdgeZipPath -Force
+    } finally {
+        Pop-Location
+    }
+}
+
+if (Test-Path $EdgeTempDir) {
+    Remove-Item -Recurse -Force $EdgeTempDir
+}
+
 Write-Host "Python Lambda packaging complete! Artifacts are in: $BuildDir" -ForegroundColor Green
+

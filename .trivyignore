@@ -1,0 +1,8 @@
+# Accepted Terraform plan-snapshot exceptions.
+# AWS-0054: Internal ALB can use sandbox-gated HTTP fallback when TLS is disabled for local/non-prod integration.
+AWS-0054
+AVD-AWS-0054
+
+# AWS-0132: CloudFront standard log delivery bucket must use SSE-S3 because KMS is not supported for this log target.
+AWS-0132
+AVD-AWS-0132

@@ -82,3 +82,39 @@ variable "destroyable" {
   type        = bool
   description = "Set to true to make dashboard data S3 bucket destroyable (Sandbox exceptions)"
 }
+
+variable "dashboard_replica_kms_key_arn" {
+  type        = string
+  description = "The ARN of the KMS key in the replica region"
+}
+
+variable "auth_cookie_ttl" {
+  type        = number
+  description = "The cookie TTL in seconds"
+  default     = 3600
+}
+
+variable "auth_session_ttl" {
+  type        = number
+  description = "The Cognito session token validity duration in seconds"
+  default     = 3600
+}
+
+variable "group_name_finance" {
+  type        = string
+  description = "Cognito group name for Finance Read-Only users"
+  default     = "finops-finance-readonly"
+}
+
+variable "group_name_engineering" {
+  type        = string
+  description = "Cognito group name for Engineering Operator users"
+  default     = "finops-engineering-operator"
+}
+
+variable "group_name_cdo" {
+  type        = string
+  description = "Cognito group name for CDO Admin users"
+  default     = "finops-cdo-admin"
+}
+

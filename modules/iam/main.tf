@@ -16,14 +16,25 @@ data "aws_iam_policy_document" "boundary" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
     ]
-    resources = [
-      var.lakehouse_bucket_arn,
-      "${var.lakehouse_bucket_arn}/*",
-      var.audit_bucket_arn,
-      "${var.audit_bucket_arn}/*"
-    ]
+    resources = concat(
+      [
+        var.lakehouse_bucket_arn,
+        "${var.lakehouse_bucket_arn}/*",
+        var.audit_bucket_arn,
+        "${var.audit_bucket_arn}/*"
+      ],
+      var.cur_source_bucket_arn != "" ? [
+        var.cur_source_bucket_arn,
+        "${var.cur_source_bucket_arn}/*"
+      ] : [],
+      var.athena_results_bucket_arn != "" ? [
+        var.athena_results_bucket_arn,
+        "${var.athena_results_bucket_arn}/*"
+      ] : []
+    )
   }
 
   statement {
@@ -42,9 +53,38 @@ data "aws_iam_policy_document" "boundary" {
     effect = "Allow"
     actions = [
       "kms:Decrypt",
-      "kms:GenerateDataKey"
+      "kms:GenerateDataKey",
+      "kms:Encrypt"
     ]
     resources = var.kms_key_arns
+  }
+
+  statement {
+    sid    = "AllowAthenaActions"
+    effect = "Allow"
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = var.athena_workgroup_arn != "" ? [var.athena_workgroup_arn] : ["*"]
+  }
+
+  statement {
+    sid    = "AllowGlueActions"
+    effect = "Allow"
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = compact([
+      var.glue_database_arn != "" ? var.glue_database_arn : "",
+      var.cur_data_table_arn != "" ? var.cur_data_table_arn : "",
+      "arn:aws:glue:*:*:catalog"
+    ])
   }
 
   statement {
@@ -103,6 +143,41 @@ data "aws_iam_policy_document" "boundary" {
   }
 
   statement {
+    # checkov:skip=CKV_AWS_111: "Lambda VPC ENI management actions require wildcard resource *"
+    # checkov:skip=CKV_AWS_356: "ec2:CreateNetworkInterface, ec2:DescribeNetworkInterfaces, ec2:DescribeSubnets, ec2:DeleteNetworkInterface require wildcard resource *"
+    sid    = "AllowLambdaVPCAccess"
+    effect = "Allow"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "DenyENIFromFunctionCode"
+    effect = "Deny"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses"
+    ]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "lambda:SourceFunctionArn"
+      values   = ["false"]
+    }
+  }
+
+  statement {
     # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and xray:* do not support resource-level permissions"
     # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and xray:* require wildcard resource *"
     # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
@@ -142,6 +217,19 @@ data "aws_iam_policy_document" "boundary" {
       effect    = "Deny"
       actions   = ["ec2:StopInstances"]
       resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
+    content {
+      sid    = "AllowSTSAssumeAndTagSession"
+      effect = "Allow"
+      actions = [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
+      resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
     }
   }
 }
@@ -211,9 +299,54 @@ resource "aws_iam_role_policy" "cost_puller" {
 
 data "aws_iam_policy_document" "cost_puller" {
   statement {
-    actions   = ["s3:PutObject"]
+    sid       = "AllowLakehouseTelemetryList"
+    actions   = ["s3:ListBucket"]
+    resources = [var.lakehouse_bucket_arn]
+  }
+
+  statement {
+    sid = "AllowLakehouseObjectAccess"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
     resources = ["${var.lakehouse_bucket_arn}/*"]
   }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "AllowCURSourceList"
+      actions   = ["s3:ListBucket"]
+      resources = [var.cur_source_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid     = "AllowCURSourceGet"
+      actions = ["s3:GetObject", "s3:HeadObject"]
+      resources = length(var.telemetry_member_account_ids) > 0 ? [
+        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
+        ] : [
+        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
+    content {
+      sid = "AllowAssumeRoleInMembers"
+      actions = [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
+      resources = [for acc in var.telemetry_member_account_ids : "arn:aws:iam::${acc}:role/${var.telemetry_member_role_name}"]
+    }
+  }
+
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
@@ -221,10 +354,20 @@ data "aws_iam_policy_document" "cost_puller" {
       resources = var.kms_key_arns
     }
   }
+
   statement {
     # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
     # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
+    sid       = "AllowCostExplorer"
     actions   = ["ce:GetCostAndUsage"]
+    resources = ["*"]
+  }
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "cloudwatch:GetMetricData does not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "cloudwatch:GetMetricData requires wildcard resource"
+    sid       = "AllowCloudWatchMetricData"
+    actions   = ["cloudwatch:GetMetricData"]
     resources = ["*"]
   }
 }
@@ -238,14 +381,63 @@ resource "aws_iam_role_policy" "normalizer" {
 
 data "aws_iam_policy_document" "normalizer" {
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${var.lakehouse_bucket_arn}/*"]
+    actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [
+      var.lakehouse_bucket_arn,
+      "${var.lakehouse_bucket_arn}/*",
+      var.athena_results_bucket_arn,
+      "${var.athena_results_bucket_arn}/*"
+    ]
+  }
+  statement {
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = [var.athena_workgroup_arn]
+  }
+  statement {
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = [
+      var.glue_database_arn,
+      var.cur_data_table_arn,
+      "arn:aws:glue:*:*:catalog"
+    ]
   }
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []
     content {
-      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:Encrypt"]
       resources = var.kms_key_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "AllowCURSourceList"
+      actions   = ["s3:ListBucket"]
+      resources = [var.cur_source_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cur_source_bucket_arn != "" ? [1] : []
+    content {
+      sid     = "AllowCURSourceGet"
+      actions = ["s3:GetObject", "s3:HeadObject"]
+      resources = length(var.telemetry_member_account_ids) > 0 ? [
+        for acc in var.telemetry_member_account_ids : "${var.cur_source_bucket_arn}/${acc}/${var.cur_export_name}/*"
+        ] : [
+        var.cur_source_prefix != "" ? "${var.cur_source_bucket_arn}/${var.cur_source_prefix}*" : "${var.cur_source_bucket_arn}/*"
+      ]
     }
   }
 }
@@ -344,21 +536,56 @@ data "aws_iam_policy_document" "containment_worker" {
       }
     }
   }
-}
 
-# Cross-account cost data read and containment documents for outputs
-data "aws_iam_policy_document" "member_read" {
+  # Cross-account AssumeRole into member accounts for containment execution
   statement {
-    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage does not support resource-level permissions"
-    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage requires wildcard resource"
-    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage and member S3 cost reading require wildcard permissions"
-    actions = [
-      "ce:GetCostAndUsage",
-      "s3:GetObject"
-    ]
-    resources = ["*"]
+    # checkov:skip=CKV_AWS_111: "sts:AssumeRole for cross-account containment requires member account role ARNs"
+    sid     = "AssumeContainmentRoleInMembers"
+    actions = ["sts:AssumeRole"]
+    resources = length(var.telemetry_member_account_ids) > 0 ? [
+      for acc in var.telemetry_member_account_ids :
+      "arn:aws:iam::${acc}:role/FinOpsContainmentWorkerRole"
+    ] : ["arn:aws:iam::*:role/FinOpsContainmentWorkerRole"]
+  }
+
+  # Write pre-action and post-action audit records to S3 Object Lock
+  statement {
+    sid       = "AuditBucketWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.audit_bucket_arn}/audit/*"]
+  }
+
+  # Update DynamoDB Dashboard Cache (best-effort)
+  statement {
+    sid       = "DashboardCacheWrite"
+    actions   = ["dynamodb:PutItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Cache and read rollback payload (finops-rollback-cache)
+  statement {
+    sid       = "RollbackCacheReadWrite"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem"]
+    resources = var.dynamodb_table_arns
+  }
+
+  # Read external_id from Secrets Manager
+  statement {
+    sid       = "SecretsManagerContainmentExternalId"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:*:*:secret:finops/containment/*"]
+  }
+
+  dynamic "statement" {
+    for_each = length(var.kms_key_arns) > 0 ? [1] : []
+    content {
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      resources = var.kms_key_arns
+    }
   }
 }
+
+# Cross-account containment documents for outputs
 
 data "aws_iam_policy_document" "member_containment" {
   statement {
@@ -370,6 +597,30 @@ data "aws_iam_policy_document" "member_containment" {
       "ec2:StopInstances"
     ]
     resources = ["*"]
+  }
+}
+
+# 7. VpcAlbCaller – dedicated idempotency table policy (least-privilege)
+# Only created when ai_payload_idempotency_table_arn is provided.
+# This scopes vpc_alb_caller to ONLY the idempotency table, not all DynamoDB tables.
+resource "aws_iam_role_policy" "vpc_alb_caller_idempotency" {
+  count  = var.ai_payload_idempotency_table_arn != "" ? 1 : 0
+  name   = "vpc_alb_caller-idempotency-policy"
+  role   = aws_iam_role.workers["vpc_alb_caller"].id
+  policy = data.aws_iam_policy_document.vpc_alb_caller_idempotency[0].json
+}
+
+data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {
+  count = var.ai_payload_idempotency_table_arn != "" ? 1 : 0
+
+  statement {
+    sid = "VpcAlbCallerIdempotencyTableAccess"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem"
+    ]
+    resources = [var.ai_payload_idempotency_table_arn]
   }
 }
 
@@ -391,4 +642,82 @@ data "aws_iam_policy_document" "xray" {
     ]
     resources = ["*"]
   }
+}
+
+resource "aws_iam_role_policy" "workers_sqs" {
+  for_each = toset(local.worker_names)
+  name     = "sqs-dlq-policy"
+  role     = aws_iam_role.workers[each.key].id
+  policy   = data.aws_iam_policy_document.workers_sqs.json
+}
+
+data "aws_iam_policy_document" "workers_sqs" {
+  dynamic "statement" {
+    for_each = length(var.queue_arns) > 0 ? [1] : []
+    content {
+      # checkov:skip=CKV_AWS_111: "SQS DLQ SendMessage action is scoped to the specifically passed queue ARNs"
+      # checkov:skip=CKV_AWS_356: "SQS DLQ SendMessage action requires queue ARNs which may be dynamically generated"
+      sid    = "AllowSQSSendMessage"
+      effect = "Allow"
+      actions = [
+        "sqs:SendMessage"
+      ]
+      resources = var.queue_arns
+    }
+  }
+}
+
+data "aws_iam_policy_document" "member_telemetry_assume_role" {
+  count = var.create_member_telemetry_ingestion_role ? 1 : 0
+  statement {
+    actions = [
+      "sts:AssumeRole",
+      "sts:TagSession"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = var.trusted_cost_puller_role_arns
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "sts:ExternalId"
+      values   = var.trusted_tenant_ids
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/tenant_id"
+      values   = var.trusted_tenant_ids
+    }
+  }
+}
+
+# checkov:skip=CKV_AWS_274: "Permissions boundary is managed at the organization level or by the member account platform controls"
+resource "aws_iam_role" "member_telemetry_ingestion" {
+  count              = var.create_member_telemetry_ingestion_role ? 1 : 0
+  name               = var.telemetry_member_role_name
+  assume_role_policy = data.aws_iam_policy_document.member_telemetry_assume_role[0].json
+  tags               = var.tags
+}
+
+data "aws_iam_policy_document" "member_telemetry_ingestion" {
+  count = var.create_member_telemetry_ingestion_role ? 1 : 0
+
+  statement {
+    # checkov:skip=CKV_AWS_111: "ce:GetCostAndUsage and cloudwatch:GetMetricData do not support resource-level permissions"
+    # checkov:skip=CKV_AWS_356: "ce:GetCostAndUsage and cloudwatch:GetMetricData require wildcard resource"
+    # checkov:skip=CKV_AWS_108: "ce:GetCostAndUsage requires wildcard resource *"
+    sid = "AllowMemberCostExplorerAndMetrics"
+    actions = [
+      "ce:GetCostAndUsage",
+      "cloudwatch:GetMetricData"
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "member_telemetry_ingestion" {
+  count  = var.create_member_telemetry_ingestion_role ? 1 : 0
+  name   = "member-telemetry-ingestion-policy"
+  role   = aws_iam_role.member_telemetry_ingestion[0].id
+  policy = data.aws_iam_policy_document.member_telemetry_ingestion[0].json
 }

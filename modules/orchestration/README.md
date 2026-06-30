@@ -2,6 +2,12 @@
 
 Provisions the Step Functions standard state machine, DynamoDB state tables (run state, anomalies, routing, containment audit, materialized views), and EventBridge Scheduler triggers.
 
+## Scheduler Activation Guard
+
+By default, the EventBridge Scheduler is created in a `DISABLED` state (`scheduler_enabled = false`) to prevent daily workflow executions from running immediately after the initial infrastructure apply. 
+
+To activate daily executions, a separate reviewed plan must be applied setting `scheduler_enabled = true`.
+
 ## Usage Example
 
 ```hcl

@@ -35,14 +35,7 @@ variable "request_image_uri" {
   }
 }
 
-variable "worker_image_uri" {
-  type        = string
-  description = "ECR image URI with immutable digest for the AI Worker Lambda function"
-  validation {
-    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.worker_image_uri))
-    error_message = "The worker_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
-  }
-}
+
 
 variable "replica_region" {
   type        = string
@@ -99,5 +92,108 @@ variable "destroyable" {
   type        = bool
   description = "Set to true to make S3 buckets, KMS keys, ECR, etc. destroyable (Sandbox exceptions)"
   default     = true
+}
+
+variable "cur_source_bucket" {
+  type        = string
+  description = "The source S3 bucket where raw CUR is delivered"
+  default     = ""
+}
+
+variable "cur_source_prefix" {
+  type        = string
+  description = "The prefix under cur_source_bucket for CUR files"
+  default     = ""
+}
+
+variable "cur_delay_threshold_hours" {
+  type        = number
+  description = "The threshold in hours to consider CUR as delayed"
+  default     = 36
+}
+
+variable "ce_lookback_window_days" {
+  type        = number
+  description = "The lookback window in days for Cost Explorer queries"
+  default     = 30
+}
+
+variable "traffic_metric_identifiers" {
+  type        = list(string)
+  description = "List of identifiers for traffic volume query (e.g. ALB names)"
+  default     = []
+}
+
+variable "telemetry_member_account_ids" {
+  type        = list(string)
+  description = "AWS Account IDs for member accounts from which CDO pulls telemetry"
+  default     = []
+}
+
+variable "telemetry_member_role_name" {
+  type        = string
+  description = "The IAM role name expected in member accounts for CDO telemetry ingestion"
+  default     = "cdo-telemetry-ingestion-role"
+}
+
+variable "cur_source_bucket_arn" {
+  type        = string
+  description = "The ARN of the member CUR source S3 bucket"
+  default     = ""
+}
+
+variable "create_member_telemetry_ingestion_role" {
+  type        = bool
+  description = "Whether to create the member telemetry ingestion role in this deployment context"
+  default     = false
+}
+
+variable "trusted_cost_puller_role_arns" {
+  type        = list(string)
+  description = "The ARNs of trusted cost puller IAM roles allowed to assume the ingestion role"
+  default     = []
+}
+
+variable "cur_exports_json" {
+  type        = string
+  description = "JSON string (account-keyed map) of CUR 2.0 Data Exports config per member account. If set, this manual override takes precedence over the automatically generated config from telemetry_member_account_ids and cur_export_name. Advanced/explicit use only."
+  default     = ""
+}
+
+variable "cur_export_name" {
+  type        = string
+  description = "The AWS Data Exports export name (e.g. accountCUR) used to generate prefixes"
+  default     = "accountCUR"
+}
+
+
+variable "create_cur_export_bucket" {
+  type        = bool
+  description = "Set to true to create the dedicated CUR 2.0 / AWS Data Exports landing bucket via the lakehouse module."
+  default     = false
+}
+
+variable "cur_export_bucket_name" {
+  type        = string
+  description = "Override name for the CUR 2.0 export landing bucket. Defaults to 'tf2-finops-cur-export-bucket' when empty."
+  default     = ""
+}
+
+variable "cur_raw_prefix" {
+  type        = string
+  description = "S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR 2.0 Parquet files (e.g. 'finops-cur-export'). Used for IAM scoping and bcm-data-exports bucket policy."
+  default     = ""
+}
+
+variable "enable_alb_https" {
+  type        = bool
+  description = "Enable HTTPS for the internal ALB. If false, HTTP port 80 is used (Sandbox only)."
+  default     = true
+}
+
+variable "scheduler_enabled" {
+  type        = bool
+  description = "Whether to enable the EventBridge Scheduler schedule (triggers daily workflow runs). If false, the schedule state is DISABLED."
+  default     = false
 }
 

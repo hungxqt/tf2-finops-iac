@@ -9,7 +9,7 @@ Di chuyển toàn bộ bảy Lambda worker và thư viện dùng chung từ Go c
 - **State Worker (`state`)**: Di chuyển logic kiểm tra trạng thái chạy DynamoDB và tính phân thân (idempotency).
 - **Cost Puller (`cost_puller`)**: Di chuyển logic kéo chi phí CUR giả lập và chế độ ghi đè mô phỏng (`simulate-cur-delay`, `simulate-ce-throttled`).
 - **Normalizer (`normalizer`)**: Di chuyển logic phân tích cú pháp chi phí S3 thô, lọc các trường bắt buộc, và ánh xạ owner bị thiếu sang "untagged".
-- **AI Client (`ai_client`)**: Di chuyển logic xác thực danh sách host được phép (allowed hosts), lấy token Secrets Manager, thực thi HTTPS, và cơ chế đóng an toàn khi containment không an toàn trên prod.
+- **VPC ALB Caller (`vpc_alb_caller`)**: Di chuyển cơ chế gọi ALB nội bộ private, ký yêu cầu IAM SigV4, và định tuyến HTTPS để tích hợp an toàn với AI Engine.
 - **Router (`router`)**: Di chuyển logic ánh xạ mức độ nghiêm trọng (severity), đích điều hướng cảnh báo, và lưu trữ tùy chọn trạng thái điều hướng vào DynamoDB.
 - **Audit Writer (`audit_writer`)**: Di chuyển logic suy luận loại kiểm toán, định dạng các trường chi tiết, ghi tài liệu S3, và lập chỉ mục trong DynamoDB.
 - **Containment Worker (`containment_worker`)**: Di chuyển logic cô lập dựa trên môi trường, yêu cầu phê duyệt trên sandbox, và chặn các hành động phá hủy (terminate, delete, modify_iam).

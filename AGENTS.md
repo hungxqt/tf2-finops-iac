@@ -27,7 +27,7 @@ This repo owns:
 - Lambda container AI hosting infrastructure: `modules/ai-runtime-lambda` providing ECR repository (digest-pinned images, scan-on-push), AI Engine Request Lambda and Worker Lambda (`package_type = "Image"`), Lambda aliases/versions, reserved concurrency and optional provisioned concurrency, SQS event source mapping, KMS-encrypted CloudWatch log groups, and X-Ray tracing.
 - Finance and Engineering alert routing, dashboard infrastructure hooks, containment audit records, and operational observability.
 - Least-privilege IAM roles for CDO workflow execution, read-only cost ingestion, Lambda VPC-endpoint access, and tightly scoped non-prod containment.
-- AI Engine integration infrastructure: Step Functions direct Lambda invocation, SQS detection queue and DLQ, DynamoDB result/idempotency/state/error-budget tables, S3 evidence/checkpoint paths, IAM SigV4 authentication, timeout/retry/circuit-breaker settings, unavailable-AI fallback wiring, and audit storage paths.
+- AI Engine integration infrastructure: Step Functions execution, SQS alert retry and rollback completion notification queues, DynamoDB run-state/idempotency/error-budget tables, S3 evidence/checkpoint paths, IAM SigV4 authentication, timeout/retry/circuit-breaker settings, unavailable-AI fallback wiring, and audit storage paths.
 - Contract implementation scaffolding for API integration, telemetry collection/normalization, SLO monitoring, queue/state infrastructure, deployment gates, and security guardrails described under `docs/contracts`.
 
 This repo does not own:
@@ -98,9 +98,6 @@ tf2-finops-iac/
 │   │   │   └── utils.py
 │   │   └── workers/
 │   │       ├── __init__.py
-│   │       ├── ai_client/
-│   │       │   ├── __init__.py
-│   │       │   └── handler.py
 │   │       ├── audit_writer/
 │   │       │   ├── __init__.py
 │   │       │   └── handler.py
@@ -113,19 +110,24 @@ tf2-finops-iac/
 │   │       ├── normalizer/
 │   │       │   ├── __init__.py
 │   │       │   └── handler.py
-│   │       └── router/
+│   │       ├── router/
+│   │       │   ├── __init__.py
+│   │       │   └── handler.py
+│   │       └── vpc_alb_caller/
 │   │           ├── __init__.py
 │   │           └── handler.py
 │   └── tests/
 │       ├── conftest.py
-│       ├── test_ai_client.py
 │       ├── test_audit_writer.py
 │       ├── test_containment_worker.py
 │       ├── test_cost_puller.py
 │       ├── test_finops_common.py
 │       ├── test_normalizer.py
 │       ├── test_router.py
-│       └── test_state.py
+│       ├── test_state.py
+│       ├── test_state_machine.py
+│       ├── test_step_function_lambda_coverage.py
+│       └── test_vpc_alb_caller.py
 ├── modules/
 │   ├── ai-runtime-lambda/
 │   │   ├── README.md
@@ -225,8 +227,9 @@ tf2-finops-iac/
 - Drift detection must alert or open an issue. It must not auto-apply changes.
 - Keep Lambda worker code minimal, deployable, contract-validating, and safe by default.
 - Use Lambda for short CDO adapters and policy workers, and host the AIOps-provided AI Engine runtime using the AWS Lambda container platform infrastructure provisioned in modules/ai-runtime-lambda.
-- Configure AI Engine integration through versioned contract inputs: contract version, AI Engine Request Lambda ARN, IAM SigV4 authentication, required tenant/idempotency/correlation headers, timeout, retry policy, circuit-breaker behavior, DynamoDB result-polling behavior, and fail-closed fallback behavior.
-- The default AI Engine execution path is: Step Functions → AI Engine Request Lambda (direct invocation) → SQS detection queue → AI Engine Worker Lambda (event source mapping) → DynamoDB results table / S3 evidence → Step Functions (direct DynamoDB getItem polling).
+- Configure AI Engine integration through versioned contract inputs: contract version, AI Engine Request Lambda ARN, IAM SigV4 authentication, required tenant/idempotency/correlation headers, timeout, retry policy, circuit-breaker behavior, and fail-closed fallback behavior.
+- The active, approved AI Engine execution path is: Step Functions → VpcAlbCallerLambda → private internal HTTPS ALB → AI Request Lambda live alias. The endpoints `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous; `/v1/status/{id}` is used for remediation/self-healing status only and is not for detection polling.
+- Restrict SQS/DLQ to alert retry and `finops-watch-rollback` audit completion notifications, with no detection SQS or result-polling loop in the default path, unless a future contract explicitly changes this.
 - If the AI Engine is unavailable, fails schema validation, times out, returns a cross-tenant result, exceeds rate limits, or returns an unsafe recommendation, fail closed for containment: do not apply automatic containment, alert operators through the static/rule-based fallback path where applicable, preserve run state, and write an audit record.
 - Use CDO as the telemetry source of truth. AI Engine components must not directly pull CDO-owned Cost Explorer, CUR, CloudWatch, Athena, Glue, or containment-state data unless a user explicitly changes the ownership boundary.
 - Reusable modules must support `destroyable = true` for sandbox teardown, but default to protected behavior (`destroyable = false`) for staging/prod.
@@ -283,7 +286,7 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 
 ### Required contract reads
 
-- Read `docs/contracts/ai-api-contract.md` before changing `lambda_src/src/workers/ai_client/**`, `modules/compute-lambda`, `modules/ai-runtime-lambda`, `modules/orchestration`, AI Engine Lambda variables, Step Functions AI states, DynamoDB result-polling states, dashboard actions that poll AI results, or tests for AI integration.
+- Read `docs/contracts/ai-api-contract.md` before changing `lambda_src/src/workers/vpc_alb_caller/**`, `modules/compute-lambda`, `modules/ai-runtime-lambda`, `modules/orchestration`, AI Engine Lambda variables, Step Functions AI states, or tests for AI integration.
 - Read `docs/contracts/telemetry-contract.md` before changing `lambda_src/src/workers/cost_puller/**`, `lambda_src/src/workers/normalizer/**`, `modules/lakehouse`, Glue/Athena resources, telemetry schemas, cost-data prefixes, S3 pointer behavior, tenant context, idempotency, quality scoring, or tests for ingestion/normalization.
 - Read `docs/contracts/deployment-contract.md` before changing `modules/networking`, `modules/iam`, `modules/ai-runtime-lambda`, `modules/orchestration`, `modules/observability`, queue/DLQ resources, CI deployment gates, canary/rollback controls, or security scans.
 
@@ -292,14 +295,14 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 - `AGENTS.md` and explicit user instructions decide repository ownership and platform target. Future implementation agents must follow the active `docs/tf2-finops` architecture, which describes the AI Engine integration via a private internal HTTPS ALB.
 - The active, approved AI Engine integration path is: `Step Functions` -> `VpcAlbCallerLambda` -> `private internal ALB` -> `AI Request Lambda (live alias)`.
 - AGENTS.md must enforce repository safety and implementation rules, but must not contradict active `docs/tf2-finops` architecture or `docs/contracts`.
-- ECS Cluster, Fargate/Fargate Spot capacity providers, Private API Gateway, EKS, Kubernetes, and Argo CD are **not** part of the active AI hosting platform. Any references to these in `docs/contracts/**` or older ADRs are stale or superseded transport wording.
+- ECS Cluster, Fargate/Fargate Spot capacity providers, Private API Gateway, EKS, Kubernetes, and Argo CD are **not** part of the active AI hosting platform. Any references to these in `docs/contracts/**` or older ADRs are reference or superseded transport wording that is superseded by the active private ALB Lambda-container design.
 - Where contracts or design documents mention transport mechanisms like ECS Fargate clusters or Private API Gateways, these are treated as stale or superseded transport names. The physical private internal ALB is active, and it is the physical integration target of the `VpcAlbCallerLambda`.
 - Specifically, the logical HTTPS `/v1/*` endpoints are mapped to standard Lambda target group invocations via the internal ALB, keeping the API contract behaviorally compatible.
 
 ### AI API contract requirements
 
 - AI integration requires implementing these logical operations: `/v1/detect`, `/v1/decide`, `/v1/verify`, `/v1/status/{id}` (for remediation/self-healing status only), `/v1/audit/{audit_id}/rollback` (for result notification), and `/health`.
-- Step Functions invokes the `VpcAlbCallerLambda` with the target path (e.g. `/v1/detect`), which forwards the request to the internal HTTPS ALB, which in turn invokes the AI Engine Request Lambda live alias. The logical `/v1/detect` submission and result polling contracts are fully preserved.
+- Step Functions invokes the `VpcAlbCallerLambda` with the target path (e.g. `/v1/detect`), which forwards the request to the internal HTTPS ALB, which in turn invokes the AI Engine Request Lambda live alias. The logical `/v1/detect` submission and synchronous response contracts are fully preserved.
 - AI Engine calls must require secure context headers: `Content-Type`, `Accept`, `X-Tenant-Id` (tenant isolation), `X-Idempotency-Key` (idempotency check), `X-Correlation-Id` (correlation ID), `X-Payload-SHA256` (payload hash), `X-Request-Timestamp` (request timestamp), and `X-Dry-Run-Mode` (dry-run mode). Communication is secured via AWS IAM SigV4 (`Authorization`).
 - Do not use static API keys or bearer tokens as the long-term authentication design. If placeholder secret material exists for local tests, keep it non-production, non-real, and document it as a stub.
 - Support both `RAW_JSON` and `S3_POINTER` ingestion modes at the CDO/AI boundary. CUR/Data Exports via `S3_POINTER` is the default ingestion mode; Cost Explorer daily data via `RAW_JSON` is the fallback mode when CUR delay is detected (delayed > 36 hours).
@@ -331,8 +334,8 @@ Agents must use `docs/contracts/` as the behavior contract layer for implementat
 
 - AI Engine integration infrastructure must use private networking: Lambda functions execute in VPC private subnets with VPC Interface endpoints (SQS, DynamoDB, S3 Gateway, KMS, Secrets Manager, CloudWatch Logs, X-Ray). Observable through CloudWatch Logs, CloudWatch Metrics, and X-Ray tracing.
 - Artifact guidance must prefer immutable references, signed artifacts where available, SBOM/provenance evidence where available, and blocking critical findings unless the user records an accepted capstone exception.
-- If implementing async queues, create a primary detection queue, DLQ, and rollback/status queue under `modules/orchestration`; keep queue retention, visibility timeout, poison-message threshold, and encryption aligned with the deployment contract.
-- Observability must cover the contract SLOs where infrastructure can measure them: AI API availability, 5xx/error rate, timeout count, result-polling failures, workflow failure, stale telemetry over 26h, ingestion freshness, containment/rollback failure, budget circuit breaker state, and error-budget lock state.
+- Restrict SQS/DLQ to alert retry and `finops-watch-rollback` audit completion notifications under `modules/orchestration` unless a contract explicitly adds another queue use; keep queue retention, visibility timeout, poison-message threshold, and encryption aligned with the deployment contract.
+- Observability must cover the contract SLOs where infrastructure can measure them: AI API availability, 5xx/error rate, timeout count, workflow failure, stale telemetry over 26h, ingestion freshness, containment/rollback failure, budget circuit breaker state, and error-budget lock state.
 - Deployment gates must include Terraform fmt/validate, TFLint, Trivy, Checkov, Lambda tests, AI contract compatibility checks where available, artifact review, reviewed plan artifacts for apply, and prod environment approval.
 
 ## FinOps Watch Guardrails
@@ -369,7 +372,7 @@ Use this order unless the user asks for a smaller scoped change:
 6. Base `modules/iam` roles and policies needed by networking, lakehouse, Lambda, and orchestration.
 7. `modules/compute-lambda`.
 8. `modules/ai-runtime-lambda` (ECR repository, AI Engine Request Lambda, AI Engine Worker Lambda, Lambda aliases/versions, reserved concurrency, SQS event source mapping, KMS-encrypted log groups, X-Ray).
-9. `modules/orchestration`, including SQS detection queue/DLQ/rollback-status queue, DynamoDB run-state/error-budget/idempotency/ai-results tables, Step Functions state machine wiring with direct Lambda invocation and direct DynamoDB result polling, telemetry quality branching, circuit-breaker state, and fail-closed behavior.
+9. `modules/orchestration`, including SQS alert-retry/DLQ/rollback-status queues, DynamoDB run-state/error-budget/idempotency/ai-results/rollback-cache tables, Step Functions state machine wiring with direct `VpcAlbCallerLambda` invocation, telemetry quality branching, circuit-breaker state, and fail-closed behavior.
 10. `modules/alerting`, `modules/observability`, and `modules/dashboard`.
 11. `environments/sandbox`, `environments/staging`, and `environments/prod`.
 12. GitHub Actions workflows.

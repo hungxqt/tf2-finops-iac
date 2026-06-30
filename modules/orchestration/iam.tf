@@ -40,8 +40,8 @@ data "aws_iam_policy_document" "step_functions" {
       aws_dynamodb_table.dashboard_views.arn,
       aws_dynamodb_table.account_policy.arn,
       aws_dynamodb_table.error_budget.arn,
-      aws_dynamodb_table.ai_results.arn,
-      aws_dynamodb_table.rollback_cache.arn
+      aws_dynamodb_table.rollback_cache.arn,
+      aws_dynamodb_table.ai_payload_idempotency.arn
     ]
   }
 
@@ -58,8 +58,7 @@ data "aws_iam_policy_document" "step_functions" {
     sid     = "SQSSendMessage"
     actions = ["sqs:SendMessage"]
     resources = [
-      aws_sqs_queue.rollback_status_queue.arn,
-      aws_sqs_queue.detection_queue.arn
+      aws_sqs_queue.rollback_status_queue.arn
     ]
   }
 

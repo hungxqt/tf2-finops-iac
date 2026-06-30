@@ -49,7 +49,7 @@ Please read these guides carefully before starting development or triggering Ter
 
 All infrastructure and workflows provisioned by this repository must adhere to the following strict safety guardrails:
 * **AWS Only**: The entire platform relies exclusively on AWS native services.
-* **Synthetic Data Default**: Unless explicit billing access is provided, synthetic cost data is utilized.
+* **Real Telemetry Required**: Cost ingestion uses configured CUR, Cost Explorer, CloudWatch, or cached real telemetry only. Missing billing input fails closed instead of generating synthetic cost data.
 * **Dry-Run First**: Automated containment actions must run in dry-run first mode.
 * **No Destructive Actions**: Containment actions must **NEVER** terminate production resources, delete data, or modify IAM policies.
 * **Fail-Closed Design**: If the AI Engine is unavailable or schema validation fails, the orchestrator fails closed, logs run states, alerts operators, and writes audit trails.
