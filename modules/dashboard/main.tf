@@ -1177,8 +1177,8 @@ resource "aws_iam_role_policy" "ad_hoc_trigger" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "states:StartExecution"
         ]
         Resource = [
@@ -1186,8 +1186,8 @@ resource "aws_iam_role_policy" "ad_hoc_trigger" {
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
