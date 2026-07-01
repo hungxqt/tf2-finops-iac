@@ -115,10 +115,11 @@ def main():
             "run_id": run_id,
             "correlation_id": correlation_id,
             "account_id": account_id,
-            "execution_date": exec_date_full,
+            "execution_date": date_str,
+            "billing_period": date_str[:7],
             "cost_period": date_str,
             "is_ad_hoc": True,
-            "tenant_id": "tenant-default"
+            "tenant_id": "tenant-synthetic"
         }
         
         try:

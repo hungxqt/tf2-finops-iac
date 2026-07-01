@@ -671,7 +671,7 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    
    To generate a **smoke test** context covering selected validation windows (including lookback padding for Cost Explorer):
    ```powershell
-   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context-smoke.json
+   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context.json
    ```
    
    To upload the generated context directly to the Sandbox S3 lakehouse bucket (e.g. `s3://<lakehouse-bucket>/replay/business_context.json`), add the `--upload` flag:
@@ -684,6 +684,7 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    ```powershell
    python ./scripts/prepare_replay.py --account-id <real-sandbox-account-id>
    ```
+   *Note: This script uploads raw CUR telemetry using the canonical member-account partitioning structure `s3://<cur-bucket>/<account_id>/accountCUR/data/BILLING_PERIOD=<YYYY-MM>/` and manifest files under metadata.*
 
 3. **Step 3: Enable Replay Mode in Terraform**
    Open `environments/sandbox/terraform.tfvars` and set the following parameters:
@@ -703,16 +704,16 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    ```powershell
    # Smoke mode: runs a 3-day test execution (2026-03-01 to 2026-03-03)
    python ./scripts/run_replay.py --mode smoke
-
+   
    # Warmup mode: replays cost data up to the RDS anomaly date (2026-03-01 to 2026-03-20)
    python ./scripts/run_replay.py --mode warmup
-
+   
    # Full backtest mode: replays the full 3-month dataset (2026-03-01 to 2026-05-31)
    python ./scripts/run_replay.py --mode full
    ```
-   The runner will seed the `account-policy` DynamoDB table, trigger executions sequentially day-by-day, and poll for their status.
+   The runner seeds the `account-policy` DynamoDB table, then triggers Step Functions sequentially day-by-day with a date-only `execution_date` (`YYYY-MM-DD`) and `billing_period` (`YYYY-MM`) in the input payload, polling for status.
 
-4. **Step 4: Cleanup**
+5. **Step 5: Cleanup**
    To restore standard sandbox testing and disable synthetic overrides, update `environments/sandbox/terraform.tfvars` back to:
    ```hcl
    synthetic_replay_enabled              = false

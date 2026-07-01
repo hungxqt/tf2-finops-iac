@@ -49,6 +49,9 @@ The replay preparation script converts raw synthetic CSV line items to snappy Pa
 ```powershell
 python ./scripts/prepare_replay.py --account-id 336805808730
 ```
+This script uploads the files using the canonical member-account prefix layout:
+* CUR data: `s3://<cur-bucket>/<account_id>/<cur_export_name>/data/BILLING_PERIOD=<YYYY-MM>/....`
+* CUR manifest: `s3://<cur-bucket>/<account_id>/<cur_export_name>/metadata/BILLING_PERIOD=<YYYY-MM>/<cur_export_name>-Manifest.json`
 
 ---
 
@@ -72,6 +75,21 @@ Enable replay mode in Terraform to instruct Lambda workers to read metrics and C
 
 ### Step 2.4: Execute the Replay Runner
 Trigger the backtest executions. The runner seeds the account policy in DynamoDB, starts the Step Functions workflow sequentially day-by-day, and polls each run to completion.
+
+The Step Functions execution payload is configured as follows:
+```json
+{
+  "run_id": "rep-YYYY-MM-DD-...",
+  "correlation_id": "corr-rep-YYYY-MM-DD-...",
+  "account_id": "<account_id>",
+  "execution_date": "YYYY-MM-DD",
+  "billing_period": "YYYY-MM",
+  "cost_period": "YYYY-MM-DD",
+  "is_ad_hoc": true,
+  "tenant_id": "tenant-default"
+}
+```
+Notice that `execution_date` uses the date-only format (`YYYY-MM-DD`) and `billing_period` is included (`YYYY-MM`).
 
 * **Smoke Mode (3 days, 2026-03-01 to 2026-03-03)**
   ```powershell

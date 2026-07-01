@@ -699,4 +699,128 @@ def test_quote_identifier_helper_invalid_rejections():
             handler.quote_identifier(inp)
 
 
+def test_normalizer_athena_timestamp_predicate_regression():
+    """
+    Regression test ensuring the Athena query uses typed TIMESTAMP literals
+    for line_item_usage_start_date with a half-open window instead of bare YYYY-MM-DD strings.
+    """
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+    manifest_bytes = _make_manifest(bucket=cur_bucket)
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    os.environ["GLUE_DATABASE_NAME"] = "test_db"
+    os.environ["GLUE_TABLE_NAME"] = "test_tbl"
+    os.environ["ATHENA_WORKGROUP_NAME"] = "test-wg"
+    os.environ["ATHENA_RESULTS_BUCKET_NAME"] = "test-athena-results"
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: manifest_bytes,
+        put_object_func=lambda b, k, v: None,
+    )
+    fake_ath = FakeAthena()
+    handler.athena_client = fake_ath
+
+    manifest_uri = f"s3://{cur_bucket}/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json"
+
+    # Execution date is 2026-06-24
+    resp = handler.handle_request(
+        {
+            "run_id": "run-timestamp-regression",
+            "correlation_id": "corr-timestamp-regression",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+            "ingestion": {"details": {"cur_manifest_uri": manifest_uri}},
+        },
+        None,
+    )
+
+    assert resp["status"] == "NORMALIZED"
+    assert len(fake_ath.captured_queries) == 1
+    query_str = fake_ath.captured_queries[0]
+
+    # Asserts requested by user:
+    # - it contains TIMESTAMP '2026-06-24 00:00:00'
+    # - it contains TIMESTAMP '2026-06-25 00:00:00'
+    # - it does not contain line_item_usage_start_date <= '2026-06-24'
+    # - it does not compare the timestamp column to a bare quoted date string.
+    assert "TIMESTAMP '2026-06-24 00:00:00'" in query_str
+    assert "TIMESTAMP '2026-06-25 00:00:00'" in query_str
+    assert "line_item_usage_start_date <= '2026-06-24'" not in query_str
+    assert "<= '2026-06-24'" not in query_str
+    assert ">= '2026-06-24'" not in query_str
+
+    # Clean up
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["GLUE_DATABASE_NAME"]
+    del os.environ["GLUE_TABLE_NAME"]
+    del os.environ["ATHENA_WORKGROUP_NAME"]
+    del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
+    handler.s3_client = None
+    handler.athena_client = None
+
+
+def test_normalizer_athena_member_account_mode_query():
+    """
+    Test that when CUR_RAW_ACCOUNT_PARTITION_KEY is set to 'source_account_id',
+    the Athena query filters by source_account_id and billing_period.
+    """
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+    manifest_bytes = _make_manifest(bucket=cur_bucket)
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    os.environ["GLUE_DATABASE_NAME"] = "test_db"
+    os.environ["GLUE_TABLE_NAME"] = "test_tbl"
+    os.environ["ATHENA_WORKGROUP_NAME"] = "test-wg"
+    os.environ["ATHENA_RESULTS_BUCKET_NAME"] = "test-athena-results"
+    os.environ["CUR_RAW_ACCOUNT_PARTITION_KEY"] = "source_account_id"
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: manifest_bytes,
+        put_object_func=lambda b, k, v: None,
+    )
+    fake_ath = FakeAthena()
+    handler.athena_client = fake_ath
+
+    manifest_uri = f"s3://{cur_bucket}/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json"
+
+    resp = handler.handle_request(
+        {
+            "run_id": "run-member-athena",
+            "correlation_id": "corr-member-athena",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+            "ingestion": {"details": {"cur_manifest_uri": manifest_uri}},
+        },
+        None,
+    )
+
+    assert resp["status"] == "NORMALIZED"
+    assert len(fake_ath.captured_queries) == 1
+    query_str = fake_ath.captured_queries[0]
+
+    # Assert source_account_id filter is added
+    assert "source_account_id = '112233445566'" in query_str
+    # Assert billing_period filter is added
+    assert "billing_period = '2026-06'" in query_str
+    # Assert typed timestamp predicates are preserved
+    assert "TIMESTAMP '2026-06-24 00:00:00'" in query_str
+    assert "TIMESTAMP '2026-06-25 00:00:00'" in query_str
+
+    # Clean up
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["GLUE_DATABASE_NAME"]
+    del os.environ["GLUE_TABLE_NAME"]
+    del os.environ["ATHENA_WORKGROUP_NAME"]
+    del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
+    del os.environ["CUR_RAW_ACCOUNT_PARTITION_KEY"]
+    handler.s3_client = None
+    handler.athena_client = None
+
+
+
+
 

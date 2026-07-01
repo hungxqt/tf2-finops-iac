@@ -643,6 +643,7 @@ module "compute_lambda" {
   telemetry_member_role_name            = var.telemetry_member_role_name
   cur_exports_json                      = local.cur_exports_json
   cur_raw_export_prefix                 = var.cur_raw_prefix
+  cur_raw_account_partition_key         = module.lakehouse.cur_raw_account_partition_key
   synthetic_replay_enabled              = var.synthetic_replay_enabled
   synthetic_replay_business_context_uri = var.synthetic_replay_business_context_uri
 }
