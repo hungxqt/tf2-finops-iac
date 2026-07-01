@@ -1215,3 +1215,130 @@ def test_normalizer_cur_ready_negative_rows():
         del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
         handler.s3_client = None
         handler.athena_client = None
+
+
+def test_normalizer_parquet_write_failure_fails_closed(monkeypatch):
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({"bucket": bucket, "key": key, "body": body})
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda bucket, key: gzip.compress(json.dumps({
+            "quality": {"completeness_score": 1.0},
+            "aws_cost_explorer_daily": [{"date": "2026-06-24", "linked_account_id": "112233445566", "service": "EC2", "unblended_cost": 10.0}]
+        }).encode("utf-8")),
+        put_object_func=fake_put_object
+    )
+
+    # Mock pyarrow.parquet.write_table to raise an exception
+    import pyarrow.parquet as pq
+    def mock_write_table(*args, **kwargs):
+        raise ValueError("Simulated pyarrow failure")
+    monkeypatch.setattr(pq, "write_table", mock_write_table)
+
+    event_data = {
+        "run_id": "run-fail-closed",
+        "correlation_id": "corr-fail-closed",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-fail-closed",
+            "correlation_id": "corr-fail-closed",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/raw.json.gz",
+            "details": {"telemetry_delay_event": True}
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="Failed to generate Parquet bytes"):
+        handler.handle_request(event_data, None)
+
+    # Confirm that no S3 curated parquet file was uploaded (failed closed)
+    curated_puts = [p for p in put_called if "_curated.parquet" in p["key"]]
+    assert len(curated_puts) == 0
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    handler.s3_client = None
+
+
+def test_normalizer_logging_sanitized(caplog):
+    import logging
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    put_called = []
+    
+    # Enable INFO logs capture
+    caplog.set_level(logging.INFO)
+
+    raw_env = {
+        "quality": {
+            "completeness_score": 0.8,
+            "delayed_cur": True,
+        },
+        "aws_cost_explorer_daily": [
+            {
+                "date": "2026-06-24",
+                "linked_account_id": "112233445566",
+                "service": "Amazon Elastic Compute Cloud - Compute",
+                "unblended_cost": 100.0,
+            }
+        ],
+        "resource_utilization_metrics": [
+            {
+                "resource_id": "i-1234567890abcdef0",
+                "cpu_util": 88.5
+            }
+        ]
+    }
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda bucket, key: gzip.compress(json.dumps(raw_env).encode("utf-8")),
+        put_object_func=lambda bucket, key, body: put_called.append(key)
+    )
+
+    event_data = {
+        "run_id": "run-log-test",
+        "correlation_id": "corr-log-test",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-log-test",
+            "correlation_id": "corr-log-test",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/cur/account_id=112233445566/year=2026/month=06/day=24/run-log-test_raw.json.gz",
+            "details": {
+                "telemetry_delay_event": True,
+                "aws_cost_explorer_daily": raw_env["aws_cost_explorer_daily"],
+                "resource_utilization_metrics": raw_env["resource_utilization_metrics"]
+            }
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "NORMALIZED"
+
+    # Analyze logs
+    log_text = caplog.text
+    
+    # Check that raw arrays are NOT in the log
+    assert "Amazon Elastic Compute Cloud - Compute" not in log_text
+    assert "i-1234567890abcdef0" not in log_text
+    assert "88.5" not in log_text
+    
+    # Check that Response Summary is logged and contains the expected sanitised details
+    assert "Response Summary:" in log_text
+    assert "run-log-test" in log_text
+    assert "RAW_JSON" in log_text or "S3_POINTER" in log_text
+    assert "0.8" in log_text
+    assert "curated_records" in log_text
+    assert "curated_data_uri" in log_text
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    handler.s3_client = None
+

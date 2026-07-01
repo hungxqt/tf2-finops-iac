@@ -89,6 +89,15 @@ cd ..
 .\scripts\package-lambdas.ps1
 ```
 
+> [!NOTE]
+> **Đóng gói phụ thuộc theo nền tảng mục tiêu xác định (Deterministic Target-Platform Dependency Packaging)**:
+> Để đảm bảo khả năng tương thích với môi trường chạy AWS Lambda Python 3.13 Linux x86_64, kịch bản đóng gói sử dụng các cờ nhắm mục tiêu của pip (như `--platform manylinux_2_28_x86_64`) để tải về các thư viện biên dịch sẵn của Linux (Linux-native binary wheels) thay vì các thư viện của hệ điều hành cục bộ (ví dụ: các tệp Windows `.dll` hoặc `.pyd`).
+> 
+> Hơn nữa, các phụ thuộc của worker được tách biệt để tối ưu hóa kích thước gói đóng:
+> * Chỉ worker `normalizer` mới đóng gói `pyarrow` (được định nghĩa trong `lambda_src/requirements-normalizer.txt`).
+> * Các worker khác lấy các phụ thuộc chung từ `lambda_src/requirements.txt` (bảng này để trống pyarrow) nhằm tránh lỗi không khớp nhị phân giữa Windows và Linux.
+> * Các phụ thuộc cho kiểm thử cục bộ và phát triển được hợp nhất trong `lambda_src/requirements-dev.txt` và tham chiếu tới cả hai tệp trên.
+
 ### Bước 2.4: Triển khai Layer Publishing CodeBuild
 Thư mục gốc `codebuild` sở hữu ECR repository chung và pipeline xuất bản image wrapper CodeBuild. Áp dụng root này trước khi triển khai các môi trường chính.
 ```powershell

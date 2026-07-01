@@ -34,11 +34,14 @@ foreach ($worker in $workers) {
 
     # 3. Pip install dependencies if any
     $ReqFile = Join-Path $LambdaSrcDir "requirements.txt"
+    if ($worker -eq "normalizer") {
+        $ReqFile = Join-Path $LambdaSrcDir "requirements-normalizer.txt"
+    }
     if (Test-Path $ReqFile) {
         $HasDeps = Get-Content $ReqFile | Where-Object { $_.Trim() -and -not $_.StartsWith("#") }
         if ($HasDeps) {
             Write-Host "Installing dependencies for $worker..." -ForegroundColor Yellow
-            pip install -r $ReqFile --target $TempDir --quiet
+            pip install -r $ReqFile --target $TempDir --platform manylinux_2_28_x86_64 --only-binary=:all: --implementation cp --python-version 3.13 --upgrade --quiet
         }
     }
 
