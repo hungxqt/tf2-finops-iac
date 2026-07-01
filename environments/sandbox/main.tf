@@ -20,14 +20,29 @@ locals {
     # receives IDEMPOTENCY_TABLE_NAME via its environment block.
   }
 
-  cur_exports_json = var.cur_exports_json != "" ? var.cur_exports_json : jsonencode({
-    for acc in var.telemetry_member_account_ids : acc => {
-      source_account_id  = acc
-      prefix             = acc
-      export_name        = var.cur_export_name
-      allowed_raw_prefix = "${acc}/${var.cur_export_name}"
-    }
-  })
+  cur_exports_json = var.cur_exports_json != "" ? var.cur_exports_json : jsonencode(
+    merge(
+      # Payer / management account — data lands under its own account ID prefix
+      {
+        (data.aws_caller_identity.current.account_id) = {
+          source_account_id  = data.aws_caller_identity.current.account_id
+          prefix             = data.aws_caller_identity.current.account_id
+          export_name        = var.cur_export_name
+          allowed_raw_prefix = data.aws_caller_identity.current.account_id
+        }
+      },
+      # Member accounts — their CUR data is written by BCM Data Exports into the
+      # payer's bucket, so prefix points to the payer account ID, not their own.
+      {
+        for acc in var.telemetry_member_account_ids : acc => {
+          source_account_id  = acc
+          prefix             = data.aws_caller_identity.current.account_id
+          export_name        = var.cur_export_name
+          allowed_raw_prefix = data.aws_caller_identity.current.account_id
+        }
+      }
+    )
+  )
 }
 
 
