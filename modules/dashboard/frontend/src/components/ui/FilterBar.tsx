@@ -1,3 +1,4 @@
+import { RotateCcw } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { DashboardSummary, Anomaly } from "../../schema";
 
@@ -23,6 +24,8 @@ const RANGE_OPTIONS = [
   { label: "30D", value: 30 },
   { label: "90D", value: 90 },
 ];
+
+const DEFAULT_FILTERS: FilterState = { account: "all", service: "all", squad: "all", range: 90 };
 
 const selectClass = cn(
   "bg-surface-elevated border border-border-subtle rounded-md",
@@ -57,6 +60,8 @@ export function FilterBar({ summary, filters, onChange }: FilterBarProps) {
   const services = uniqueValues(summary.anomalies, "service");
   const squads   = uniqueValues(summary.anomalies, "squad");
 
+  const hasActiveFilters = filters.account !== "all" || filters.service !== "all" || filters.squad !== "all";
+
   return (
     <div className="flex flex-wrap gap-4 items-end mb-6">
       <SelectControl label="Account" value={filters.account} values={accounts} onChange={(account) => onChange({ ...filters, account })} />
@@ -83,6 +88,26 @@ export function FilterBar({ summary, filters, onChange }: FilterBarProps) {
           ))}
         </div>
       </div>
+
+      {/* Clear Filters button */}
+      {hasActiveFilters && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted">&nbsp;</span>
+          <button
+            onClick={() => onChange(DEFAULT_FILTERS)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md",
+              "text-text-secondary hover:text-text-primary hover:bg-surface-elevated",
+              "border border-border-subtle hover:border-border-strong",
+              "transition-colors duration-150"
+            )}
+            aria-label="Clear all filters"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Clear
+          </button>
+        </div>
+      )}
     </div>
   );
 }
