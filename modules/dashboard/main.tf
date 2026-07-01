@@ -1238,14 +1238,6 @@ resource "aws_lambda_function_url" "ad_hoc_trigger_url" {
   # checkov:skip=CKV2_AWS_75: "CORS is open to allow cross-origin requests from any client browser accessing the dashboard"
   function_name      = aws_lambda_function.ad_hoc_trigger.function_name
   authorization_type = "NONE"
-
-  cors {
-    allow_credentials = false
-    allow_origins     = ["*"]
-    allow_methods     = ["*"]
-    allow_headers     = ["content-type"]
-    max_age           = 86400
-  }
 }
 
 
