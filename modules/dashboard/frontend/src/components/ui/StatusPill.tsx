@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { cn } from "../../lib/utils";
 
 type Tone = "neutral" | "success" | "warning" | "critical" | "info" | "ai";
@@ -34,7 +35,7 @@ const sizeClasses: Record<Size, string> = {
   md: "text-[10px] px-2.5 py-1 rounded-md",
 };
 
-export function StatusPill({ tone = "neutral", label, dot, size = "md", className }: StatusPillProps) {
+export const StatusPill = memo(function StatusPill({ tone = "neutral", label, dot, size = "md", className }: StatusPillProps) {
   return (
     <span
       className={cn(
@@ -48,4 +49,4 @@ export function StatusPill({ tone = "neutral", label, dot, size = "md", classNam
       {label}
     </span>
   );
-}
+});

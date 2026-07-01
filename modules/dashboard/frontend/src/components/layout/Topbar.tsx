@@ -1,10 +1,14 @@
+import { useLocation } from "react-router-dom";
+import { Sun, Moon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ManualTriggerButton } from "../ui/ManualTriggerButton";
+import { formatDateTime } from "../../lib/format";
+import { useTheme } from "../../lib/theme";
 import type { DashboardSummary } from "../../schema";
 
 interface TopbarProps {
-  title: string;
   summary: DashboardSummary;
+  pageTitles: Record<string, string>;
 }
 
 function freshnessTone(status: string): string {
@@ -24,18 +28,16 @@ function pillClass(tone: string): string {
   }
 }
 
-function formatTs(ts?: string): string {
-  if (!ts) return "not published";
-  return new Date(ts).toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
 /** CDO admins and operators can trigger ad-hoc runs; finance-readonly cannot. */
 function canTrigger(role: string): boolean {
   return ["admin", "cdo", "engineering"].includes(role.toLowerCase());
 }
 
-export function Topbar({ title, summary }: TopbarProps) {
+export function Topbar({ summary, pageTitles }: TopbarProps) {
+  const location = useLocation();
+  const { theme, toggle } = useTheme();
   const isLocked = summary.containment_locked;
+  const title = pageTitles[location.pathname] ?? "Dashboard";
 
   return (
     <header className="h-14 shrink-0 flex items-center justify-between gap-4 px-6 bg-surface-panel/80 border-b border-border-subtle backdrop-blur-sm sticky top-0 z-10">
@@ -58,6 +60,14 @@ export function Topbar({ title, summary }: TopbarProps) {
         )}
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={toggle}
+            className="flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-elevated border border-border-subtle hover:border-border-strong transition-colors"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          >
+            {theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          </button>
           <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass("neutral"))}>
             {summary.environment}
           </span>
@@ -68,11 +78,10 @@ export function Topbar({ title, summary }: TopbarProps) {
             {summary.data_freshness_status || "unknown"}
           </span>
           <span className="text-[11px] text-text-muted hidden sm:inline">
-            {formatTs(summary.generated_at)}
+            {formatDateTime(summary.generated_at)}
           </span>
         </div>
       </div>
     </header>
   );
 }
-

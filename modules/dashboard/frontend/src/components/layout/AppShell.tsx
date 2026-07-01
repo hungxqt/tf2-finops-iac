@@ -3,17 +3,21 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import type { DashboardSummary } from "../../schema";
 
-type PageKey = "overview" | "engineering" | "containment" | "collaboration" | "audit" | "admin";
-
 interface AppShellProps {
   summary: DashboardSummary;
-  activePage: PageKey;
-  onNavigate: (page: PageKey) => void;
   children: ReactNode;
-  pageTitle: string;
 }
 
-export function AppShell({ summary, activePage, onNavigate, children, pageTitle }: AppShellProps) {
+const PAGE_TITLES: Record<string, string> = {
+  "/":            "Finance Overview",
+  "/engineering": "Engineering Triage",
+  "/containment": "Containment & Audit",
+  "/collaboration": "Collaboration",
+  "/audit":       "Audit Evidence Diffs",
+  "/admin":       "Admin Settings",
+};
+
+export function AppShell({ summary, children }: AppShellProps) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     try {
       return localStorage.getItem("finops-sidebar") !== "collapsed";
@@ -32,15 +36,9 @@ export function AppShell({ summary, activePage, onNavigate, children, pageTitle 
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-base">
-      <Sidebar
-        expanded={expanded}
-        onToggle={() => setExpanded((v) => !v)}
-        activePage={activePage}
-        onNavigate={onNavigate}
-        summary={summary}
-      />
+      <Sidebar expanded={expanded} onToggle={() => setExpanded((v) => !v)} summary={summary} />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Topbar title={pageTitle} summary={summary} />
+        <Topbar summary={summary} pageTitles={PAGE_TITLES} />
         <main className="flex-1 overflow-y-auto">
           {children}
         </main>

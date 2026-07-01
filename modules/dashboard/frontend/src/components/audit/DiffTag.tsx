@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { cn } from "../../lib/utils";
 
 interface DiffTagProps {
@@ -5,7 +6,7 @@ interface DiffTagProps {
   tone: "added" | "removed";
 }
 
-export function DiffTag({ value, tone }: DiffTagProps) {
+export const DiffTag = memo(function DiffTag({ value, tone }: DiffTagProps) {
   return (
     <span
       className={cn(
@@ -18,4 +19,4 @@ export function DiffTag({ value, tone }: DiffTagProps) {
       {tone === "added" ? "+" : "−"} {value}
     </span>
   );
-}
+});
