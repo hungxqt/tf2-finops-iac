@@ -191,3 +191,10 @@ variable "synthetic_replay_business_context_uri" {
   default     = ""
 }
 
+variable "cur_raw_account_partition_key" {
+  type        = string
+  description = "The partition key used for the member account in raw CUR table. Empty if member partitioning is disabled."
+  default     = ""
+}
+
+

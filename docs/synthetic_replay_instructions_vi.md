@@ -49,6 +49,9 @@ Script chuẩn bị dữ liệu sẽ chuyển đổi các bản ghi CSV thô th�
 ```powershell
 python ./scripts/prepare_replay.py --account-id 336805808730
 ```
+Script này sẽ tải lên các tệp tin sử dụng cấu trúc tiền tố (prefix) tài khoản thành viên chuẩn mực:
+* Dữ liệu CUR: `s3://<cur-bucket>/<account_id>/<cur_export_name>/data/BILLING_PERIOD=<YYYY-MM>/....`
+* Manifest CUR: `s3://<cur-bucket>/<account_id>/<cur_export_name>/metadata/BILLING_PERIOD=<YYYY-MM>/<cur_export_name>-Manifest.json`
 
 ---
 
@@ -73,12 +76,27 @@ Bật chế độ replay trong Terraform để hướng dẫn các Lambda worker
 ### Bước 2.4: Chạy Replay Runner
 Kích hoạt các luồng chạy thử nghiệm. Bộ runner sẽ tạo bản ghi cấu hình tài khoản trong DynamoDB, khởi chạy Step Functions tuần tự theo từng ngày, và theo dõi trạng thái cho đến khi hoàn thành.
 
+Payload truyền vào Step Functions được cấu hình như sau:
+```json
+{
+  "run_id": "rep-YYYY-MM-DD-...",
+  "correlation_id": "corr-rep-YYYY-MM-DD-...",
+  "account_id": "<account_id>",
+  "execution_date": "YYYY-MM-DD",
+  "billing_period": "YYYY-MM",
+  "cost_period": "YYYY-MM-DD",
+  "is_ad_hoc": true,
+  "tenant_id": "tenant-default"
+}
+```
+Lưu ý rằng `execution_date` sử dụng định dạng chỉ chứa ngày (`YYYY-MM-DD`) và `billing_period` được bao gồm (`YYYY-MM`).
+
 * **Chế độ Smoke (3 ngày, 01/03/2026 đến 03/03/2026)**
   ```powershell
   python ./scripts/run_replay.py --mode smoke
   ```
 
-* **Chế độ Warmup (20 ngày, 01/03/2026 đến 20/03/2026)**
+* **Chế độ Warmup (20 days, 01/03/2026 đến 20/03/2026)**
   Chạy đến ngày xảy ra sự cố RDS orphan DB instance (A2).
   ```powershell
   python ./scripts/run_replay.py --mode warmup
