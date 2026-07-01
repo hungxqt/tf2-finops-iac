@@ -96,3 +96,7 @@ enable_alb_https = false
 
 # Prevent Post-Apply Step Functions Execution
 scheduler_enabled = true
+
+# Sandbox-only Synthetic Replay Harness Configurations
+synthetic_replay_enabled              = true
+synthetic_replay_business_context_uri = ""

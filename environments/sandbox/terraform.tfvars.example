@@ -97,3 +97,9 @@ enable_alb_https = true
 # Prevent Post-Apply Step Functions Execution
 scheduler_enabled = false
 
+# Sandbox-only Synthetic Replay Harness Configurations
+synthetic_replay_enabled              = false
+# Example: "s3://tf2-finops-sandbox-lakehouse/replay/business_context.json"
+synthetic_replay_business_context_uri = ""
+
+

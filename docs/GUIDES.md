@@ -635,4 +635,55 @@ To deploy a new image wrapper version via CodeDeploy:
    ```
 4. The script polls every 15 seconds, outputting the rollout status. If CodeDeploy rolls back or fails, the script exits with code `1`, causing the CI/CD pipeline to fail.
 
+---
 
+## 15. Sandbox-Only Synthetic Replay Integration Guide
+
+This guide provides the instructions for staging and replaying synthetic historical cost data in the sandbox environment to backtest anomalous cost detection and alert routing.
+
+### 15.1 Replay Overview
+The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer telemetry data. It maps synthetic account IDs to your real sandbox account ID to avoid authentication failures, and provides a sandbox-only replay context file containing traffic context and CPU utilization metrics.
+
+### 15.2 Step-by-Step Replay Execution
+
+1. **Step 1: Staging raw telemetry to S3**
+   Run the replay preparation script. It automatically reads the synthetic CSV files from `docs/synthetic-data/`, converts them to Parquet format, generates appropriate CUR 2.0 Data Exports manifests, generates business/traffic context, and uploads them to S3:
+   ```powershell
+   python ./scripts/prepare_replay.py
+   ```
+   *Note: This script will print the exact S3 URI of the generated business context file (e.g., `s3://<lakehouse-bucket>/replay/business_context.json`).*
+
+2. **Step 2: Enable Replay Mode in Terraform**
+   Open `environments/sandbox/terraform.tfvars` and set the following parameters:
+   ```hcl
+   synthetic_replay_enabled              = true
+   synthetic_replay_business_context_uri = "s3://<lakehouse-bucket>/replay/business_context.json"
+   ```
+   Apply these changes:
+   ```powershell
+   cd environments/sandbox
+   terraform apply
+   cd ../..
+   ```
+
+3. **Step 3: Trigger Replay Backtest**
+   Run the replay runner script with the desired mode (`smoke`, `warmup`, or `full`):
+   ```powershell
+   # Smoke mode: runs a 3-day test execution (2026-03-01 to 2026-03-03)
+   python ./scripts/run_replay.py --mode smoke
+
+   # Warmup mode: replays cost data up to theRDS anomaly date (2026-03-01 to 2026-03-20)
+   python ./scripts/run_replay.py --mode warmup
+
+   # Full backtest mode: replays the full 3-month dataset (2026-03-01 to 2026-05-31)
+   python ./scripts/run_replay.py --mode full
+   ```
+   The runner will seed the `account-policy` DynamoDB table, trigger executions sequentially day-by-day, and poll for their status.
+
+4. **Step 4: Cleanup**
+   To restore standard sandbox testing and disable synthetic overrides, update `environments/sandbox/terraform.tfvars` back to:
+   ```hcl
+   synthetic_replay_enabled              = false
+   synthetic_replay_business_context_uri = ""
+   ```
+   And run `terraform apply`.

@@ -600,17 +600,19 @@ module "compute_lambda" {
     module.lakehouse.cur_export_bucket_name != "" ? module.lakehouse.cur_export_bucket_name :
     ""
   )
-  cur_source_prefix          = var.cur_source_prefix
-  cur_delay_threshold_hours  = var.cur_delay_threshold_hours
-  ce_lookback_window_days    = var.ce_lookback_window_days
-  traffic_metric_identifiers = var.traffic_metric_identifiers
-  athena_workgroup_name      = module.lakehouse.athena_workgroup_name
-  glue_database_name         = module.lakehouse.glue_database_name
-  cur_data_table_name        = module.lakehouse.raw_cur_table_name
-  athena_results_bucket_name = module.lakehouse.athena_results_bucket_name
-  telemetry_member_role_name = var.telemetry_member_role_name
-  cur_exports_json           = local.cur_exports_json
-  cur_raw_export_prefix      = var.cur_raw_prefix
+  cur_source_prefix                     = var.cur_source_prefix
+  cur_delay_threshold_hours             = var.cur_delay_threshold_hours
+  ce_lookback_window_days               = var.ce_lookback_window_days
+  traffic_metric_identifiers            = var.traffic_metric_identifiers
+  athena_workgroup_name                 = module.lakehouse.athena_workgroup_name
+  glue_database_name                    = module.lakehouse.glue_database_name
+  cur_data_table_name                   = module.lakehouse.raw_cur_table_name
+  athena_results_bucket_name            = module.lakehouse.athena_results_bucket_name
+  telemetry_member_role_name            = var.telemetry_member_role_name
+  cur_exports_json                      = local.cur_exports_json
+  cur_raw_export_prefix                 = var.cur_raw_prefix
+  synthetic_replay_enabled              = var.synthetic_replay_enabled
+  synthetic_replay_business_context_uri = var.synthetic_replay_business_context_uri
 }
 
 # 7. Orchestration Module

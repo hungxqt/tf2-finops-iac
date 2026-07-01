@@ -20,15 +20,17 @@ locals {
       timeout     = 120
       memory_size = 512
       env = {
-        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
-        CUR_SOURCE_BUCKET          = var.cur_source_bucket
-        CUR_SOURCE_PREFIX          = var.cur_source_prefix
-        CUR_DELAY_THRESHOLD_HOURS  = tostring(var.cur_delay_threshold_hours)
-        CE_LOOKBACK_WINDOW_DAYS    = tostring(var.ce_lookback_window_days)
-        TRAFFIC_METRIC_IDENTIFIERS = join(",", var.traffic_metric_identifiers)
-        TELEMETRY_MEMBER_ROLE_NAME = var.telemetry_member_role_name
-        CUR_EXPORTS_JSON           = var.cur_exports_json
-        AWS_STS_REGIONAL_ENDPOINTS = "regional"
+        LAKEHOUSE_BUCKET_NAME                 = var.lakehouse_bucket_name
+        CUR_SOURCE_BUCKET                     = var.cur_source_bucket
+        CUR_SOURCE_PREFIX                     = var.cur_source_prefix
+        CUR_DELAY_THRESHOLD_HOURS             = tostring(var.cur_delay_threshold_hours)
+        CE_LOOKBACK_WINDOW_DAYS               = tostring(var.ce_lookback_window_days)
+        TRAFFIC_METRIC_IDENTIFIERS            = join(",", var.traffic_metric_identifiers)
+        TELEMETRY_MEMBER_ROLE_NAME            = var.telemetry_member_role_name
+        CUR_EXPORTS_JSON                      = var.cur_exports_json
+        AWS_STS_REGIONAL_ENDPOINTS            = "regional"
+        SYNTHETIC_REPLAY_ENABLED              = tostring(var.synthetic_replay_enabled)
+        SYNTHETIC_REPLAY_BUSINESS_CONTEXT_URI = var.synthetic_replay_business_context_uri
       }
     }
     normalizer = {

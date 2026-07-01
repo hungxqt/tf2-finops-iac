@@ -468,7 +468,43 @@ def handle_request(event_data: dict, context: Any) -> dict:
         ce_throttled = False
         ce_response = None
 
-        if action == "simulate-ce-throttled":
+        replay_enabled = os.environ.get("SYNTHETIC_REPLAY_ENABLED", "false").lower() == "true"
+        replay_bc_uri = os.environ.get("SYNTHETIC_REPLAY_BUSINESS_CONTEXT_URI", "")
+
+        replay_bc_data = None
+        if replay_enabled and replay_bc_uri and local_s3:
+            try:
+                bc_bucket, bc_key = finops_common.parse_s3_uri(replay_bc_uri)
+                bc_obj = local_s3.get_object(bc_bucket, bc_key)
+                if isinstance(bc_obj, dict) and "Body" in bc_obj:
+                    bc_bytes = bc_obj["Body"].read()
+                else:
+                    bc_bytes = bc_obj
+                replay_bc_data = json.loads(bc_bytes.decode("utf-8"))
+            except Exception as e:
+                logger.warning("Failed to load synthetic business context for CE fallback: %s", e)
+
+        if replay_enabled and replay_bc_data:
+            raw_ce_list = replay_bc_data.get("cost_explorer_daily", [])
+            start_date_limit = (exec_time - timedelta(days=ce_lookback_window)).strftime("%Y-%m-%d")
+            end_date_limit = exec_time.strftime("%Y-%m-%d")
+            
+            for r in raw_ce_list:
+                r_date = r.get("date")
+                if r_date and start_date_limit <= r_date < end_date_limit:
+                    projected_id = event.account_id
+                    ce_records.append({
+                        "date": r_date,
+                        "linked_account_id": projected_id,
+                        "linked_account_name": r.get("linked_account_name", projected_id),
+                        "service": r.get("service", ""),
+                        "service_code": r.get("service_code", ""),
+                        "region": r.get("region", "global"),
+                        "unblended_cost": float(r.get("unblended_cost", 0.0)),
+                        "is_estimated": bool(r.get("is_estimated", False))
+                    })
+            logger.info("Synthetic replay: loaded %d CE fallback records for %s to %s", len(ce_records), start_date_limit, end_date_limit)
+        elif action == "simulate-ce-throttled":
             ce_throttled = True
         elif local_ce:
             try:
@@ -549,6 +585,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
                         "unblended_cost": cost,
                         "is_estimated": is_est
                     })
+        elif ce_records:
+            logger.info("Synthetic replay: using loaded CE records.")
         else:
             logger.warning("CUR is delayed and CE fallback has no data.")
             status = "CUR_DELAY"
@@ -601,6 +639,41 @@ def handle_request(event_data: dict, context: Any) -> dict:
     traffic_volume, traffic_source, missing_traffic = query_traffic_context(local_cw, exec_time)
     missing_cloudwatch = missing_cloudwatch or missing_traffic
 
+    # Sandbox-only synthetic replay override
+    campaign_flag = False
+    load_test_flag = False
+    migration_flag = False
+
+    replay_enabled = os.environ.get("SYNTHETIC_REPLAY_ENABLED", "false").lower() == "true"
+    replay_bc_uri = os.environ.get("SYNTHETIC_REPLAY_BUSINESS_CONTEXT_URI", "")
+
+    if replay_enabled and replay_bc_uri and local_s3:
+        try:
+            bc_bucket, bc_key = finops_common.parse_s3_uri(replay_bc_uri)
+            bc_obj = local_s3.get_object(bc_bucket, bc_key)
+            if isinstance(bc_obj, dict) and "Body" in bc_obj:
+                bc_bytes = bc_obj["Body"].read()
+            else:
+                bc_bytes = bc_obj
+            replay_bc_data = json.loads(bc_bytes.decode("utf-8"))
+            
+            # Extract daily context if present
+            daily_context = replay_bc_data.get("daily_context", {})
+            day_bc = daily_context.get(exec_date_str)
+            if day_bc:
+                traffic_volume = float(day_bc.get("traffic_volume", 10000.0))
+                traffic_source = day_bc.get("traffic_source", "ALB")
+                campaign_flag = bool(day_bc.get("campaign_flag", False))
+                load_test_flag = bool(day_bc.get("load_test_flag", False))
+                migration_flag = bool(day_bc.get("migration_flag", False))
+                if "resource_utilization_metrics" in day_bc:
+                    utilization_metrics = day_bc["resource_utilization_metrics"]
+                missing_cloudwatch = False
+                missing_traffic = False
+                logger.info("Synthetic replay: loaded business context for date %s", exec_date_str)
+        except Exception as e:
+            logger.warning("Failed to load/parse synthetic replay business context from %s: %s", replay_bc_uri, e)
+
     # Calculate quality / completeness score
     completeness_score = 1.0
     if cur_delayed:
@@ -629,9 +702,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "linked_account_id": event.account_id,
                     "traffic_volume": traffic_volume,
                     "traffic_source": traffic_source,
-                    "campaign_flag": False,
-                    "load_test_flag": False,
-                    "migration_flag": False
+                    "campaign_flag": campaign_flag,
+                    "load_test_flag": load_test_flag,
+                    "migration_flag": migration_flag
                 }
             ],
             "quality": {
@@ -684,9 +757,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                             "linked_account_id": event.account_id,
                             "traffic_volume": traffic_volume,
                             "traffic_source": traffic_source,
-                            "campaign_flag": False,
-                            "load_test_flag": False,
-                            "migration_flag": False
+                            "campaign_flag": campaign_flag,
+                            "load_test_flag": load_test_flag,
+                            "migration_flag": migration_flag
                         }
                     ]
                 }
@@ -724,9 +797,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "linked_account_id": event.account_id,
                     "traffic_volume": traffic_volume,
                     "traffic_source": traffic_source,
-                    "campaign_flag": False,
-                    "load_test_flag": False,
-                    "migration_flag": False
+                    "campaign_flag": campaign_flag,
+                    "load_test_flag": load_test_flag,
+                    "migration_flag": migration_flag
                 }
             ]
         }
@@ -769,9 +842,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
                     "linked_account_id": event.account_id,
                     "traffic_volume": traffic_volume,
                     "traffic_source": traffic_source,
-                    "campaign_flag": False,
-                    "load_test_flag": False,
-                    "migration_flag": False
+                    "campaign_flag": campaign_flag,
+                    "load_test_flag": load_test_flag,
+                    "migration_flag": migration_flag
                 }
             ],
             "delayed_cur": False,

@@ -173,3 +173,21 @@ variable "allow_insecure_alb_http" {
   description = "Allow insecure HTTP for the ALB_BASE_URL (sandbox only)"
   default     = false
 }
+
+variable "synthetic_replay_enabled" {
+  type        = bool
+  description = "Enable sandbox-only synthetic replay harness"
+  default     = false
+
+  validation {
+    condition     = !var.synthetic_replay_enabled || var.environment == "sandbox"
+    error_message = "SYNTHETIC_REPLAY_ENABLED is only allowed in the sandbox environment. Staging and production must keep synthetic replay disabled."
+  }
+}
+
+variable "synthetic_replay_business_context_uri" {
+  type        = string
+  description = "The S3 URI for sandbox-only synthetic replay business/traffic context JSON file"
+  default     = ""
+}
+

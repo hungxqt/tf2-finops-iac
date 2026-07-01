@@ -203,3 +203,16 @@ variable "bedrock_secret_arn" {
   default     = null
 }
 
+variable "synthetic_replay_enabled" {
+  type        = bool
+  description = "Enable sandbox-only synthetic replay harness"
+  default     = false
+}
+
+variable "synthetic_replay_business_context_uri" {
+  type        = string
+  description = "The S3 URI for sandbox-only synthetic replay business/traffic context JSON file"
+  default     = ""
+}
+
+

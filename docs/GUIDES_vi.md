@@ -582,4 +582,58 @@ Nếu bất kỳ cảnh báo nào trong số này được kích hoạt trong gi
    ```
 4. Script sẽ thực hiện thăm dò cứ sau 15 giây, xuất ra trạng thái triển khai. Nếu CodeDeploy hoàn tác hoặc thất bại, script sẽ thoát với mã lỗi `1`, làm cho pipeline CI/CD thất bại.
 
+---
+
+## 14. Hướng dẫn Tích hợp Replay Dữ liệu Giả lập chỉ dành cho Sandbox
+
+Tài liệu này hướng dẫn cách chuẩn bị và chạy thử nghiệm (replay) dữ liệu chi phí lịch sử giả lập trong môi trường sandbox để kiểm thử khả năng phát hiện chi phí bất thường của AI và định tuyến cảnh báo.
+
+### 14.1 Tổng quan về Replay
+Bộ replay mô phỏng các dữ liệu đo lường thô của AWS CUR 2.0 / Data Exports và Cost Explorer. Nó ánh xạ các ID tài khoản giả lập trong tệp CSV về ID tài khoản AWS sandbox thực tế của bạn để tránh lỗi xác thực STS, đồng thời tạo một tệp ngữ cảnh lưu lượng (traffic) và hiệu năng CPU tương ứng chỉ dành cho sandbox.
+
+### 14.2 Các bước Thực hiện Replay
+
+1. **Bước 1: Chuẩn bị và tải dữ liệu lên S3**
+   Chạy script chuẩn bị dữ liệu. Script này sẽ tự động đọc các tệp CSV giả lập từ thư mục `docs/synthetic-data/`, chuyển đổi chúng sang định dạng Parquet, tạo tệp manifest CUR 2.0 tương ứng, tạo ngữ cảnh business/traffic và tải lên S3:
+   ```powershell
+   python ./scripts/prepare_replay.py
+   ```
+   *Lưu ý: Script sẽ in ra đường dẫn S3 URI của tệp ngữ cảnh vừa tạo (ví dụ: `s3://<lakehouse-bucket>/replay/business_context.json`).*
+
+2. **Bước 2: Bật Chế độ Replay trong Terraform**
+   Mở tệp `environments/sandbox/terraform.tfvars` và cấu hình các tham số sau:
+   ```hcl
+   synthetic_replay_enabled              = true
+   synthetic_replay_business_context_uri = "s3://<lakehouse-bucket>/replay/business_context.json"
+   ```
+   Áp dụng các thay đổi:
+   ```powershell
+   cd environments/sandbox
+   terraform apply
+   cd ../..
+   ```
+
+3. **Bước 3: Chạy Replay Backtest**
+   Chạy script runner với chế độ mong muốn (`smoke`, `warmup`, hoặc `full`):
+   ```powershell
+   # Chế độ smoke: chạy thử nghiệm 3 ngày (01/03/2026 đến 03/03/2026)
+   python ./scripts/run_replay.py --mode smoke
+
+   # Chế độ warmup: chạy thử nghiệm đến ngày phát sinh bất thường RDS (01/03/2026 đến 20/03/2026)
+   python ./scripts/run_replay.py --mode warmup
+
+   # Chế độ full: chạy thử nghiệm toàn bộ dữ liệu 3 tháng (01/03/2026 đến 31/05/2026)
+   python ./scripts/run_replay.py --mode full
+   ```
+   Bộ runner sẽ tự động tạo cấu hình tài khoản trong bảng DynamoDB `account-policy`, kích hoạt chạy Step Functions tuần tự theo từng ngày và theo dõi trạng thái.
+
+4. **Bước 4: Dọn dẹp sau khi kiểm thử**
+   Để khôi phục môi trường thử nghiệm sandbox tiêu chuẩn và tắt các cấu hình giả lập, hãy cập nhật lại tệp `environments/sandbox/terraform.tfvars` về:
+   ```hcl
+   synthetic_replay_enabled              = false
+   synthetic_replay_business_context_uri = ""
+   ```
+   Vài chạy `terraform apply`.
+
+
 
