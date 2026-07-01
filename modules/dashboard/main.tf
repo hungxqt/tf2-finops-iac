@@ -1239,7 +1239,7 @@ resource "aws_lambda_function_url" "ad_hoc_trigger_url" {
   cors {
     allow_credentials = false
     allow_origins     = ["*"]
-    allow_methods     = ["POST", "OPTIONS"]
+    allow_methods     = ["POST"]
     allow_headers     = ["content-type"]
     max_age           = 86400
   }

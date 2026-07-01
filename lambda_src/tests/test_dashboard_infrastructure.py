@@ -119,3 +119,26 @@ def test_cloudfront_logging_bucket_acl():
     # Assert CloudFront logging_config.bucket uses aws_s3_bucket.cloudfront_logs.bucket_domain_name
     assert 'aws_s3_bucket.cloudfront_logs.bucket_domain_name' in content
 
+
+def test_ad_hoc_trigger_url_cors():
+    main_tf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../modules/dashboard/main.tf"))
+    with open(main_tf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Find the aws_lambda_function_url "ad_hoc_trigger_url" block and assert OPTIONS is not in its allow_methods
+    assert "aws_lambda_function_url" in content
+    assert "ad_hoc_trigger_url" in content
+
+    import re
+    match = re.search(r'resource\s+"aws_lambda_function_url"\s+"ad_hoc_trigger_url"\s+\{(.*?)\}', content, re.DOTALL)
+    assert match is not None, "Could not find aws_lambda_function_url ad_hoc_trigger_url resource block"
+    block_content = match.group(1)
+
+    assert "cors" in block_content
+    allow_methods_lines = [line for line in block_content.splitlines() if "allow_methods" in line]
+    assert len(allow_methods_lines) > 0, "Could not find allow_methods inside ad_hoc_trigger_url resource block"
+
+    for line in allow_methods_lines:
+        assert "OPTIONS" not in line, "OPTIONS should not be in allow_methods of Function URL CORS configuration"
+
+

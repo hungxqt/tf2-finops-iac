@@ -89,6 +89,15 @@ cd ..
 .\scripts\package-lambdas.ps1
 ```
 
+> [!NOTE]
+> **Deterministic Target-Platform Dependency Packaging**:
+> To ensure compatibility with AWS Lambda's Python 3.13 Linux x86_64 runtime, the packaging script uses pip targeting flags (such as `--platform manylinux_2_28_x86_64`) to fetch Linux-native binary wheels rather than local OS binaries (e.g. Windows `.dll` or `.pyd` files).
+> 
+> Furthermore, worker dependencies are split to minimize payload sizes:
+> * Only the `normalizer` worker packages `pyarrow` (defined in `lambda_src/requirements-normalizer.txt`).
+> * Other workers pull general dependencies from `lambda_src/requirements.txt` (which remains empty of pyarrow) to prevent Windows/Linux binary mismatch issues.
+> * Local testing and development dependencies are unified under `lambda_src/requirements-dev.txt` which references both files.
+
 ### Step 2.4: Deploy the CodeBuild Publishing Layer
 The `codebuild` root owns the shared ECR repository and CodeBuild wrapper image publishing pipeline. Apply this root before deploying the main environments.
 ```powershell

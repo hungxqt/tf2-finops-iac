@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 import boto3
+import math
 import finops_common
 
 logger = logging.getLogger()
@@ -19,7 +20,27 @@ ddb_client = None
 athena_client = None
 
 
-import math
+def sanitize_dict_for_logging(d: dict) -> dict:
+    if not isinstance(d, dict):
+        return d
+    sanitized = {}
+    for k, v in d.items():
+        if k in ("aws_cur_line_items", "aws_cost_explorer_daily", "resource_utilization_metrics", "missing_resources"):
+            if isinstance(v, list):
+                sanitized[k] = f"<list of {len(v)} items>"
+            else:
+                sanitized[k] = str(v)
+        elif isinstance(v, dict):
+            sanitized[k] = sanitize_dict_for_logging(v)
+        elif isinstance(v, list):
+            if len(v) > 5:
+                sanitized[k] = f"<list of {len(v)} items>"
+            else:
+                sanitized[k] = [sanitize_dict_for_logging(item) if isinstance(item, dict) else item for item in v]
+        else:
+            sanitized[k] = v
+    return sanitized
+
 
 def sanitize_ce_records(records):
     sanitized = []
@@ -257,7 +278,8 @@ def get_athena_timestamp_window(start_date_str: str, end_date_str: str) -> tuple
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
-    logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
+    sanitized_event = sanitize_dict_for_logging(event_data)
+    logger.info("Received event: %s", finops_common.redact_sensitive_info(str(sanitized_event)))
 
     operation = (event_data.get("operation") or "").lower()
 
@@ -300,7 +322,13 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "normalizer",
             details,
         )
-        logger.info("Response: %s", response.to_dict())
+        summary = {
+            "status": status,
+            "run_id": event_data.get("run_id", ""),
+            "correlation_id": event_data.get("correlation_id", ""),
+            "failure_code": "CONTRACT_MISMATCH",
+        }
+        logger.info("Response Summary: %s", json.dumps(summary))
         return response.to_dict()
 
     # ── Normal path: validate event ────────────────────────────────────
@@ -750,7 +778,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "quality_score": completeness_score,
         })
 
-    # 6. Serialise to Parquet (fallback JSON)
+    # 6. Serialise to Parquet
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -761,10 +789,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
         curated_data = buf.getvalue()
         logger.info("Successfully generated Parquet bytes: %d bytes", len(curated_data))
     except Exception as e:
-        logger.error(
-            "Failed to write Parquet using pyarrow: %s. Falling back to JSON bytes.", e
-        )
-        curated_data = json.dumps(curated_records).encode("utf-8")
+        logger.error("Failed to write Parquet using pyarrow: %s", e)
+        raise RuntimeError(f"Failed to generate Parquet bytes: {e}") from e
 
     # 7. Write to S3 curated folder
     if client:
@@ -923,5 +949,19 @@ def handle_request(event_data: dict, context: Any) -> dict:
     )
     response.curated_data_uri = curated_data_uri
     response.telemetry_quality = completeness_score
-    logger.info("Response: %s", response.to_dict())
+    summary = {
+        "status": "NORMALIZED",
+        "run_id": event.run_id,
+        "correlation_id": event.correlation_id,
+        "curated_data_uri": curated_data_uri,
+        "s3_bucket_uri": s3_bucket_uri,
+        "detect_request_mode": detect_request_mode,
+        "telemetry_quality": completeness_score,
+        "item_counts": {
+            "cur_records": len(cur_records),
+            "ce_records": len(ce_records),
+            "curated_records": len(curated_records)
+        }
+    }
+    logger.info("Response Summary: %s", json.dumps(summary))
     return response.to_dict()
