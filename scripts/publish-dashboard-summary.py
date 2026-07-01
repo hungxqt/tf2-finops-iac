@@ -249,11 +249,18 @@ def load_curated_cost_rows_from_s3(
 def build_spend_rows_from_cost_records(records: list[dict[str, Any]]) -> list[dict[str, str]]:
     daily: dict[str, float] = defaultdict(float)
     for record in records:
-        day = parse_date(record.get("timestamp") or record.get("date") or record.get("line_item_usage_start_date"))
+        # Normalizer writes CUR field names: line_item_usage_start_date, line_item_unblended_cost
+        day = parse_date(
+            record.get("line_item_usage_start_date")
+            or record.get("timestamp")
+            or record.get("date")
+        )
         if not day:
             continue
         daily[day] += clean_number(
-            record.get("unblended_cost")
+            record.get("line_item_unblended_cost")
+            if record.get("line_item_unblended_cost") is not None
+            else record.get("unblended_cost")
             if record.get("unblended_cost") is not None
             else record.get("cost")
         )
@@ -264,15 +271,32 @@ def build_impacted_rows_from_cost_records(records: list[dict[str, Any]], lookbac
     totals: dict[tuple[str, str], float] = defaultdict(float)
     owner_status: dict[tuple[str, str], str] = {}
     for record in records:
+        # Normalizer writes CUR field names
         cost = clean_number(
-            record.get("unblended_cost")
+            record.get("line_item_unblended_cost")
+            if record.get("line_item_unblended_cost") is not None
+            else record.get("unblended_cost")
             if record.get("unblended_cost") is not None
             else record.get("cost")
         )
-        owner = str(record.get("owner") or record.get("resource_tags_user_owner") or "untagged")
-        status = "missing owner" if owner == "untagged" else "valid"
-        service = str(record.get("service") or record.get("service_code") or "unknown")
-        squad = str(record.get("squad") or record.get("team") or "unassigned")
+        owner = str(
+            record.get("resource_tags_user_owner")
+            or record.get("owner")
+            or "untagged"
+        )
+        status = "missing owner" if owner in ("untagged", "", "None", None) else "valid"
+        service = str(
+            record.get("line_item_product_code")
+            or record.get("service")
+            or record.get("service_code")
+            or "unknown"
+        )
+        squad = str(
+            record.get("resource_tags_user_team")
+            or record.get("squad")
+            or record.get("team")
+            or "unassigned"
+        )
         for key in (("Service", service), ("Squad", squad)):
             totals[key] += cost
             if owner_status.get(key) != "missing owner":
