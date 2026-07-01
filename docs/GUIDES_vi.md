@@ -233,6 +233,21 @@ Xem tài liệu hướng dẫn chi tiết [ACCOUNT_POLICY_SEEDING_vi.md](file://
 Khi cấu hình `scheduler_enabled = false`, hoặc khi cần thực hiện các lượt chạy kiểm thử (ad-hoc) và xác minh, quy trình Orchestrator Step Functions có thể được kích hoạt thủ công.
 Xem tài liệu hướng dẫn vận hành chi tiết tại [MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md](file:///E:/code-folder/xbrain_projects/capstone_phase2_main/tf2-finops-iac/docs/MANUAL_STEP_FUNCTIONS_EXECUTION_vi.md) để nắm rõ các điều kiện tiên quyết, định dạng payload đầu vào (cho cả chạy đơn tài khoản và đa tài khoản), chuỗi lệnh PowerShell thực thi và cách theo dõi trạng thái lượt chạy.
 
+Để chạy thủ công trực tiếp từ giao diện điều khiển AWS Console Step Functions GUI, hãy sử dụng payload sau (đã bao gồm trường `billing_period` dùng cho khớp nối manifest CUR):
+
+```json
+{
+  "run_id": "manual-run-20260328-abcd",
+  "correlation_id": "corr-manual-run-20260328-abcd",
+  "account_id": "336805808730",
+  "execution_date": "2026-03-28",
+  "billing_period": "2026-03",
+  "cost_period": "2026-03-28",
+  "is_ad_hoc": true,
+  "tenant_id": "tenant-default"
+}
+```
+
 > [!IMPORTANT]
 > **Chặn chạy lại daily trong cùng ngày**: Lượt chạy daily theo lịch (trong đó `is_ad_hoc` bằng false hoặc bị bỏ qua) được giới hạn chính xác một lần duy nhất cho mỗi tenant/ngày. Nếu một lượt chạy daily đã được thực thi (bất kể trạng thái là `COMPLETED`, `IN_PROGRESS`, hay `FAILED`), các lượt chạy daily tiếp theo cho ngày đó sẽ bị chặn và được định tuyến sang `AccountDuplicateIgnored`. Các lượt chạy lại có chủ đích trong cùng ngày phải được chạy dưới dạng ad-hoc bằng cách đặt `"is_ad_hoc": true` trong dữ liệu đầu vào, thao tác này sẽ tiêu tốn hạn ngạch ad-hoc hàng ngày (tối đa 5 lượt chạy ad-hoc mỗi ngày). Tuyệt đối không xóa hoặc ghi đè các hàng trong bảng `finops-idempotency-{env}`.
 
