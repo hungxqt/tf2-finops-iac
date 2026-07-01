@@ -102,7 +102,7 @@ def get_athena_client():
 def quote_identifier(identifier: str) -> str:
     if not identifier or not re.match(r'^[a-zA-Z0-9_-]+\Z', identifier):
         raise ValueError(f"Invalid identifier for quoting: {identifier}")
-    return f'"{identifier}"'
+    return f"`{identifier}`"
 
 
 def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str) -> None:
