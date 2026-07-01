@@ -53,6 +53,42 @@ variable "secret_arns" {
   default     = []
 }
 
+variable "bedrock_secret_arn" {
+  type        = string
+  description = "Secrets Manager secret ARN or name for Bedrock access. If set, IAM permissions will be granted to read this secret."
+  default     = null
+}
+
+variable "s3_telemetry_bucket" {
+  type        = string
+  description = "Name of the S3 telemetry/lakehouse bucket"
+}
+
+variable "s3_cdo_namespace" {
+  type        = string
+  description = "S3 CDO namespace"
+}
+
+variable "dynamodb_idempotency_table" {
+  type        = string
+  description = "Name of the DynamoDB table for AI payload idempotency"
+}
+
+variable "dynamodb_idempotency_table_arn" {
+  type        = string
+  description = "ARN of the DynamoDB table for AI payload idempotency"
+}
+
+variable "dynamodb_feature_store_table" {
+  type        = string
+  description = "Name of the DynamoDB table for AI feature store"
+}
+
+variable "dynamodb_feature_store_table_arn" {
+  type        = string
+  description = "ARN of the DynamoDB table for AI feature store"
+}
+
 variable "kms_key_arns" {
   type        = list(string)
   description = "List of KMS customer managed key ARNs used for encryption/decryption"

@@ -209,7 +209,7 @@ terraform output
 * `worker_lambda_function_name`: Tên của hàm AI Engine Worker Lambda (chạy bằng container image, xử lý việc nhập bất thường bất đồng bộ).
 * `ecr_repository_url`: URL của kho lưu trữ ECR để push container image cho Lambda.
 * `state_machine_arn`: ARN của Orchestrator State Machine.
-* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, và rollback cache.
+* `dynamodb_table_names`: Các tên bảng DynamoDB phục vụ cho việc lưu trữ trạng thái chạy, kết quả, audit, rollback cache, và feature store. Lưu ý: Tên bảng DynamoDB feature-store sử dụng định dạng có tiền tố repository là `tf2-finops-{env}-feature-store` (ví dụ: `tf2-finops-sandbox-feature-store`), có sự khác biệt có chủ đích so với định dạng `finops-feature-store-{env}` được chỉ định trong `feature-store-schema.md` để đảm bảo tính nhất quán về tiền tố trong toàn bộ dự án.
 * `synchronous_ai_endpoints`: Các endpoint `/v1/detect`, `/v1/decide`, và `/v1/verify` là các hoạt động đồng bộ được gọi qua `VpcAlbCallerLambda` và Route 53 private DNS alias. `/v1/status/{id}` chỉ dành cho remediation audit/status, không dùng cho việc polling phát hiện. Không có hàng đợi SQS detect hoặc vòng lặp polling trong luồng mặc định; SQS được giới hạn cho việc thử lại cảnh báo và thông báo hoàn thành audit `finops-watch-rollback`.
 
 

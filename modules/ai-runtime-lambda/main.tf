@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_ec2_managed_prefix_list" "cloudfront" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
@@ -5,6 +7,15 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
 # Generate self-signed certificate if no certificate_arn is provided or if it's the dummy certificate
 locals {
   is_dummy_cert = var.alb_certificate_arn == "" || contains(split(":", var.alb_certificate_arn), "123456789012")
+
+  # Determine if bedrock_secret_arn is configured.
+  # If it contains "arn:aws:secretsmanager:", use it directly.
+  # Otherwise, format it as an ARN with wildcard support.
+  bedrock_secret_resource_arn = (
+    var.bedrock_secret_arn == null || var.bedrock_secret_arn == "" ? null : (
+      startswith(var.bedrock_secret_arn, "arn:aws:secretsmanager:") ? var.bedrock_secret_arn : "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.bedrock_secret_arn}-*"
+    )
+  )
 }
 
 resource "tls_private_key" "self_signed" {
@@ -117,6 +128,32 @@ resource "aws_iam_policy" "request" {
           Resource = var.secret_arns
         }
       ] : [],
+      local.bedrock_secret_resource_arn != null ? [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = [local.bedrock_secret_resource_arn]
+        }
+      ] : [],
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem"
+          ]
+          Resource = [var.dynamodb_idempotency_table_arn]
+        },
+        {
+          Effect = "Allow"
+          Action = [
+            "dynamodb:GetItem",
+            "dynamodb:Query"
+          ]
+          Resource = [var.dynamodb_feature_store_table_arn]
+        }
+      ],
       length(var.kms_key_arns) > 0 ? [
         {
           Effect = "Allow"
@@ -186,9 +223,16 @@ resource "aws_lambda_function" "request" {
 
   environment {
     variables = {
-      ENVIRONMENT                = var.environment
-      PROJECT_NAME               = var.project_name
-      AI_ENGINE_CONTRACT_VERSION = var.ai_engine_contract_version
+      ENVIRONMENT                  = var.environment
+      PROJECT_NAME                 = var.project_name
+      AI_ENGINE_CONTRACT_VERSION   = var.ai_engine_contract_version
+      AWS_REGION                   = var.aws_region
+      S3_TELEMETRY_BUCKET          = var.s3_telemetry_bucket
+      S3_CDO_NAMESPACE             = var.s3_cdo_namespace
+      DYNAMODB_IDEMPOTENCY_TABLE   = var.dynamodb_idempotency_table
+      DYNAMODB_FEATURE_STORE_TABLE = var.dynamodb_feature_store_table
+      DYNAMODB_TABLE               = var.dynamodb_idempotency_table
+      BEDROCK_API_KEY              = var.bedrock_secret_arn != null ? var.bedrock_secret_arn : ""
     }
   }
 

@@ -200,5 +200,11 @@ variable "cur_raw_prefix" {
   default     = ""
 }
 
+variable "bedrock_secret_arn" {
+  type        = string
+  description = "Secrets Manager secret ARN or name for Bedrock access. If set, IAM permissions will be granted to read this secret."
+  default     = null
+}
+
 
 

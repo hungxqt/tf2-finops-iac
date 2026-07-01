@@ -212,7 +212,7 @@ terraform output
 * `ecr_repository_url`: ECR Repository URL for Lambda container images.
 * `state_machine_arn`: Orchestrator State Machine ARN.
 * `feedback_state_machine_arn`: Asynchronous Human Feedback State Machine ARN for Slack/dashboard review submissions to `POST /v1/feedback`.
-* `dynamodb_table_names`: Ingestion, state, results, audit, and rollback cache table mappings.
+* `dynamodb_table_names`: Ingestion, state, results, audit, rollback cache, and feature store table mappings. Note: The feature-store DynamoDB table name uses the repo-prefixed format `tf2-finops-{env}-feature-store` (e.g., `tf2-finops-sandbox-feature-store`), which intentionally differs from the literal `finops-feature-store-{env}` pattern specified in `feature-store-schema.md` due to repository-wide prefix consistency.
 * `synchronous_ai_endpoints`: The endpoints `/v1/detect`, `/v1/decide`, and `/v1/verify` are synchronous operations called via `VpcAlbCallerLambda` and Route 53 private DNS alias. `/v1/status/{id}` is for remediation audit/status only, not for detection polling. There is no detection SQS or polling loop in the default path; SQS is restricted to alert retry and `finops-watch-rollback` audit completion notifications.
 
 

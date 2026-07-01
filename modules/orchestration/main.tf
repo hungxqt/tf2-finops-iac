@@ -238,6 +238,41 @@ resource "aws_dynamodb_table" "ai_payload_idempotency" {
   tags = var.tags
 }
 
+# - Feature store table (Hash key: resource_id, Sort key: date)
+# Use repo-prefixed table name per user decision, while preserving PK/SK/TTL/IAM behavior.
+resource "aws_dynamodb_table" "feature_store" {
+  name         = "${var.project_name}-${var.environment}-feature-store"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "resource_id"
+  range_key    = "date"
+
+  attribute {
+    name = "resource_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "date"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl_expiry"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.ddb_kms_key_arn
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
 # CloudWatch Log Group for Step Functions execution logs
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/vendedlogs/states/${var.project_name}-${var.environment}-workflow"

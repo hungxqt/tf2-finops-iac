@@ -493,6 +493,7 @@ module "iam" {
     [
       module.orchestration.dynamodb_table_arns["error_budget"],
       module.orchestration.dynamodb_table_arns["ai_payload_idempotency"],
+      module.orchestration.dynamodb_table_arns["feature_store"],
     ]
   )
   ai_payload_idempotency_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/finops-idempotency-${var.environment}"
@@ -545,6 +546,15 @@ module "ai_runtime_lambda" {
   ai_request_s3_pointer_bucket_arn = module.lakehouse.lakehouse_bucket_arn
   ai_request_s3_pointer_prefixes   = ["ai-input/*"]
   enable_alb_https                 = var.enable_alb_https
+
+  # AI Engine Contract Environment wiring
+  bedrock_secret_arn               = var.bedrock_secret_arn
+  s3_telemetry_bucket              = module.lakehouse.lakehouse_bucket_name
+  s3_cdo_namespace                 = "cdo-01"
+  dynamodb_idempotency_table       = module.orchestration.idempotency_table_name
+  dynamodb_idempotency_table_arn   = module.orchestration.idempotency_table_arn
+  dynamodb_feature_store_table     = module.orchestration.feature_store_table_name
+  dynamodb_feature_store_table_arn = module.orchestration.feature_store_table_arn
 }
 
 

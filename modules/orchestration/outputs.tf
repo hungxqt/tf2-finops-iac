@@ -30,6 +30,7 @@ output "dynamodb_table_names" {
     error_budget           = aws_dynamodb_table.error_budget.name
     rollback_cache         = aws_dynamodb_table.rollback_cache.name
     ai_payload_idempotency = aws_dynamodb_table.ai_payload_idempotency.name
+    feature_store          = aws_dynamodb_table.feature_store.name
   }
 }
 
@@ -45,12 +46,28 @@ output "dynamodb_table_arns" {
     error_budget           = aws_dynamodb_table.error_budget.arn
     rollback_cache         = aws_dynamodb_table.rollback_cache.arn
     ai_payload_idempotency = aws_dynamodb_table.ai_payload_idempotency.arn
+    feature_store          = aws_dynamodb_table.feature_store.arn
   }
 }
 
 output "idempotency_table_name" {
   description = "Name of the AI payload idempotency DynamoDB table (contract hot path)"
   value       = aws_dynamodb_table.ai_payload_idempotency.name
+}
+
+output "idempotency_table_arn" {
+  description = "ARN of the AI payload idempotency DynamoDB table (contract hot path)"
+  value       = aws_dynamodb_table.ai_payload_idempotency.arn
+}
+
+output "feature_store_table_name" {
+  description = "Name of the AI feature store DynamoDB table"
+  value       = aws_dynamodb_table.feature_store.name
+}
+
+output "feature_store_table_arn" {
+  description = "ARN of the AI feature store DynamoDB table"
+  value       = aws_dynamodb_table.feature_store.arn
 }
 
 output "rollback_status_queue_url" {
