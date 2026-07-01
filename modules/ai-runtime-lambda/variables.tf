@@ -11,7 +11,7 @@ variable "environment" {
 # tflint-ignore: terraform_unused_declarations
 variable "aws_region" {
   type        = string
-  description = "The AWS region"
+  description = "AWS region used for regional ARNs. Lambda injects AWS_REGION at runtime and Terraform must not set that reserved environment key."
 }
 
 variable "private_subnet_ids" {

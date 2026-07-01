@@ -223,10 +223,10 @@ resource "aws_lambda_function" "request" {
 
   environment {
     variables = {
-      ENVIRONMENT                  = var.environment
-      PROJECT_NAME                 = var.project_name
-      AI_ENGINE_CONTRACT_VERSION   = var.ai_engine_contract_version
-      AWS_REGION                   = var.aws_region
+      ENVIRONMENT                = var.environment
+      PROJECT_NAME               = var.project_name
+      AI_ENGINE_CONTRACT_VERSION = var.ai_engine_contract_version
+      # AWS_REGION is injected by Lambda and is reserved by the Lambda API.
       S3_TELEMETRY_BUCKET          = var.s3_telemetry_bucket
       S3_CDO_NAMESPACE             = var.s3_cdo_namespace
       DYNAMODB_IDEMPOTENCY_TABLE   = var.dynamodb_idempotency_table
