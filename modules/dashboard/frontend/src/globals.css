@@ -159,3 +159,67 @@ body {
   fill: var(--color-text-secondary) !important;
   font-size: 11px !important;
 }
+
+/* ── Light theme overrides ── */
+[data-theme="light"] {
+  --color-surface-base: #f8fafc;
+  --color-surface-panel: #ffffff;
+  --color-surface-elevated: #f1f5f9;
+  --color-surface-overlay: rgba(248, 250, 252, 0.85);
+
+  --color-border-subtle: #e2e8f0;
+  --color-border-strong: #94a3b8;
+
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+}
+
+[data-theme="light"] .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+[data-theme="light"] .recharts-cartesian-axis-tick-value {
+  fill: #475569 !important;
+}
+
+[data-theme="light"] .recharts-tooltip-item {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .recharts-legend-item-text {
+  color: #475569 !important;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+[data-theme="light"] .animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    #e2e8f0 25%,
+    #f1f5f9 50%,
+    #e2e8f0 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* ── Empty state icon float ── */
+@keyframes icon-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-icon-float {
+  animation: icon-float 3s ease-in-out infinite;
+}

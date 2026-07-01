@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Activity
 } from "lucide-react";
+import { NavLink } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import type { DashboardSummary } from "../../schema";
 
@@ -17,8 +18,6 @@ type PageKey = "overview" | "engineering" | "containment" | "collaboration" | "a
 interface SidebarProps {
   expanded: boolean;
   onToggle: () => void;
-  activePage: PageKey;
-  onNavigate: (page: PageKey) => void;
   summary: DashboardSummary;
 }
 
@@ -26,23 +25,24 @@ interface NavItem {
   key: PageKey;
   label: string;
   icon: React.ElementType;
+  path: string;
   adminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "overview",      label: "Overview",          icon: LayoutDashboard },
-  { key: "engineering",   label: "Engineering Triage", icon: Cpu },
-  { key: "containment",   label: "Containment",        icon: ShieldCheck },
-  { key: "collaboration", label: "Collaboration",       icon: Users },
-  { key: "audit",         label: "Audit Diffs",         icon: FileSearch },
-  { key: "admin",         label: "Admin Settings",      icon: Settings, adminOnly: true },
+  { key: "overview",      label: "Overview",          icon: LayoutDashboard, path: "/" },
+  { key: "engineering",   label: "Engineering Triage", icon: Cpu,            path: "/engineering" },
+  { key: "containment",   label: "Containment",        icon: ShieldCheck,    path: "/containment" },
+  { key: "collaboration", label: "Collaboration",       icon: Users,         path: "/collaboration" },
+  { key: "audit",         label: "Audit Diffs",         icon: FileSearch,    path: "/audit" },
+  { key: "admin",         label: "Admin Settings",      icon: Settings,      path: "/admin", adminOnly: true },
 ];
 
 function isAdmin(role: string) {
   return ["admin", "cdo"].includes(role.toLowerCase());
 }
 
-export function Sidebar({ expanded, onToggle, activePage, onNavigate, summary }: SidebarProps) {
+export function Sidebar({ expanded, onToggle, summary }: SidebarProps) {
   const userIsAdmin = isAdmin(summary.viewer_role);
 
   return (
@@ -92,26 +92,27 @@ export function Sidebar({ expanded, onToggle, activePage, onNavigate, summary }:
           {NAV_ITEMS.map((item) => {
             if (item.adminOnly && !userIsAdmin) return null;
             const Icon = item.icon;
-            const isActive = activePage === item.key;
             return (
               <li key={item.key}>
-                <button
-                  onClick={() => onNavigate(item.key)}
-                  className={cn(
-                    "flex items-center gap-3 w-full rounded-md px-2 py-2 text-sm font-medium",
-                    "transition-colors duration-150 text-left",
-                    isActive
-                      ? "bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue pl-[6px]"
-                      : "text-text-secondary hover:bg-surface-elevated hover:text-text-primary border-l-2 border-transparent pl-[6px]"
-                  )}
-                  aria-current={isActive ? "page" : undefined}
+                <NavLink
+                  to={item.path}
+                  end={item.path === "/"}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 w-full rounded-md px-2 py-2 text-sm font-medium",
+                      "transition-colors duration-150 text-left no-underline",
+                      isActive
+                        ? "bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue pl-[6px]"
+                        : "text-text-secondary hover:bg-surface-elevated hover:text-text-primary border-l-2 border-transparent pl-[6px]"
+                    )
+                  }
                   title={!expanded ? item.label : undefined}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
                   {expanded && (
                     <span className="truncate">{item.label}</span>
                   )}
-                </button>
+                </NavLink>
               </li>
             );
           })}
