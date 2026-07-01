@@ -8,7 +8,9 @@ export const runtimeConfigSchema = z.object({
   hosted_ui_domain: z.string().optional(),
   data_bucket_name: z.string().optional(),
   data_prefix: z.string().default("summaries/"),
-  cloudfront_domain: z.string().optional()
+  cloudfront_domain: z.string().optional(),
+  /** URL of the backend API Gateway endpoint that starts an ad-hoc Step Functions execution. */
+  trigger_api_url: z.string().optional()
 });
 
 const spendTrendRowSchema = z.tuple([
@@ -121,7 +123,14 @@ export const dashboardSummarySchema = z.object({
   approvals: z.array(approvalSchema).default([]),
   alert_previews: z.array(alertPreviewSchema).default([]),
   audit_diffs: z.array(auditDiffSchema).default([]),
-  admin_settings: z.array(adminSettingSchema).default([])
+  admin_settings: z.array(adminSettingSchema).default([]),
+  /**
+   * How many ad-hoc manual-trigger runs the current tenant has used today.
+   * Published by the dashboard-summary writer from the DynamoDB quota counter.
+   * Frontend uses this to render the quota badge (used / 5) and disable the
+   * button when the limit is reached.
+   */
+  ad_hoc_quota_used: z.coerce.number().int().min(0).max(5).default(0)
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;

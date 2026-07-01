@@ -8,7 +8,7 @@ if (-not $BuildDir) {
     $BuildDir = New-Item -ItemType Directory -Force -Path (Join-Path $ParentDir ".build\lambda")
 }
 
-$Workers = @("state", "audit_writer", "containment_worker", "cost_puller", "normalizer", "router", "vpc_alb_caller")
+$Workers = @("state", "audit_writer", "containment_worker", "cost_puller", "normalizer", "router", "vpc_alb_caller", "trigger")
 $LambdaSrcDir = Resolve-Path (Join-Path $PSScriptRoot "..\lambda_src")
 $SrcDir = Join-Path $LambdaSrcDir "src"
 

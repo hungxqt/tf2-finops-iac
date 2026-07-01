@@ -7,6 +7,7 @@ import { DataQualityBanner } from "../components/ui/DataQualityBanner";
 import { FilterBar, type FilterState } from "../components/ui/FilterBar";
 import { SpendTrendChart } from "../components/charts/SpendTrendChart";
 import { ImpactBarChart } from "../components/charts/ImpactBarChart";
+import { formatMoney } from "../lib/utils";
 import type { DashboardSummary } from "../schema";
 
 interface OverviewPageProps {
@@ -24,16 +25,7 @@ function toTrend(summary: DashboardSummary): TrendPoint[] {
   }));
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
-const currency = (v: number, suffix = "") => {
-  const num = Number(v || 0);
-  if (num === 0) return `$0${suffix}`;
-  if (Math.abs(num) < 0.01) {
-    // For very small values, show more precision
-    return `$${num.toFixed(6)}${suffix}`;
-  }
-  return `${moneyFmt.format(num)}${suffix}`;
-};
+
 const pct = (v: number) =>
   `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(Number(v || 0))}%`;
 
@@ -68,8 +60,8 @@ export function OverviewPage({ summary }: OverviewPageProps) {
         <KpiTile
           icon={<CircleDollarSign />}
           label={`${filters.range}D Spend`}
-          value={currency(totalSpend)}
-          detail={`${currency(totalSpend - baselineSpend)} vs baseline`}
+          value={formatMoney(totalSpend)}
+          detail={`${formatMoney(totalSpend - baselineSpend)} vs baseline`}
           tone="info"
         />
         <KpiTile
@@ -82,7 +74,7 @@ export function OverviewPage({ summary }: OverviewPageProps) {
         <KpiTile
           icon={<DatabaseZap />}
           label="Waste Impact"
-          value={currency(wasteImpact, "/day")}
+          value={formatMoney(wasteImpact, "/day")}
           detail={lowConfidence ? "Some telemetry gaps" : "Telemetry complete"}
           tone={lowConfidence ? "warning" : "success"}
         />

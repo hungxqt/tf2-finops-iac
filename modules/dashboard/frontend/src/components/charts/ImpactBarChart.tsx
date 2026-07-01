@@ -1,6 +1,7 @@
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { EmptyState } from "../ui/EmptyState";
 import type { DashboardSummary } from "../../schema";
+import { formatMoney } from "../../lib/utils";
 
 type ImpactedItem = DashboardSummary["impacted"][number];
 
@@ -8,15 +9,7 @@ interface ImpactBarChartProps {
   items: ImpactedItem[];
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
-const currency = (v: number) => {
-  const num = Number(v || 0);
-  if (num === 0) return "$0";
-  if (Math.abs(num) < 0.01) {
-    return `$${num.toFixed(6)}`;
-  }
-  return moneyFmt.format(num);
-};
+
 
 const BAR_COLORS = ["#14b8a6", "#3b82f6", "#8b5cf6", "#f59e0b", "#06b6d4"];
 
@@ -29,7 +22,7 @@ function CustomTooltip({ active, payload }: any) {
       <p className="font-semibold text-text-primary mb-1">{item.name}</p>
       <div className="flex items-center gap-2">
         <span className="text-text-secondary">{item.type}</span>
-        <span className="font-bold text-accent-teal">{currency(item.spend_delta_usd_per_day)}/day</span>
+        <span className="font-bold text-accent-teal">{formatMoney(item.spend_delta_usd_per_day)}/day</span>
       </div>
       <span className={`mt-1 inline-flex text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${
         item.owner_tag_status === "valid"

@@ -10,6 +10,8 @@ import {
   YAxis
 } from "recharts";
 import { EmptyState } from "../ui/EmptyState";
+import { formatMoney, yAxisMoneyFormatter } from "../../lib/utils";
+
 
 type TrendPoint = {
   date: string;
@@ -22,15 +24,6 @@ interface SpendTrendChartProps {
   data: TrendPoint[];
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
-const currency = (v: number) => {
-  const num = Number(v || 0);
-  if (num === 0) return "$0";
-  if (Math.abs(num) < 0.01) {
-    return `$${num.toFixed(6)}`;
-  }
-  return moneyFmt.format(num);
-};
 
 interface CustomTooltipPayload {
   dataKey?: string;
@@ -57,16 +50,16 @@ function CustomTooltip(props: any) {
       <div className="space-y-1">
         <div className="flex justify-between gap-4">
           <span className="text-text-secondary">Actual</span>
-          <span className="font-semibold text-accent-blue">{currency(Number(actual))}</span>
+          <span className="font-semibold text-accent-blue">{formatMoney(Number(actual))}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-text-secondary">Baseline</span>
-          <span className="font-semibold text-accent-teal">{currency(Number(baseline))}</span>
+          <span className="font-semibold text-accent-teal">{formatMoney(Number(baseline))}</span>
         </div>
         <div className="flex justify-between gap-4 pt-1 border-t border-border-subtle">
           <span className="text-text-secondary">Delta</span>
           <span className={`font-bold ${delta >= 0 ? "text-accent-red" : "text-accent-green"}`}>
-            {delta >= 0 ? "+" : ""}{currency(delta)}
+            {delta >= 0 ? "+" : ""}{formatMoney(delta)}
           </span>
         </div>
         {isAnomaly && (
@@ -119,6 +112,10 @@ export function SpendTrendChart({ data }: SpendTrendChartProps) {
     return <EmptyState title="No spend trend data" detail="The summary did not include trend rows." />;
   }
   const anomalyPoints = data.filter((d) => d.anomaly);
+  // Build the Y-axis formatter from the actual data range so it picks the
+  // right precision tier (micro-dollars for sandbox, k/M for production).
+  const allValues = data.flatMap((d) => [d.actual, d.baseline]);
+  const yFmt = yAxisMoneyFormatter(allValues);
 
   return (
     <div className="rounded-lg border border-border-subtle bg-surface-panel/50 p-4">
@@ -139,12 +136,13 @@ export function SpendTrendChart({ data }: SpendTrendChartProps) {
             tickLine={false}
           />
           <YAxis
-            tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
+            tickFormatter={yFmt}
             tick={{ fill: "#8ba3c7", fontSize: 11 }}
             axisLine={false}
             tickLine={false}
-            width={44}
+            width={72}
           />
+
           <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#2d4a6e", strokeWidth: 1, strokeDasharray: "4 4" }} />
           <Area
             type="monotone"
