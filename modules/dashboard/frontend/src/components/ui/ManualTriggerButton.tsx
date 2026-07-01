@@ -18,6 +18,7 @@
  */
 
 import { useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { PlayCircle, Loader2, CheckCircle2, AlertTriangle, XCircle, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { triggerAdHocRun } from "../../data";
@@ -268,29 +269,32 @@ export function ManualTriggerButton({ tenantId, accountId, quotaUsed }: ManualTr
         <TriggerBtn />
       </div>
 
-      {/* Overlays — rendered outside the button so they float above everything */}
-      {state.kind === "confirming" && <ConfirmDialog />}
+      {/* Overlays — rendered outside the button via Portal so they float above everything regardless of Topbar layout constraints */}
+      {state.kind === "confirming" && createPortal(<ConfirmDialog />, document.body)}
 
-      {state.kind === "success" && (
-        <SuccessToast arn={state.executionArn} />
+      {state.kind === "success" && createPortal(
+        <SuccessToast arn={state.executionArn} />,
+        document.body
       )}
 
-      {state.kind === "quota_exceeded" && (
+      {state.kind === "quota_exceeded" && createPortal(
         <AlertBanner
           icon={<AlertTriangle className="w-5 h-5" />}
           tone="warning"
           title="Daily quota reached"
           detail={`You have used all ${QUOTA_MAX} manual runs allowed today. Scheduled runs continue automatically.`}
-        />
+        />,
+        document.body
       )}
 
-      {state.kind === "error" && (
+      {state.kind === "error" && createPortal(
         <AlertBanner
           icon={<XCircle className="w-5 h-5" />}
           tone="error"
           title="Trigger failed"
           detail={state.message}
-        />
+        />,
+        document.body
       )}
     </>
   );
