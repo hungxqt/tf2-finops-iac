@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--state-machine-arn", help="Step Functions State Machine ARN.")
     parser.add_argument("--table-name", help="DynamoDB account policy table name.")
     parser.add_argument("--poll-interval", type=int, default=5, help="Polling interval in seconds for SFN executions.")
+    parser.add_argument("--tenant-id", help="Tenant ID to use for the replay (must be a UUID). If omitted, generates a random UUID.")
     
     args = parser.parse_args()
     
@@ -59,9 +60,15 @@ def main():
     if not policy_table:
         policy_table = "tf2-finops-sandbox-account-policy" # Default
         
+    # 3.5. Resolve Tenant ID (must be a valid UUID)
+    tenant_id = args.tenant_id
+    if not tenant_id:
+        tenant_id = str(uuid.uuid4())
+
     print(f"Replay target Account ID: {account_id}")
     print(f"Replay state machine ARN: {sfn_arn}")
     print(f"Replay account policy table: {policy_table}")
+    print(f"Replay Tenant ID: {tenant_id}")
     
     # 4. Seed the account-policy row
     print(f"Seeding account policy for {account_id} in {policy_table}...")
@@ -119,7 +126,7 @@ def main():
             "billing_period": date_str[:7],
             "cost_period": date_str,
             "is_ad_hoc": True,
-            "tenant_id": "tenant-synthetic"
+            "tenant_id": tenant_id
         }
         
         try:
