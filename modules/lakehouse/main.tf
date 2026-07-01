@@ -1177,6 +1177,7 @@ resource "aws_s3_bucket_logging" "cur_export" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "cur_export" {
+  # checkov:skip=CKV_AWS_300: "Abort incomplete multipart upload is handled by the first rule"
   count  = var.create_cur_export_bucket ? 1 : 0
   bucket = aws_s3_bucket.cur_export[0].id
 
