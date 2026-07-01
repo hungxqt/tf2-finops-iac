@@ -80,11 +80,13 @@ data "aws_iam_policy_document" "boundary" {
       "glue:GetTable",
       "glue:GetPartitions"
     ]
-    resources = compact([
-      var.glue_database_arn != "" ? var.glue_database_arn : "",
-      var.cur_data_table_arn != "" ? var.cur_data_table_arn : "",
-      "arn:aws:glue:*:*:catalog"
-    ])
+    resources = concat(
+      compact([
+        var.glue_database_arn != "" ? var.glue_database_arn : "",
+        "arn:aws:glue:*:*:catalog"
+      ]),
+      var.glue_table_arns
+    )
   }
 
   statement {
@@ -406,11 +408,13 @@ data "aws_iam_policy_document" "normalizer" {
       "glue:GetTable",
       "glue:GetPartitions"
     ]
-    resources = [
-      var.glue_database_arn,
-      var.cur_data_table_arn,
-      "arn:aws:glue:*:*:catalog"
-    ]
+    resources = concat(
+      compact([
+        var.glue_database_arn,
+        "arn:aws:glue:*:*:catalog"
+      ]),
+      var.glue_table_arns
+    )
   }
   dynamic "statement" {
     for_each = length(var.kms_key_arns) > 0 ? [1] : []

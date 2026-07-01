@@ -515,7 +515,7 @@ module "iam" {
   athena_results_bucket_arn              = module.lakehouse.athena_results_bucket_arn
   athena_workgroup_arn                   = module.lakehouse.athena_workgroup_arn
   glue_database_arn                      = module.lakehouse.glue_database_arn
-  cur_data_table_arn                     = module.lakehouse.cur_data_table_arn
+  glue_table_arns                        = [module.lakehouse.raw_cur_table_arn]
   tags                                   = var.tags
 }
 

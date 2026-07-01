@@ -107,3 +107,41 @@ def test_cost_puller_identity_policy_cloudwatch():
 
     assert "AllowCloudWatchMetricData" in cost_puller_block, "cost_puller IAM policy missing AllowCloudWatchMetricData statement"
     assert "cloudwatch:GetMetricData" in cost_puller_block, "cost_puller IAM policy AllowCloudWatchMetricData missing cloudwatch:GetMetricData action"
+
+
+def test_glue_table_arns_iam_regression():
+    """Verify IAM variables and modules use glue_table_arns correctly."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    
+    # 1. Verify modules/iam/main.tf Glue boundary and normalizer policy use var.glue_table_arns
+    iam_main_tf = os.path.join(base_dir, "modules/iam/main.tf")
+    assert os.path.exists(iam_main_tf)
+    with open(iam_main_tf, "r", encoding="utf-8") as f:
+        iam_main_content = f.read()
+
+    # Boundary Glue block:
+    boundary_block = get_block(iam_main_content, r'data "aws_iam_policy_document" "boundary"\s*\{')
+    assert boundary_block is not None
+    assert "var.glue_table_arns" in boundary_block
+    assert "var.cur_data_table_arn" not in boundary_block
+
+    # Normalizer Glue block:
+    normalizer_block = get_block(iam_main_content, r'data "aws_iam_policy_document" "normalizer"\s*\{')
+    assert normalizer_block is not None
+    assert "var.glue_table_arns" in normalizer_block
+    assert "var.cur_data_table_arn" not in normalizer_block
+
+    # 2. Verify sandbox/staging/prod IAM module calls pass module.lakehouse.raw_cur_table_arn, not cur_data_table_arn
+    for env in ["sandbox", "staging", "prod"]:
+        main_tf_path = os.path.join(base_dir, f"environments/{env}/main.tf")
+        assert os.path.exists(main_tf_path), f"Environment main.tf not found for {env}"
+        with open(main_tf_path, "r", encoding="utf-8") as f:
+            env_content = f.read()
+
+        iam_module_block = get_block(env_content, r'module "iam"\s*\{')
+        assert iam_module_block is not None, f"Could not find module 'iam' block in environments/{env}/main.tf"
+        
+        assert "glue_table_arns" in iam_module_block, f"glue_table_arns missing in module 'iam' inside environments/{env}/main.tf"
+        assert "raw_cur_table_arn" in iam_module_block, f"raw_cur_table_arn missing in module 'iam' inside environments/{env}/main.tf"
+        assert "cur_data_table_arn" not in iam_module_block, f"cur_data_table_arn should not be passed to module 'iam' inside environments/{env}/main.tf"
+
