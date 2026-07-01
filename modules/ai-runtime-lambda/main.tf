@@ -170,12 +170,7 @@ resource "aws_iam_policy" "request" {
           Sid      = "AIRequestS3PointerList"
           Effect   = "Allow"
           Action   = ["s3:ListBucket"]
-          Resource = [var.ai_request_s3_pointer_bucket_arn]
-          Condition = {
-            StringLike = {
-              "s3:prefix" = var.ai_request_s3_pointer_prefixes
-            }
-          }
+          Resource = [var.ai_request_s3_pointer_bucket_arn, "arn:aws:s3:::company-cdo-*-telemetry"]
         }
       ] : [],
       var.ai_request_s3_pointer_bucket_arn != "" ? [
@@ -183,7 +178,10 @@ resource "aws_iam_policy" "request" {
           Sid      = "AIRequestS3PointerGet"
           Effect   = "Allow"
           Action   = ["s3:GetObject"]
-          Resource = [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"]
+          Resource = concat(
+            [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"],
+            ["arn:aws:s3:::company-cdo-*-telemetry/*"]
+          )
         }
       ] : []
     )

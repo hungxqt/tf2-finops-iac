@@ -87,6 +87,18 @@ cur_exports_json = <<-EOT
     "prefix": "336805808730",
     "export_name": "accountCUR",
     "allowed_raw_prefix": "336805808730"
+  },
+  "200000000012": {
+    "source_account_id": "200000000012",
+    "prefix": "336805808730",
+    "export_name": "accountCUR",
+    "allowed_raw_prefix": "336805808730"
+  },
+  "200000000013": {
+    "source_account_id": "200000000013",
+    "prefix": "336805808730",
+    "export_name": "accountCUR",
+    "allowed_raw_prefix": "336805808730"
   }
 }
 EOT
