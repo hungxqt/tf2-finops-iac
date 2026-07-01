@@ -1,4 +1,5 @@
 import { cn } from "../../lib/utils";
+import { ManualTriggerButton } from "../ui/ManualTriggerButton";
 import type { DashboardSummary } from "../../schema";
 
 interface TopbarProps {
@@ -28,6 +29,11 @@ function formatTs(ts?: string): string {
   return new Date(ts).toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+/** CDO admins and operators can trigger ad-hoc runs; finance-readonly cannot. */
+function canTrigger(role: string): boolean {
+  return ["admin", "cdo", "engineering"].includes(role.toLowerCase());
+}
+
 export function Topbar({ title, summary }: TopbarProps) {
   const isLocked = summary.containment_locked;
 
@@ -41,21 +47,32 @@ export function Topbar({ title, summary }: TopbarProps) {
         <h1 className="text-base font-semibold text-text-primary truncate">{title}</h1>
       </div>
 
-      {/* Right: meta pills */}
-      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-        <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass("neutral"))}>
-          {summary.environment}
-        </span>
-        <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass("info"))}>
-          {summary.viewer_role}
-        </span>
-        <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass(freshnessTone(summary.data_freshness_status || "")))}>
-          {summary.data_freshness_status || "unknown"}
-        </span>
-        <span className="text-[11px] text-text-muted hidden sm:inline">
-          {formatTs(summary.generated_at)}
-        </span>
+      {/* Right: manual trigger (CDO/admin only) + meta pills */}
+      <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end">
+        {canTrigger(summary.viewer_role) && (
+          <ManualTriggerButton
+            tenantId={summary.tenant_id}
+            accountId={undefined}
+            quotaUsed={summary.ad_hoc_quota_used}
+          />
+        )}
+
+        <div className="flex items-center gap-2">
+          <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass("neutral"))}>
+            {summary.environment}
+          </span>
+          <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass("info"))}>
+            {summary.viewer_role}
+          </span>
+          <span className={cn("inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border", pillClass(freshnessTone(summary.data_freshness_status || "")))}>
+            {summary.data_freshness_status || "unknown"}
+          </span>
+          <span className="text-[11px] text-text-muted hidden sm:inline">
+            {formatTs(summary.generated_at)}
+          </span>
+        </div>
       </div>
     </header>
   );
 }
+

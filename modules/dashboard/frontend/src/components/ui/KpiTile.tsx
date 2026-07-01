@@ -42,6 +42,9 @@ export function KpiTile({ icon, label, value, detail, tone = "info", className }
 
     const prefix = value.slice(0, value.indexOf(numMatch[0]));
     const suffix = value.slice(value.indexOf(numMatch[0]) + numMatch[0].length);
+    const targetStr = numMatch[0];
+    const dotIdx = targetStr.indexOf(".");
+    const originalDecimals = dotIdx === -1 ? 0 : targetStr.length - dotIdx - 1;
 
     let start: number | null = null;
     const duration = 900;
@@ -52,10 +55,10 @@ export function KpiTile({ icon, label, value, detail, tone = "info", className }
       const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
       const current = target * eased;
 
-      const formatted =
-        target >= 1000
-          ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(current)
-          : new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(current);
+      const formatted = new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: originalDecimals,
+        maximumFractionDigits: originalDecimals
+      }).format(current);
 
       if (el) el.textContent = `${prefix}${formatted}${suffix}`;
       if (progress < 1) requestAnimationFrame(step);

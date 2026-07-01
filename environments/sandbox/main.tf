@@ -682,4 +682,5 @@ module "dashboard" {
   dashboard_geo_restriction_locations = var.dashboard_geo_restriction_locations
   tags                                = var.tags
   destroyable                         = var.destroyable
+  state_machine_arn                   = module.orchestration.state_machine_arn
 }

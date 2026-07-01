@@ -117,4 +117,7 @@ variable "group_name_cdo" {
   description = "Cognito group name for CDO Admin users"
   default     = "finops-cdo-admin"
 }
-
+variable "state_machine_arn" {
+  type        = string
+  description = "The ARN of the Step Functions State Machine to trigger manually"
+}

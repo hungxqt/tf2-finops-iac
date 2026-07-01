@@ -37,3 +37,56 @@ export async function loadDashboardSummary(): Promise<DashboardSummary> {
     throw error;
   }
 }
+
+/**
+ * Sends an ad-hoc manual-trigger request to the backend API Gateway endpoint
+ * that calls StepFunctions:StartExecution with { is_ad_hoc: true }.
+ *
+ * In local dev (no trigger_api_url configured in runtime config), the function
+ * simulates a successful trigger after a short delay so the button UX can be
+ * exercised without AWS credentials.
+ *
+ * Returns the execution ARN on success.
+ * Throws a descriptive Error on failure (quota exceeded, network error, etc.).
+ */
+export async function triggerAdHocRun(
+  tenantId: string | undefined,
+  accountId: string | undefined
+): Promise<{ execution_arn: string }> {
+  const config = await loadRuntimeConfig();
+  const url = config.trigger_api_url;
+
+  if (!url) {
+    // Local-dev simulation: pretend the execution started after 1.5s.
+    if (IS_LOCAL_DEV) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return { execution_arn: `arn:aws:states:ap-southeast-1:123456789012:execution:tf2-finops-sandbox-workflow:adhoc-${Date.now()}` };
+    }
+    throw new Error("trigger_api_url is not configured in dashboard_runtime_config.json");
+  }
+
+  const body = JSON.stringify({
+    is_ad_hoc: true,
+    ...(tenantId   ? { tenant_id:  tenantId }  : {}),
+    ...(accountId  ? { account_id: accountId } : {})
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+
+  if (!response.ok) {
+    // Surface structured error from the backend (quota, policy, etc.)
+    const cause = (payload as { message?: string; error?: string }).message
+      || (payload as { message?: string; error?: string }).error
+      || `HTTP ${response.status}`;
+    throw new Error(cause);
+  }
+
+  return payload as { execution_arn: string };
+}
