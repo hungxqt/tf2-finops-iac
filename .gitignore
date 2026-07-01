@@ -72,3 +72,5 @@ desktop.ini
 temp-lambda
 
 Capstone_Phase2_AI
+
+terraform.tfvars
