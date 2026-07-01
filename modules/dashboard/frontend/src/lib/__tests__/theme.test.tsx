@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { ThemeProvider, useTheme } from "../theme";
+import { ThemeProvider } from "../theme";
+import { useTheme } from "../theme-context";
 import type { ReactNode } from "react";
 
 function wrapper({ children }: { children: ReactNode }) {

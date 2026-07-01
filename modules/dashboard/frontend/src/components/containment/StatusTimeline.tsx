@@ -40,7 +40,7 @@ export function StatusTimeline({ log }: StatusTimelineProps) {
                 className="text-[10px] text-text-muted"
                 title={formatDateTime(entry.timestamp)}
               >
-                {relativeTime(entry.timestamp)}
+                {relativeTime(entry.timestamp, now)}
               </span>
               {entry.actor && (
                 <span className="text-[10px] text-accent-cyan font-mono">{entry.actor}</span>

@@ -1,12 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-
-type Theme = "dark" | "light";
-
-interface ThemeContextValue {
-  theme: Theme;
-  toggle: () => void;
-  setTheme: (t: Theme) => void;
-}
+import { useEffect, useState, type ReactNode } from "react";
+import { ThemeContext, type Theme } from "./theme-context";
 
 const STORAGE_KEY = "finops-theme";
 
@@ -22,12 +15,6 @@ function getInitialTheme(): Theme {
   }
   return "dark";
 }
-
-const ThemeContext = createContext<ThemeContextValue>({
-  theme: "dark",
-  toggle: () => {},
-  setTheme: () => {},
-});
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
@@ -49,8 +36,4 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       {children}
     </ThemeContext.Provider>
   );
-}
-
-export function useTheme(): ThemeContextValue {
-  return useContext(ThemeContext);
 }
