@@ -18,7 +18,7 @@ export function EmptyState({ title, detail, icon, className }: EmptyStateProps) 
         className
       )}
     >
-      <div className="text-text-muted opacity-50">
+      <div className="text-text-muted opacity-50 animate-icon-float">
         {icon ?? <Inbox className="w-8 h-8" />}
       </div>
       <p className="text-sm font-semibold text-text-secondary">{title}</p>

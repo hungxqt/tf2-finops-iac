@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 import boto3
+import math
 import finops_common
 
 logger = logging.getLogger()
@@ -19,7 +20,27 @@ ddb_client = None
 athena_client = None
 
 
-import math
+def sanitize_dict_for_logging(d: dict) -> dict:
+    if not isinstance(d, dict):
+        return d
+    sanitized = {}
+    for k, v in d.items():
+        if k in ("aws_cur_line_items", "aws_cost_explorer_daily", "resource_utilization_metrics", "missing_resources"):
+            if isinstance(v, list):
+                sanitized[k] = f"<list of {len(v)} items>"
+            else:
+                sanitized[k] = str(v)
+        elif isinstance(v, dict):
+            sanitized[k] = sanitize_dict_for_logging(v)
+        elif isinstance(v, list):
+            if len(v) > 5:
+                sanitized[k] = f"<list of {len(v)} items>"
+            else:
+                sanitized[k] = [sanitize_dict_for_logging(item) if isinstance(item, dict) else item for item in v]
+        else:
+            sanitized[k] = v
+    return sanitized
+
 
 def sanitize_ce_records(records):
     sanitized = []
@@ -105,7 +126,7 @@ def quote_identifier(identifier: str) -> str:
     return f'"{identifier}"'
 
 
-def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str) -> None:
+def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str, billing_period: str = None) -> None:
     if not re.match(r'^\d{12}$', account_id):
         raise ValueError(f"Invalid account ID: {account_id}")
     if not re.match(r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}Z)?$', start_date):
@@ -120,6 +141,9 @@ def validate_sql_inputs(account_id: str, start_date: str, end_date: str, databas
         raise ValueError(f"Invalid workgroup name: {workgroup}")
     if results_bucket and (".." in results_bucket or "/" in results_bucket or "\\" in results_bucket):
         raise ValueError(f"Invalid results bucket: {results_bucket}")
+    if billing_period and not re.match(r'^\d{4}-\d{2}$', billing_period):
+        raise ValueError(f"Invalid billing period: {billing_period}")
+
 
 
 def resolve_tenant_id(event: finops_common.Event, event_data: dict) -> str:
@@ -232,8 +256,30 @@ def build_dynamic_select_fields(manifest_columns: list) -> str:
     return ", ".join(select_fields)
 
 
+def get_athena_timestamp_window(start_date_str: str, end_date_str: str) -> tuple[str, str]:
+    """Converts validated YYYY-MM-DD dates into an Athena-safe half-open timestamp window.
+
+    Args:
+        start_date_str: Validated start date string (YYYY-MM-DD format).
+        end_date_str: Validated end date string (YYYY-MM-DD format).
+
+    Returns:
+        A tuple of (start_timestamp_literal, end_exclusive_timestamp_literal).
+    """
+    from datetime import datetime, timedelta
+    start_dt = datetime.strptime(start_date_str[:10], "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date_str[:10], "%Y-%m-%d")
+    end_exclusive_dt = end_dt + timedelta(days=1)
+
+    start_ts = f"TIMESTAMP '{start_dt.strftime('%Y-%m-%d')} 00:00:00'"
+    end_ts = f"TIMESTAMP '{end_exclusive_dt.strftime('%Y-%m-%d')} 00:00:00'"
+    return start_ts, end_ts
+
+
+
 def handle_request(event_data: dict, context: Any) -> dict:
-    logger.info("Received event: %s", finops_common.redact_sensitive_info(str(event_data)))
+    sanitized_event = sanitize_dict_for_logging(event_data)
+    logger.info("Received event: %s", finops_common.redact_sensitive_info(str(sanitized_event)))
 
     operation = (event_data.get("operation") or "").lower()
 
@@ -276,7 +322,13 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "normalizer",
             details,
         )
-        logger.info("Response: %s", response.to_dict())
+        summary = {
+            "status": status,
+            "run_id": event_data.get("run_id", ""),
+            "correlation_id": event_data.get("correlation_id", ""),
+            "failure_code": "CONTRACT_MISMATCH",
+        }
+        logger.info("Response Summary: %s", json.dumps(summary))
         return response.to_dict()
 
     # ── Normal path: validate event ────────────────────────────────────
@@ -460,6 +512,14 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 + ", ".join(missing_athena_config)
             )
 
+        # Resolve billing period
+        bp = event.cost_period or ""
+        billing_period_out = exec_time.strftime("%Y-%m")
+        if bp:
+            m = re.match(r'^(\d{4}-\d{2})', bp.strip())
+            if m:
+                billing_period_out = m.group(1)
+
         # Re-read and re-validate the manifest dataFiles so normalizer can
         # independently confirm they stay within the allowed raw export prefix.
         manifest_columns = []
@@ -479,14 +539,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 
                 # Validate columns
                 finops_common.validate_manifest_columns(manifest_columns)
-                
-                # Resolve billing period
-                bp = event.cost_period or ""
-                billing_period_out = exec_time.strftime("%Y-%m")
-                if bp:
-                    m = re.match(r'^(\d{4}-\d{2})', bp.strip())
-                    if m:
-                        billing_period_out = m.group(1)
                 
                 # Validate data files
                 allowed_prefix = ingestion_details.get("allowed_raw_prefix") or cur_raw_export_prefix
@@ -508,21 +560,37 @@ def handle_request(event_data: dict, context: Any) -> dict:
         end_date = event.execution_date
 
         # SQL validation
-        validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket)
+        validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket, billing_period_out)
 
         # Build select fields dynamically based on manifest columns
         select_fields = build_dynamic_select_fields(manifest_columns)
 
-        # Parse exec_time to format standard timestamp strings for Presto/Athena literal representation
-        start_timestamp = exec_time.strftime("%Y-%m-%d 00:00:00")
-        end_timestamp = exec_time.strftime("%Y-%m-%d 23:59:59")
+        start_ts, end_ts = get_athena_timestamp_window(start_date, end_date)
+
+        # Validate generated timestamp literals to prevent injection
+        if not re.match(r"^TIMESTAMP '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'$", start_ts):
+            raise ValueError(f"Invalid start timestamp literal: {start_ts}")
+        if not re.match(r"^TIMESTAMP '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'$", end_ts):
+            raise ValueError(f"Invalid end timestamp literal: {end_ts}")
+
+        cur_raw_account_partition_key = os.environ.get("CUR_RAW_ACCOUNT_PARTITION_KEY") or ""
+        
+        where_clauses = [
+            f"billing_period = '{billing_period_out}'",
+            f"line_item_usage_account_id = '{event.account_id}'",
+            f"line_item_usage_start_date >= {start_ts}",
+            f"line_item_usage_start_date < {end_ts}"
+        ]
+        
+        if cur_raw_account_partition_key:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', cur_raw_account_partition_key):
+                raise ValueError(f"Invalid partition key configured: {cur_raw_account_partition_key}")
+            where_clauses.append(f"{cur_raw_account_partition_key} = '{event.account_id}'")
 
         query = f"""
         SELECT {select_fields}
         FROM {quote_identifier(table)}
-        WHERE line_item_usage_account_id = '{event.account_id}'
-          AND line_item_usage_start_date >= TIMESTAMP '{start_timestamp}'
-          AND line_item_usage_start_date <= TIMESTAMP '{end_timestamp}'
+        WHERE {" AND ".join(where_clauses)}
         """
 
         ath = get_athena_client()
@@ -662,7 +730,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             or ""
         )
         if not account_id or not service or cost < 0:
-            logger.info("Filtering out invalid cost record: %s", rec)
+            logger.info("Filtering out invalid cost record (account: %s, service: %s)", account_id, service)
             continue
 
         owner = rec.get("owner") or rec.get("resource_tags_user_owner") or ""
@@ -710,7 +778,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "quality_score": completeness_score,
         })
 
-    # 6. Serialise to Parquet (fallback JSON)
+    # 6. Serialise to Parquet
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -721,10 +789,8 @@ def handle_request(event_data: dict, context: Any) -> dict:
         curated_data = buf.getvalue()
         logger.info("Successfully generated Parquet bytes: %d bytes", len(curated_data))
     except Exception as e:
-        logger.error(
-            "Failed to write Parquet using pyarrow: %s. Falling back to JSON bytes.", e
-        )
-        curated_data = json.dumps(curated_records).encode("utf-8")
+        logger.error("Failed to write Parquet using pyarrow: %s", e)
+        raise RuntimeError(f"Failed to generate Parquet bytes: {e}") from e
 
     # 7. Write to S3 curated folder
     if client:
@@ -886,13 +952,10 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "s3_bucket_uri": s3_bucket_uri,
         "s3_object_checksum": s3_object_checksum,
         "business_context": business_context,
-        # resource_utilization_metrics and CUR/CE arrays are always included in the
-        # normalizer output so downstream states can read them if needed.
-        # For RAW_JSON mode the Step Functions ChooseDetectRequestMode state will
-        # build the inline body directly from these fields.
-        # For S3_POINTER mode the large arrays are present but BuildDetectRequestS3Pointer
-        # explicitly omits aws_cur_line_items from the Step Functions body.
-        "resource_utilization_metrics": resource_utilization_metrics,
+        # Keep details payload under Step Functions' 256 KiB cap:
+        # - aws_cur_line_items is resource-level and large, so we return details_aws_cur_line_items (empty in S3_POINTER mode).
+        # - aws_cost_explorer_daily and resource_utilization_metrics are returned only in RAW_JSON mode.
+        "resource_utilization_metrics": resource_utilization_metrics if detect_request_mode == "RAW_JSON" else [],
         "aws_cur_line_items": details_aws_cur_line_items,
         "aws_cost_explorer_daily": details_aws_cost_explorer_daily,
         "post_telemetry_window": post_telemetry_window,
@@ -908,5 +971,19 @@ def handle_request(event_data: dict, context: Any) -> dict:
     )
     response.curated_data_uri = curated_data_uri
     response.telemetry_quality = completeness_score
-    logger.info("Response: %s", response.to_dict())
+    summary = {
+        "status": "NORMALIZED",
+        "run_id": event.run_id,
+        "correlation_id": event.correlation_id,
+        "curated_data_uri": curated_data_uri,
+        "s3_bucket_uri": s3_bucket_uri,
+        "detect_request_mode": detect_request_mode,
+        "telemetry_quality": completeness_score,
+        "item_counts": {
+            "cur_records": len(cur_records),
+            "ce_records": len(ce_records),
+            "curated_records": len(curated_records)
+        }
+    }
+    logger.info("Response Summary: %s", json.dumps(summary))
     return response.to_dict()

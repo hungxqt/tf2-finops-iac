@@ -223,7 +223,7 @@ _NORMALIZED_HEALTHY_DETAILS = {
     "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/ai-input/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_input.json.gz",
     "s3_object_checksum": "c" * 64,
     "business_context": _BUSINESS_CONTEXT_DEFAULT,
-    "resource_utilization_metrics": None,
+    "resource_utilization_metrics": [],
     "aws_cur_line_items": [],
     "aws_cost_explorer_daily": [],
     "post_telemetry_window": {
@@ -297,7 +297,7 @@ _NORMALIZED_DEGRADED_DETAILS = {
     "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/ai-input/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_input.json.gz",
     "s3_object_checksum": "e" * 64,
     "business_context": _BUSINESS_CONTEXT_DEFAULT,
-    "resource_utilization_metrics": None,
+    "resource_utilization_metrics": [],
     "aws_cur_line_items": [],
     "aws_cost_explorer_daily": [],
     "post_telemetry_window": {
@@ -382,7 +382,7 @@ POST_BUILD_DETECT_REQUEST_S3_POINTER = {
             "current_ce_cost_gap_usd": 0.0,
             "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
             "business_context": _BUSINESS_CONTEXT_DEFAULT,
-            "resource_utilization_metrics": None,
+            "resource_utilization_metrics": [],
         },
     },
 }
@@ -413,7 +413,7 @@ POST_BUILD_DETECT_REQUEST_CE_FALLBACK = {
             "current_ce_cost_gap_usd": 150.0,
             "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
             "business_context": _BUSINESS_CONTEXT_DEFAULT,
-            "resource_utilization_metrics": None,
+            "resource_utilization_metrics": [],
             "quality": {
                 "completeness_score": 0.55,
                 "delayed_cur": True,

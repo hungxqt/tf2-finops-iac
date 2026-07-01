@@ -89,6 +89,15 @@ cd ..
 .\scripts\package-lambdas.ps1
 ```
 
+> [!NOTE]
+> **Đóng gói phụ thuộc theo nền tảng mục tiêu xác định (Deterministic Target-Platform Dependency Packaging)**:
+> Để đảm bảo khả năng tương thích với môi trường chạy AWS Lambda Python 3.13 Linux x86_64, kịch bản đóng gói sử dụng các cờ nhắm mục tiêu của pip (như `--platform manylinux_2_28_x86_64`) để tải về các thư viện biên dịch sẵn của Linux (Linux-native binary wheels) thay vì các thư viện của hệ điều hành cục bộ (ví dụ: các tệp Windows `.dll` hoặc `.pyd`).
+> 
+> Hơn nữa, các phụ thuộc của worker được tách biệt để tối ưu hóa kích thước gói đóng:
+> * Chỉ worker `normalizer` mới đóng gói `pyarrow` (được định nghĩa trong `lambda_src/requirements-normalizer.txt`).
+> * Các worker khác lấy các phụ thuộc chung từ `lambda_src/requirements.txt` (bảng này để trống pyarrow) nhằm tránh lỗi không khớp nhị phân giữa Windows và Linux.
+> * Các phụ thuộc cho kiểm thử cục bộ và phát triển được hợp nhất trong `lambda_src/requirements-dev.txt` và tham chiếu tới cả hai tệp trên.
+
 ### Bước 2.4: Triển khai Layer Publishing CodeBuild
 Thư mục gốc `codebuild` sở hữu ECR repository chung và pipeline xuất bản image wrapper CodeBuild. Áp dụng root này trước khi triển khai các môi trường chính.
 ```powershell
@@ -631,6 +640,7 @@ Bộ replay mô phỏng các dữ liệu đo lường thô của AWS CUR 2.0 / D
    ```powershell
    python ./scripts/prepare_replay.py --account-id <real-sandbox-account-id>
    ```
+   *Lưu ý: Script này tải lên dữ liệu CUR sử dụng cấu trúc phân vùng tài khoản thành viên chuẩn mực `s3://<cur-bucket>/<account_id>/accountCUR/data/BILLING_PERIOD=<YYYY-MM>/` và các tệp manifest trong metadata.*
 
 3. **Bước 3: Bật Chế độ Replay trong Terraform**
    Mở tệp `environments/sandbox/terraform.tfvars` và cấu hình các tham số sau:
@@ -657,7 +667,7 @@ Bộ replay mô phỏng các dữ liệu đo lường thô của AWS CUR 2.0 / D
    # Chế độ full: chạy thử nghiệm toàn bộ dữ liệu 3 tháng (01/03/2026 đến 31/05/2026)
    python ./scripts/run_replay.py --mode full
    ```
-   Bộ runner sẽ tự động tạo cấu hình tài khoản trong bảng DynamoDB `account-policy`, kích hoạt chạy Step Functions tuần tự theo từng ngày và theo dõi trạng thái.
+   Bộ runner sẽ tự động tạo cấu hình tài khoản trong bảng DynamoDB `account-policy`, kích hoạt chạy Step Functions tuần tự theo từng ngày sử dụng định dạng payload chỉ chứa ngày (`execution_date: YYYY-MM-DD` và `billing_period: YYYY-MM`) và theo dõi trạng thái.
 
 4. **Bước 4: Dọn dẹp sau khi kiểm thử**
    Để khôi phục môi trường thử nghiệm sandbox tiêu chuẩn và tắt các cấu hình giả lập, hãy cập nhật lại tệp `environments/sandbox/terraform.tfvars` về:

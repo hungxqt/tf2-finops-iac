@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
 type Tone = "info" | "success" | "warning" | "critical";
@@ -10,6 +10,7 @@ interface KpiTileProps {
   detail: string;
   tone?: Tone;
   className?: string;
+  index?: number; // For staggered animation
 }
 
 const gradientClasses: Record<Tone, string> = {
@@ -26,8 +27,15 @@ const iconColorClasses: Record<Tone, string> = {
   critical: "text-accent-red",
 };
 
-export function KpiTile({ icon, label, value, detail, tone = "info", className }: KpiTileProps) {
+export function KpiTile({ icon, label, value, detail, tone = "info", className, index = 0 }: KpiTileProps) {
   const valueRef = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  // Staggered entrance animation
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(true), index * 100);
+    return () => clearTimeout(timer);
+  }, [index]);
 
   // Count-up animation for numeric values
   useEffect(() => {
@@ -71,6 +79,7 @@ export function KpiTile({ icon, label, value, detail, tone = "info", className }
       className={cn(
         "relative bg-surface-panel border border-border-subtle rounded-lg overflow-hidden min-h-[140px] p-5",
         "hover:border-border-strong hover:[box-shadow:var(--shadow-card)] transition-all duration-200",
+        visible ? "animate-page-enter" : "opacity-0",
         className
       )}
     >

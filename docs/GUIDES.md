@@ -89,6 +89,15 @@ cd ..
 .\scripts\package-lambdas.ps1
 ```
 
+> [!NOTE]
+> **Deterministic Target-Platform Dependency Packaging**:
+> To ensure compatibility with AWS Lambda's Python 3.13 Linux x86_64 runtime, the packaging script uses pip targeting flags (such as `--platform manylinux_2_28_x86_64`) to fetch Linux-native binary wheels rather than local OS binaries (e.g. Windows `.dll` or `.pyd` files).
+> 
+> Furthermore, worker dependencies are split to minimize payload sizes:
+> * Only the `normalizer` worker packages `pyarrow` (defined in `lambda_src/requirements-normalizer.txt`).
+> * Other workers pull general dependencies from `lambda_src/requirements.txt` (which remains empty of pyarrow) to prevent Windows/Linux binary mismatch issues.
+> * Local testing and development dependencies are unified under `lambda_src/requirements-dev.txt` which references both files.
+
 ### Step 2.4: Deploy the CodeBuild Publishing Layer
 The `codebuild` root owns the shared ECR repository and CodeBuild wrapper image publishing pipeline. Apply this root before deploying the main environments.
 ```powershell
@@ -671,7 +680,7 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    
    To generate a **smoke test** context covering selected validation windows (including lookback padding for Cost Explorer):
    ```powershell
-   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context-smoke.json
+   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context.json
    ```
    
    To upload the generated context directly to the Sandbox S3 lakehouse bucket (e.g. `s3://<lakehouse-bucket>/replay/business_context.json`), add the `--upload` flag:
@@ -684,6 +693,7 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    ```powershell
    python ./scripts/prepare_replay.py --account-id <real-sandbox-account-id>
    ```
+   *Note: This script uploads raw CUR telemetry using the canonical member-account partitioning structure `s3://<cur-bucket>/<account_id>/accountCUR/data/BILLING_PERIOD=<YYYY-MM>/` and manifest files under metadata.*
 
 3. **Step 3: Enable Replay Mode in Terraform**
    Open `environments/sandbox/terraform.tfvars` and set the following parameters:
@@ -703,16 +713,16 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    ```powershell
    # Smoke mode: runs a 3-day test execution (2026-03-01 to 2026-03-03)
    python ./scripts/run_replay.py --mode smoke
-
+   
    # Warmup mode: replays cost data up to the RDS anomaly date (2026-03-01 to 2026-03-20)
    python ./scripts/run_replay.py --mode warmup
-
+   
    # Full backtest mode: replays the full 3-month dataset (2026-03-01 to 2026-05-31)
    python ./scripts/run_replay.py --mode full
    ```
-   The runner will seed the `account-policy` DynamoDB table, trigger executions sequentially day-by-day, and poll for their status.
+   The runner seeds the `account-policy` DynamoDB table, then triggers Step Functions sequentially day-by-day with a date-only `execution_date` (`YYYY-MM-DD`) and `billing_period` (`YYYY-MM`) in the input payload, polling for status.
 
-4. **Step 4: Cleanup**
+5. **Step 5: Cleanup**
    To restore standard sandbox testing and disable synthetic overrides, update `environments/sandbox/terraform.tfvars` back to:
    ```hcl
    synthetic_replay_enabled              = false

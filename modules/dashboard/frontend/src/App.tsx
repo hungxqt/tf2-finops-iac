@@ -1,69 +1,100 @@
-import { useState, useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { loadDashboardSummary } from "./data";
 import { AppShell } from "./components/layout/AppShell";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
-import { OverviewPage }      from "./pages/OverviewPage";
-import { EngineeringPage }   from "./pages/EngineeringPage";
-import { ContainmentPage }   from "./pages/ContainmentPage";
-import { CollaborationPage } from "./pages/CollaborationPage";
-import { AuditPage }         from "./pages/AuditPage";
-import { AdminPage }         from "./pages/AdminPage";
+import { ErrorBoundary } from "./components/error/ErrorBoundary";
+import { PageErrorFallback } from "./components/error/PageErrorFallback";
 import type { DashboardSummary } from "./schema";
 
-type PageKey = "overview" | "engineering" | "containment" | "collaboration" | "audit" | "admin";
+const OverviewPage      = lazy(() => import("./pages/OverviewPage").then(m => ({ default: m.OverviewPage })));
+const EngineeringPage   = lazy(() => import("./pages/EngineeringPage").then(m => ({ default: m.EngineeringPage })));
+const ContainmentPage   = lazy(() => import("./pages/ContainmentPage").then(m => ({ default: m.ContainmentPage })));
+const CollaborationPage = lazy(() => import("./pages/CollaborationPage").then(m => ({ default: m.CollaborationPage })));
+const AuditPage         = lazy(() => import("./pages/AuditPage").then(m => ({ default: m.AuditPage })));
+const AdminPage         = lazy(() => import("./pages/AdminPage").then(m => ({ default: m.AdminPage })));
 
-const PAGE_TITLES: Record<PageKey, string> = {
-  overview:      "Finance Overview",
-  engineering:   "Engineering Triage",
-  containment:   "Containment & Audit",
-  collaboration: "Collaboration",
-  audit:         "Audit Evidence Diffs",
-  admin:         "Admin Settings",
-};
-
-function useActivePageState(): [PageKey, (p: PageKey) => void] {
-  const [page, setPage] = useState<PageKey>(() => {
-    try {
-      const saved = localStorage.getItem("finops-active-page");
-      if (saved && saved in PAGE_TITLES) return saved as PageKey;
-    } catch {
-      // ignore
-    }
-    return "overview";
-  });
-
-  const navigate = (p: PageKey) => {
-    setPage(p);
-    try { localStorage.setItem("finops-active-page", p); } catch { /* ignore */ }
-  };
-
-  return [page, navigate];
+function PageSkeleton() {
+  return (
+    <div className="p-6 space-y-6">
+      <SkeletonLoader variant="card" height="80px" />
+      <div className="grid grid-cols-4 gap-4 max-md:grid-cols-2 max-sm:grid-cols-1">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <SkeletonLoader key={i} variant="kpi" />
+        ))}
+      </div>
+      <SkeletonLoader variant="card" height="320px" />
+    </div>
+  );
 }
 
-function renderPage(page: PageKey, summary: DashboardSummary) {
-  switch (page) {
-    case "overview":      return <OverviewPage      summary={summary} />;
-    case "engineering":   return <EngineeringPage   summary={summary} />;
-    case "containment":   return <ContainmentPage   summary={summary} />;
-    case "collaboration": return <CollaborationPage summary={summary} />;
-    case "audit":         return <AuditPage         summary={summary} />;
-    case "admin":         return <AdminPage         summary={summary} />;
-  }
+interface PageWrapperProps {
+  children: React.ReactNode;
+}
+
+function PageWrapper({ children }: PageWrapperProps) {
+  return (
+    <ErrorBoundary fallback={<PageErrorFallback />}>
+      <Suspense fallback={<PageSkeleton />}>
+        {children}
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function AdminGuard({ summary, children }: { summary: DashboardSummary; children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const isAdmin = ["admin", "cdo"].includes(summary.viewer_role.toLowerCase());
+
+  useEffect(() => {
+    if (!isAdmin) {
+      navigate("/", { replace: true });
+    }
+  }, [isAdmin, navigate]);
+
+  if (!isAdmin) return null;
+  return <>{children}</>;
+}
+
+function AppShellLayout() {
+  const query = useQuery({ queryKey: ["dashboard-summary"], queryFn: loadDashboardSummary });
+  const location = useLocation();
+
+  if (query.isLoading) return <LoadingState />;
+  if (query.isError)   return <ErrorState message={query.error instanceof Error ? query.error.message : "Unknown error"} />;
+  if (!query.data)     return <ErrorState message="Dashboard summary was empty after loading." />;
+
+  const summary = query.data;
+
+  return (
+    <AppShell summary={summary}>
+      <Routes location={location} key={location.pathname}>
+        <Route index element={<PageWrapper><OverviewPage summary={summary} /></PageWrapper>} />
+        <Route path="engineering" element={<PageWrapper><EngineeringPage summary={summary} /></PageWrapper>} />
+        <Route path="containment" element={<PageWrapper><ContainmentPage summary={summary} /></PageWrapper>} />
+        <Route path="collaboration" element={<PageWrapper><CollaborationPage summary={summary} /></PageWrapper>} />
+        <Route path="audit" element={<PageWrapper><AuditPage summary={summary} /></PageWrapper>} />
+        <Route path="admin" element={
+          <AdminGuard summary={summary}>
+            <PageWrapper><AdminPage summary={summary} /></PageWrapper>
+          </AdminGuard>
+        } />
+      </Routes>
+    </AppShell>
+  );
 }
 
 function LoadingState() {
   return (
     <div className="flex h-screen overflow-hidden bg-surface-base">
-      {/* Sidebar skeleton */}
       <div className="w-60 shrink-0 bg-surface-panel border-r border-border-subtle flex flex-col p-3 gap-3">
         <div className="h-8 mb-2 animate-shimmer rounded-lg" />
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="h-8 animate-shimmer rounded-md" />
         ))}
       </div>
-      {/* Main skeleton */}
       <div className="flex flex-col flex-1 overflow-hidden">
         <div className="h-14 bg-surface-panel border-b border-border-subtle animate-shimmer" />
         <div className="flex-1 p-6 space-y-6">
@@ -99,33 +130,9 @@ function ErrorState({ message }: { message: string }) {
 }
 
 export function App() {
-  const [activePage, navigate] = useActivePageState();
-  const query = useQuery({ queryKey: ["dashboard-summary"], queryFn: loadDashboardSummary });
-
-  // Reset to overview if admin page is loaded by non-admin
-  useEffect(() => {
-    if (query.data && activePage === "admin") {
-      const role = query.data.viewer_role.toLowerCase();
-      if (!["admin", "cdo"].includes(role)) {
-        navigate("overview");
-      }
-    }
-  }, [query.data, activePage, navigate]);
-
-  if (query.isLoading) return <LoadingState />;
-  if (query.isError)   return <ErrorState message={query.error instanceof Error ? query.error.message : "Unknown error"} />;
-  if (!query.data)     return <ErrorState message="Dashboard summary was empty after loading." />;
-
-  const summary = query.data;
-
   return (
-    <AppShell
-      summary={summary}
-      activePage={activePage}
-      onNavigate={navigate}
-      pageTitle={PAGE_TITLES[activePage]}
-    >
-      {renderPage(activePage, summary)}
-    </AppShell>
+    <BrowserRouter>
+      <AppShellLayout />
+    </BrowserRouter>
   );
 }

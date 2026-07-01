@@ -1,16 +1,12 @@
 import { LockKeyhole } from "lucide-react";
 import { StatusPill } from "../ui/StatusPill";
+import { formatDateTime } from "../../lib/format";
 import type { DashboardSummary } from "../../schema";
 
 type ApprovalItem = DashboardSummary["approvals"][number];
 
 interface ApprovalCardProps {
   item: ApprovalItem;
-}
-
-function formatTs(ts?: string): string {
-  if (!ts) return "";
-  return new Date(ts).toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 export function ApprovalCard({ item }: ApprovalCardProps) {
@@ -38,7 +34,7 @@ export function ApprovalCard({ item }: ApprovalCardProps) {
           <StatusPill tone={item.execution_mode === "apply" ? "critical" : "warning"} label={item.execution_mode} size="sm" />
         </div>
         {item.requested_at && (
-          <span className="text-[10px] text-text-muted">{formatTs(item.requested_at)}</span>
+          <span className="text-[10px] text-text-muted">{formatDateTime(item.requested_at)}</span>
         )}
       </div>
 

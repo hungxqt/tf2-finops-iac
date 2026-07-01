@@ -9,7 +9,7 @@ tags = {
 }
 
 # AI Engine Lambda Container Images (must be digest-pinned to satisfy validation)
-request_image_digest = "sha256:feb534a2c1aabd20c4811250ad1c3ef63d78247e1e25772f8fc51aee8eb3e242"
+request_image_digest = "sha256:4d354944af925fb363cd2aa38eedb59b6b20bf459746b0cfca0d19e706fccd24"
 
 # S3 Cross-Region Replication region
 replica_region = "ap-southeast-2"

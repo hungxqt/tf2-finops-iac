@@ -40,14 +40,15 @@ locals {
       timeout     = 120
       memory_size = 512
       env = {
-        ENVIRONMENT                = var.environment
-        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
-        RUN_STATE_TABLE_NAME       = lookup(var.dynamodb_table_names, "run_state", "")
-        ATHENA_WORKGROUP_NAME      = var.athena_workgroup_name
-        GLUE_DATABASE_NAME         = var.glue_database_name
-        GLUE_TABLE_NAME            = var.cur_data_table_name
-        ATHENA_RESULTS_BUCKET_NAME = var.athena_results_bucket_name
-        CUR_RAW_EXPORT_PREFIX      = var.cur_raw_export_prefix
+        ENVIRONMENT                   = var.environment
+        LAKEHOUSE_BUCKET_NAME         = var.lakehouse_bucket_name
+        RUN_STATE_TABLE_NAME          = lookup(var.dynamodb_table_names, "run_state", "")
+        ATHENA_WORKGROUP_NAME         = var.athena_workgroup_name
+        GLUE_DATABASE_NAME            = var.glue_database_name
+        GLUE_TABLE_NAME               = var.cur_data_table_name
+        ATHENA_RESULTS_BUCKET_NAME    = var.athena_results_bucket_name
+        CUR_RAW_EXPORT_PREFIX         = var.cur_raw_export_prefix
+        CUR_RAW_ACCOUNT_PARTITION_KEY = var.cur_raw_account_partition_key
       }
     }
     router = {

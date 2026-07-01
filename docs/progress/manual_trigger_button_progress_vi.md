@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Đã triển khai, đang chờ xác nhận (npm install đang chạy).
+Đã triển khai hoàn tất và được xác thực. Phần wiring backend đã hoàn thành, và lỗi apply CORS trên Lambda Function URL đã được khắc phục.
 
 ## Phạm vi
 
@@ -43,16 +43,23 @@ kích hoạt thủ công một lần chạy phát hiện FinOps ad-hoc. Nút th�
     finance-readonly không thấy).
   - Render nút trong vùng bên phải của Topbar.
 
-## Wiring backend (Terraform – chưa implement)
+## Wiring backend (Terraform – Đã triển khai)
 
-Frontend gọi `trigger_api_url` từ runtime config. URL này phải trỏ đến một endpoint
-API Gateway (hoặc Lambda Function URL sau CloudFront) thực hiện:
+Frontend gọi `trigger_api_url` từ runtime config. URL này trỏ đến AWS Lambda Function URL (`aws_lambda_function_url.ad_hoc_trigger_url`) thực hiện:
 
 1. Nhận POST với `{ is_ad_hoc: true, tenant_id?, account_id? }`.
-2. Gọi `StepFunctions:StartExecution` với state machine ARN và body làm input JSON
-   (có `is_ad_hoc: true`).
-3. Trả về `{ execution_arn: "..." }` nếu thành công, hoặc lỗi có trường `message`
-   mô tả (ví dụ quota exceeded) để nút hiển thị lên UI.
+2. Gọi `StepFunctions:StartExecution` với state machine ARN và body làm input JSON (có `is_ad_hoc: true`).
+3. Trả về `{ execution_arn: "..." }` nếu thành công, hoặc lỗi có trường `message` mô tả (ví dụ quota exceeded) để nút hiển thị lên UI.
+
+Tài nguyên `trigger_api_url` được Terraform ghi ra dưới dạng cấu hình runtime của dashboard (`dashboard_runtime_config.json`) được upload lên S3 data bucket.
+
+### Sửa lỗi cấu hình CORS của Lambda Function URL
+
+Trong quá trình deploy backend lúc đầu, lệnh Terraform apply bị lỗi đối với tài nguyên `aws_lambda_function_url.ad_hoc_trigger_url` do lỗi xác thực cấu hình CORS:
+- **Lỗi**: AWS Lambda Function URL CORS từ chối phương thức `OPTIONS` trong `cors.allow_methods`.
+- **Nguyên nhân gốc rễ**: Cấu hình CORS của AWS Lambda Function URL tự động xử lý preflight (OPTIONS) và không hỗ trợ/cho phép khai báo trực tiếp phương thức `OPTIONS` trong `allow_methods` nếu đó là request xử lý ở mức ứng dụng. Nó chỉ yêu cầu khai báo các phương thức nghiệp vụ thực tế (ví dụ: `POST`).
+- **Khắc phục**: Loại bỏ `"OPTIONS"` khỏi `allow_methods`, chỉ để lại `["POST"]`.
+- **Trạng thái validation**: Quá trình apply thành công không có lỗi và cấu hình trigger backend đã được lưu trữ chính xác.
 
 ## Lệnh kiểm tra
 
@@ -80,7 +87,4 @@ npm run dev
 
 ## Bước tiếp theo
 
-1. Chờ `npm run typecheck` và `npm run test` xác nhận 0 lỗi.
-2. Implement Lambda trigger mỏng phía Terraform (gọi `StepFunctions:StartExecution`).
-3. Wire `trigger_api_url` vào output runtime config của dashboard.
-4. Cập nhật progress file sau khi validation qua.
+Không có bước tiếp theo. Nút manual trigger và hạ tầng backend đi kèm đã được triển khai hoàn chỉnh, xác thực và kích hoạt thành công.

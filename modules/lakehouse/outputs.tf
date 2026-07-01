@@ -115,4 +115,10 @@ output "cur_export_bucket_arn" {
   value       = var.create_cur_export_bucket ? aws_s3_bucket.cur_export[0].arn : ""
 }
 
+output "cur_raw_account_partition_key" {
+  description = "The partition key used for the member account in raw CUR table. Empty if member partitioning is disabled."
+  value       = length(var.telemetry_member_account_ids) > 0 ? "source_account_id" : ""
+}
+
+
 

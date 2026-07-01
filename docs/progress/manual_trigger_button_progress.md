@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented and validated (typecheck passed, 3/3 Vitest tests passed).
+Fully implemented and validated. The backend wiring is complete, and the CORS apply failure on the Lambda Function URL has been resolved.
 
 ## Scope
 
@@ -45,20 +45,23 @@ Lambda (`check_quota` operation).
     finance-readonly does not).
   - Rendered the button in the Topbar right section beside the meta pills.
 
-## Backend Wiring (Terraform – Not Yet Implemented)
+## Backend Wiring (Terraform – Implemented)
 
-The frontend calls `trigger_api_url` from the runtime config. This URL must point
-to an API Gateway endpoint (or Lambda Function URL behind CloudFront) that:
+The frontend calls `trigger_api_url` from the runtime config. This URL points to an AWS Lambda Function URL (`aws_lambda_function_url.ad_hoc_trigger_url`) that:
 
 1. Accepts POST with `{ is_ad_hoc: true, tenant_id?, account_id? }`.
-2. Calls `StepFunctions:StartExecution` with the state machine ARN and the body
-   as the input JSON (with `is_ad_hoc: true`).
-3. Returns `{ execution_arn: "..." }` on success, or an error with a descriptive
-   `message` field (e.g. "Tenant ad hoc run quota limit of 5 runs per day exceeded.")
-   so the button can surface it.
+2. Calls `StepFunctions:StartExecution` with the state machine ARN and the body as the input JSON (with `is_ad_hoc: true`).
+3. Returns `{ execution_arn: "..." }` on success, or an error with a descriptive `message` field (e.g. "Tenant ad hoc run quota limit of 5 runs per day exceeded.") so the button can surface it.
 
-The `trigger_api_url` must be emitted from Terraform as part of the dashboard
-runtime config (`dashboard_runtime_config.json`) published to the S3 data bucket.
+The `trigger_api_url` is emitted from Terraform as part of the dashboard runtime config (`dashboard_runtime_config.json`) published to the S3 data bucket.
+
+### Lambda Function URL CORS Configuration Fix
+
+During the initial deployment of the backend wiring, the Terraform apply failed for `aws_lambda_function_url.ad_hoc_trigger_url` due to CORS configuration validation errors:
+- **Error**: AWS Lambda Function URL CORS rejected `OPTIONS` in `cors.allow_methods`.
+- **Root Cause**: AWS Lambda Function URL CORS configurations do not support/allow listing `OPTIONS` in `allow_methods` if the target is handled as a standard application request. Function URL CORS handles preflight (OPTIONS) automatically, and only requires listing the requested application method (e.g., `POST`).
+- **Fix**: Removed `"OPTIONS"` from `allow_methods`, setting it to `["POST"]`.
+- **Validation status**: Apply succeeded without errors, and the backend trigger configuration was successfully written.
 
 ## Validation Commands
 
@@ -88,9 +91,4 @@ npm run dev
 
 ## Next Step
 
-1. Wait for `npm install` to complete.
-2. Run `npm run typecheck` and `npm run test` to confirm zero errors.
-3. Implement the Terraform-side trigger Lambda (thin wrapper calling
-   `StepFunctions:StartExecution`) and wire `trigger_api_url` into the dashboard
-   runtime config output.
-4. Update progress file once validation passes.
+No next steps. The manual trigger button and its backend infrastructure are fully implemented, verified, and active.

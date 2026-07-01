@@ -618,15 +618,31 @@ resource "aws_glue_catalog_table" "raw_cur_data" {
   database_name = aws_glue_catalog_database.lakehouse.name
   table_type    = "EXTERNAL_TABLE"
 
-  parameters = {
-    "classification"                          = "parquet"
-    "projection.enabled"                      = "true"
-    "projection.billing_period.type"          = "date"
-    "projection.billing_period.range"         = "2024-01,2035-12"
-    "projection.billing_period.format"        = "yyyy-MM"
-    "projection.billing_period.interval"      = "1"
-    "projection.billing_period.interval.unit" = "MONTHS"
-    "storage.location.template"               = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+  parameters = merge(
+    {
+      "classification"                          = "parquet"
+      "projection.enabled"                      = "true"
+      "projection.billing_period.type"          = "date"
+      "projection.billing_period.range"         = "2024-01,2035-12"
+      "projection.billing_period.format"        = "yyyy-MM"
+      "projection.billing_period.interval"      = "1"
+      "projection.billing_period.interval.unit" = "MONTHS"
+    },
+    length(var.telemetry_member_account_ids) > 0 ? {
+      "projection.source_account_id.type"   = "enum"
+      "projection.source_account_id.values" = join(",", sort(distinct(var.telemetry_member_account_ids)))
+      "storage.location.template"           = "s3://${local.cur_export_bucket_name}/$${source_account_id}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+      } : {
+      "storage.location.template" = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/BILLING_PERIOD=$${billing_period}/"
+    }
+  )
+
+  dynamic "partition_keys" {
+    for_each = length(var.telemetry_member_account_ids) > 0 ? [1] : []
+    content {
+      name = "source_account_id"
+      type = "string"
+    }
   }
 
   partition_keys {
@@ -635,7 +651,7 @@ resource "aws_glue_catalog_table" "raw_cur_data" {
   }
 
   storage_descriptor {
-    location      = "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/"
+    location      = length(var.telemetry_member_account_ids) > 0 ? "s3://${local.cur_export_bucket_name}/" : "s3://${local.cur_export_bucket_name}/${var.cur_raw_prefix}/${var.cur_export_name}/data/"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 

@@ -1,35 +1,26 @@
 import { ConfidenceGauge } from "./ConfidenceGauge";
 import { EmptyState } from "../ui/EmptyState";
 import { cn } from "../../lib/utils";
+import { currency, formatDateLabel } from "../../lib/format";
 import type { Anomaly } from "../../schema";
 
 interface AnomalyDetailProps {
   anomaly: Anomaly | undefined;
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
-const currency = (v: number) => {
-  const num = Number(v || 0);
-  if (num === 0) return "$0";
-  if (Math.abs(num) < 0.01) {
-    return `$${num.toFixed(6)}`;
-  }
-  return moneyFmt.format(num);
-};
-
-function dateLabel(value?: string) {
-  if (!value) return "not published";
-  return new Date(value).toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
 function confidenceLabel(value?: string) {
   const v = String(value || "").toUpperCase();
   if (v === "HIGH") return "Complete telemetry";
-  if (v === "LOW")  return "Telemetry gap";
+  if (v === "LOW") return "Telemetry gap";
   return "Unknown";
 }
 
-interface FieldProps { label: string; value: string; mono?: boolean; }
+interface FieldProps {
+  label: string;
+  value: string;
+  mono?: boolean;
+}
+
 function Field({ label, value, mono }: FieldProps) {
   return (
     <div className="grid grid-cols-[100px_1fr] gap-2 py-2 border-b border-border-subtle/50 last:border-0">
@@ -85,17 +76,17 @@ export function AnomalyDetail({ anomaly }: AnomalyDetailProps) {
 
       {/* Fields */}
       <dl className="pt-2">
-        <Field label="Account"    value={`${anomaly.account_name} (${anomaly.account_id})`} />
-        <Field label="Service"    value={anomaly.service} />
-        <Field label="Squad"      value={anomaly.squad} />
-        <Field label="Evidence"   value={`${dateLabel(anomaly.evidence_window_start)} → ${dateLabel(anomaly.evidence_window_end)}`} />
+        <Field label="Account" value={`${anomaly.account_name} (${anomaly.account_id})`} />
+        <Field label="Service" value={anomaly.service} />
+        <Field label="Squad" value={anomaly.squad} />
+        <Field label="Evidence" value={`${formatDateLabel(anomaly.evidence_window_start)} - ${formatDateLabel(anomaly.evidence_window_end)}`} />
         <Field label="Cost delta" value={`${currency(anomaly.cost_delta_usd_per_day)}/day`} />
-        <Field label="Data conf"  value={`${confidenceLabel(anomaly.data_confidence)} (${anomaly.data_confidence})`} />
-        <Field label="Owner tag"  value={anomaly.owner_tag_status} />
+        <Field label="Data conf" value={`${confidenceLabel(anomaly.data_confidence)} (${anomaly.data_confidence})`} />
+        <Field label="Owner tag" value={anomaly.owner_tag_status} />
         <Field label="Explanation" value={anomaly.explanation} />
       </dl>
 
-      <CollapsibleBlock title="Business context"  value={anomaly.business_context} />
+      <CollapsibleBlock title="Business context" value={anomaly.business_context} />
       <CollapsibleBlock title="Telemetry quality" value={anomaly.telemetry_quality} />
     </div>
   );

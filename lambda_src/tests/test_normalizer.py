@@ -547,7 +547,7 @@ def test_normalizer_payload_contract_fields():
     assert details["business_context"]["linked_account_id"] == "123456789012"
     assert details["business_context"]["traffic_volume"] == 120000
     assert details["resource_utilization_metrics"][0]["cpu_utilization"] == 75.5
-    assert len(details["aws_cur_line_items"]) == 1
+    assert len(details["aws_cur_line_items"]) == 0
     assert details["batch_type"] == "adhoc-run-s3-pointer-1"
     assert details["telemetry_delay_event"] is False
     assert len(put_called) == 2 # curated Parquet AND AI input json.gz
@@ -883,7 +883,12 @@ def test_normalizer_athena_query_integration():
     assert query_executed[0]["WorkGroup"] == "test-wg"
     assert get_status_calls[0] >= 2
     assert get_results_calls[0] == 2
-    assert len(resp["details"]["aws_cur_line_items"]) == 2
+    assert len(resp["details"]["aws_cur_line_items"]) == 0
+    # Verify S3 upload contains the 2 items
+    ai_bytes = next(p["body"] for p in put_called if p["key"].endswith("_input.json.gz"))
+    decompressed = gzip.decompress(ai_bytes)
+    envelope = json.loads(decompressed.decode("utf-8"))
+    assert len(envelope["aws_cur_line_items"]) == 2
 
     # Clean up
     del os.environ["ATHENA_WORKGROUP_NAME"]
@@ -1191,12 +1196,9 @@ def test_normalizer_cur_ready_negative_rows():
         resp = handler.handle_request(event_data, None)
         assert resp["status"] == "NORMALIZED"
         
-        # Verify aws_cur_line_items in details has no negative rows
+        # Verify aws_cur_line_items in details is empty
         cur_items = resp["details"]["aws_cur_line_items"]
-        assert len(cur_items) == 2
-        assert cur_items[0]["line_item_product_code"] == "AmazonEC2"
-        assert cur_items[1]["line_item_product_code"] == "AmazonRDS"
-        assert not any(float(item["line_item_unblended_cost"]) < 0 for item in cur_items)
+        assert len(cur_items) == 0
         
         # Verify AI input written to S3 does not have negative rows
         ai_input_call = [p for p in put_called if "ai-input" in p["key"]][0]
@@ -1215,3 +1217,232 @@ def test_normalizer_cur_ready_negative_rows():
         del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
         handler.s3_client = None
         handler.athena_client = None
+
+
+def test_normalizer_parquet_write_failure_fails_closed(monkeypatch):
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({"bucket": bucket, "key": key, "body": body})
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda bucket, key: gzip.compress(json.dumps({
+            "quality": {"completeness_score": 1.0},
+            "aws_cost_explorer_daily": [{"date": "2026-06-24", "linked_account_id": "112233445566", "service": "EC2", "unblended_cost": 10.0}]
+        }).encode("utf-8")),
+        put_object_func=fake_put_object
+    )
+
+    # Mock pyarrow.parquet.write_table to raise an exception
+    import pyarrow.parquet as pq
+    def mock_write_table(*args, **kwargs):
+        raise ValueError("Simulated pyarrow failure")
+    monkeypatch.setattr(pq, "write_table", mock_write_table)
+
+    event_data = {
+        "run_id": "run-fail-closed",
+        "correlation_id": "corr-fail-closed",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-fail-closed",
+            "correlation_id": "corr-fail-closed",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/raw.json.gz",
+            "details": {"telemetry_delay_event": True}
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="Failed to generate Parquet bytes"):
+        handler.handle_request(event_data, None)
+
+    # Confirm that no S3 curated parquet file was uploaded (failed closed)
+    curated_puts = [p for p in put_called if "_curated.parquet" in p["key"]]
+    assert len(curated_puts) == 0
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    handler.s3_client = None
+
+
+def test_normalizer_logging_sanitized(caplog):
+    import logging
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    put_called = []
+    
+    # Enable INFO logs capture
+    caplog.set_level(logging.INFO)
+
+    raw_env = {
+        "quality": {
+            "completeness_score": 0.8,
+            "delayed_cur": True,
+        },
+        "aws_cost_explorer_daily": [
+            {
+                "date": "2026-06-24",
+                "linked_account_id": "112233445566",
+                "service": "Amazon Elastic Compute Cloud - Compute",
+                "unblended_cost": 100.0,
+            }
+        ],
+        "resource_utilization_metrics": [
+            {
+                "resource_id": "i-1234567890abcdef0",
+                "cpu_util": 88.5
+            }
+        ]
+    }
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda bucket, key: gzip.compress(json.dumps(raw_env).encode("utf-8")),
+        put_object_func=lambda bucket, key, body: put_called.append(key)
+    )
+
+    event_data = {
+        "run_id": "run-log-test",
+        "correlation_id": "corr-log-test",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-log-test",
+            "correlation_id": "corr-log-test",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/cur/account_id=112233445566/year=2026/month=06/day=24/run-log-test_raw.json.gz",
+            "details": {
+                "telemetry_delay_event": True,
+                "aws_cost_explorer_daily": raw_env["aws_cost_explorer_daily"],
+                "resource_utilization_metrics": raw_env["resource_utilization_metrics"]
+            }
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "NORMALIZED"
+
+    # Analyze logs
+    log_text = caplog.text
+    
+    # Check that raw arrays are NOT in the log
+    assert "Amazon Elastic Compute Cloud - Compute" not in log_text
+    assert "i-1234567890abcdef0" not in log_text
+    assert "88.5" not in log_text
+    
+    # Check that Response Summary is logged and contains the expected sanitised details
+    assert "Response Summary:" in log_text
+    assert "run-log-test" in log_text
+    assert "RAW_JSON" in log_text or "S3_POINTER" in log_text
+    assert "0.8" in log_text
+    assert "curated_records" in log_text
+    assert "curated_data_uri" in log_text
+
+    # Cleanup
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    handler.s3_client = None
+
+
+def test_normalizer_output_size_cap_regression(monkeypatch):
+    """Verify normalizer output size remains comfortably under Step Functions' 256 KiB limit for large datasets."""
+    monkeypatch.setenv("RAW_JSON_INLINE_MAX_BYTES", "50000")
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+
+    put_called = []
+    def fake_put_object(bucket, key, body):
+        put_called.append({
+            "bucket": bucket,
+            "key": key,
+            "body": body
+        })
+
+    # Generate 1000 large CE records
+    large_ce_records = [
+        {
+            "linked_account_id": "112233445566",
+            "service_code": f"AmazonEC2-{i}",
+            "unblended_cost": 10.0 + i,
+            "date": "2026-06-24"
+        }
+        for i in range(1000)
+    ]
+
+    raw_envelope = {
+        "schema_version": "3.2.0",
+        "tenant_id": TENANT_ID,
+        "account_id": "112233445566",
+        "correlation_id": "corr-large",
+        "idempotency_key": "idemp-large",
+        "request_timestamp": "2026-06-24T00:00:00Z",
+        "aws_cost_explorer_daily": large_ce_records,
+        "resource_utilization_metrics": [
+            {"resource_id": f"i-large-{i}", "cpu_utilization": 80.0}
+            for i in range(500)
+        ],
+        "quality": {
+            "completeness_score": 1.0,
+            "delayed_cur": True,
+            "stale_cost_explorer": False,
+            "missing_cloudwatch": False,
+            "estimated_billing": False
+        }
+    }
+
+    gzipped_raw = gzip.compress(json.dumps(raw_envelope).encode("utf-8"))
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: gzipped_raw,
+        put_object_func=fake_put_object,
+    )
+
+    event_data = {
+        "run_id": "run-large-test",
+        "correlation_id": "corr-large",
+        "account_id": "112233445566",
+        "cost_period": "2026-06",
+        "execution_date": "2026-06-24",
+        "ingestion": {
+            "status": "READY",
+            "run_id": "run-large-test",
+            "correlation_id": "corr-large",
+            "worker": "cost_puller",
+            "raw_data_uri": "s3://test-lakehouse/cur/account_id=112233445566/year=2026/month=06/day=24/run-large-test_raw.json.gz",
+            "details": {
+                "telemetry_delay_event": True,
+                "resource_utilization_metrics": [
+                    {"resource_id": f"i-large-{i}", "cpu_utilization": 80.0}
+                    for i in range(500)
+                ]
+            }
+        }
+    }
+
+    resp = handler.handle_request(event_data, None)
+    assert resp["status"] == "NORMALIZED"
+    assert resp["details"]["detect_request_mode"] == "S3_POINTER"  # Large payload must force S3_POINTER
+
+    # Serialize normalizer output and assert size is comfortably under 256 KiB
+    serialized = json.dumps(resp)
+    serialized_size_bytes = len(serialized.encode("utf-8"))
+    
+    # 256 KiB = 262,144 bytes. Comfortably under limit = < 20,000 bytes (20 KB)
+    assert serialized_size_bytes < 20000, f"Payload size {serialized_size_bytes} is not comfortably under 256 KiB"
+
+    # Verify S3_POINTER details fields are empty in details
+    assert len(resp["details"]["aws_cur_line_items"]) == 0
+    assert len(resp["details"]["aws_cost_explorer_daily"]) == 0
+    assert len(resp["details"]["resource_utilization_metrics"]) == 0
+
+    # Verify S3 upload contains the full 1000 items in envelope
+    ai_bytes = next(p["body"] for p in put_called if p["key"].endswith("_input.json.gz"))
+    envelope = json.loads(gzip.decompress(ai_bytes).decode("utf-8"))
+    assert len(envelope["aws_cost_explorer_daily"]) == 1000
+    assert len(envelope["resource_utilization_metrics"]) == 500
+
+    # Clean up
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    handler.s3_client = None
+
+

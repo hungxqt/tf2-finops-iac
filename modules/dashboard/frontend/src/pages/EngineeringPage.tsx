@@ -6,19 +6,11 @@ import { FilterBar, type FilterState } from "../components/ui/FilterBar";
 import { StatusPill } from "../components/ui/StatusPill";
 import { AnomalyQueue } from "../components/anomaly/AnomalyQueue";
 import { AnomalyDetail } from "../components/anomaly/AnomalyDetail";
+import { severityTone } from "../lib/anomaly";
 import type { DashboardSummary } from "../schema";
 
 interface EngineeringPageProps {
   summary: DashboardSummary;
-}
-
-type Tone = "neutral" | "success" | "warning" | "critical" | "info" | "ai";
-
-function severityTone(severity?: string): Tone {
-  const s = String(severity || "").toLowerCase();
-  if (s.includes("critical")) return "critical";
-  if (s.includes("warn"))     return "warning";
-  return "neutral";
 }
 
 export function EngineeringPage({ summary }: EngineeringPageProps) {

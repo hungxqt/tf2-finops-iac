@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
+import { relativeTime, formatDateTime } from "../../lib/format";
 import type { Containment } from "../../schema";
 
 type ActionLog = NonNullable<Containment["actions_log"]>[number];
@@ -15,21 +17,14 @@ function dotColor(status?: string): string {
   return "bg-text-muted";
 }
 
-function relativeTime(ts?: string): string {
-  if (!ts) return "";
-  const diff = Date.now() - new Date(ts).getTime();
-  const h = Math.floor(diff / 3600000);
-  if (h < 1) return "< 1h ago";
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-function absTime(ts?: string): string {
-  if (!ts) return "";
-  return new Date(ts).toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
 export function StatusTimeline({ log }: StatusTimelineProps) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   if (!log || log.length === 0) return null;
 
   return (
@@ -43,9 +38,9 @@ export function StatusTimeline({ log }: StatusTimelineProps) {
             <div className="flex items-center gap-2 flex-wrap">
               <span
                 className="text-[10px] text-text-muted"
-                title={absTime(entry.timestamp)}
+                title={formatDateTime(entry.timestamp)}
               >
-                {relativeTime(entry.timestamp)}
+                {relativeTime(entry.timestamp, now)}
               </span>
               {entry.actor && (
                 <span className="text-[10px] text-accent-cyan font-mono">{entry.actor}</span>

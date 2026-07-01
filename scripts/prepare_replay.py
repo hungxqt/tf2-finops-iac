@@ -132,18 +132,21 @@ def main():
     df_cur = df_cur.fillna("")
     df_ce = df_ce.fillna("")
     
-    # Keep dates as pandas datetime64 objects to let pyarrow write them as Parquet timestamp types
-    df_cur["line_item_usage_start_date"] = pd.to_datetime(df_cur["line_item_usage_start_date"])
-    df_cur["line_item_usage_end_date"] = pd.to_datetime(df_cur["line_item_usage_end_date"])
-    df_cur["bill_billing_period_start_date"] = pd.to_datetime(df_cur["bill_billing_period_start_date"])
+    # Convert dates to datetime objects matching raw CUR data (timestamp)
+    # The normalizer expects 'line_item_usage_start_date' as timestamp.
+    # In pandas, we ensure they are datetime objects.
+    df_cur["line_item_usage_start_date"] = pd.to_datetime(df_cur["line_item_usage_start_date"]).dt.tz_localize(None)
+    df_cur["line_item_usage_end_date"] = pd.to_datetime(df_cur["line_item_usage_end_date"]).dt.tz_localize(None)
+    df_cur["bill_billing_period_start_date"] = pd.to_datetime(df_cur["bill_billing_period_start_date"]).dt.tz_localize(None)
     
     # 7. Convert and upload CUR Parquet by Billing Period (Month)
     s3 = boto3.client("s3", region_name=args.region)
-    months = df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m").unique()
+    df_cur["_billing_period"] = df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m")
+    months = df_cur["_billing_period"].unique()
     
     for month in months:
         print(f"Processing billing period: {month}...")
-        df_month = df_cur[df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m") == month].copy()
+        df_month = df_cur[df_cur["_billing_period"] == month].copy()
         
         # Write to temporary Parquet file
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
@@ -153,13 +156,13 @@ def main():
             # We want to match Glue schema types
             # Map columns to correct types
             schema = pa.schema([
-                ("bill_billing_period_start_date", pa.timestamp('ms')),
+                ("bill_billing_period_start_date", pa.timestamp('us')),
                 ("bill_payer_account_id", pa.string()),
                 ("line_item_usage_account_id", pa.string()),
                 ("line_item_usage_account_name", pa.string()),
                 ("line_item_line_item_type", pa.string()),
-                ("line_item_usage_start_date", pa.timestamp('ms')),
-                ("line_item_usage_end_date", pa.timestamp('ms')),
+                ("line_item_usage_start_date", pa.timestamp('us')),
+                ("line_item_usage_end_date", pa.timestamp('us')),
                 ("line_item_product_code", pa.string()),
                 ("line_item_usage_type", pa.string()),
                 ("line_item_operation", pa.string()),
@@ -182,8 +185,8 @@ def main():
             for col, pa_type in zip(schema.names, schema.types):
                 if pa_type == pa.float64():
                     df_month[col] = pd.to_numeric(df_month[col], errors='coerce').fillna(0.0).astype(float)
-                elif isinstance(pa_type, pa.TimestampType):
-                    df_month[col] = pd.to_datetime(df_month[col], errors='coerce')
+                elif "timestamp" in str(pa_type):
+                    df_month[col] = pd.to_datetime(df_month[col])
                 else:
                     df_month[col] = df_month[col].astype(str)
             
