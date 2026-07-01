@@ -24,8 +24,16 @@ function toTrend(summary: DashboardSummary): TrendPoint[] {
   }));
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const currency = (v: number, suffix = "") => `${moneyFmt.format(Number(v || 0))}${suffix}`;
+const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
+const currency = (v: number, suffix = "") => {
+  const num = Number(v || 0);
+  if (num === 0) return `$0${suffix}`;
+  if (Math.abs(num) < 0.01) {
+    // For very small values, show more precision
+    return `$${num.toFixed(6)}${suffix}`;
+  }
+  return `${moneyFmt.format(num)}${suffix}`;
+};
 const pct = (v: number) =>
   `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(Number(v || 0))}%`;
 

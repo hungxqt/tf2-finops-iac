@@ -341,6 +341,22 @@ resource "aws_s3_bucket_policy" "dashboard_assets_replica_tls_only" {
 
 data "aws_iam_policy_document" "replica_tls_only_assets" {
   statement {
+    sid    = "AllowCloudFrontOAC"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.dashboard_assets_replica.arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [module.dashboard.cloudfront_distribution_arn]
+    }
+  }
+
+  statement {
     sid    = "DenyHTTP"
     effect = "Deny"
     principals {
@@ -411,6 +427,22 @@ resource "aws_s3_bucket_policy" "dashboard_data_replica_tls_only" {
 }
 
 data "aws_iam_policy_document" "replica_tls_only_data" {
+  statement {
+    sid    = "AllowCloudFrontOAC"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.dashboard_data_replica.arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [module.dashboard.cloudfront_distribution_arn]
+    }
+  }
+
   statement {
     sid    = "DenyHTTP"
     effect = "Deny"
