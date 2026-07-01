@@ -105,7 +105,7 @@ def quote_identifier(identifier: str) -> str:
     return f'"{identifier}"'
 
 
-def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str) -> None:
+def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str, billing_period: str = None) -> None:
     if not re.match(r'^\d{12}$', account_id):
         raise ValueError(f"Invalid account ID: {account_id}")
     if not re.match(r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}Z)?$', start_date):
@@ -120,6 +120,9 @@ def validate_sql_inputs(account_id: str, start_date: str, end_date: str, databas
         raise ValueError(f"Invalid workgroup name: {workgroup}")
     if results_bucket and (".." in results_bucket or "/" in results_bucket or "\\" in results_bucket):
         raise ValueError(f"Invalid results bucket: {results_bucket}")
+    if billing_period and not re.match(r'^\d{4}-\d{2}$', billing_period):
+        raise ValueError(f"Invalid billing period: {billing_period}")
+
 
 
 def resolve_tenant_id(event: finops_common.Event, event_data: dict) -> str:
@@ -230,6 +233,27 @@ def build_dynamic_select_fields(manifest_columns: list) -> str:
             select_fields.append(f"NULL AS {col}")
             
     return ", ".join(select_fields)
+
+
+def get_athena_timestamp_window(start_date_str: str, end_date_str: str) -> tuple[str, str]:
+    """Converts validated YYYY-MM-DD dates into an Athena-safe half-open timestamp window.
+
+    Args:
+        start_date_str: Validated start date string (YYYY-MM-DD format).
+        end_date_str: Validated end date string (YYYY-MM-DD format).
+
+    Returns:
+        A tuple of (start_timestamp_literal, end_exclusive_timestamp_literal).
+    """
+    from datetime import datetime, timedelta
+    start_dt = datetime.strptime(start_date_str[:10], "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date_str[:10], "%Y-%m-%d")
+    end_exclusive_dt = end_dt + timedelta(days=1)
+
+    start_ts = f"TIMESTAMP '{start_dt.strftime('%Y-%m-%d')} 00:00:00'"
+    end_ts = f"TIMESTAMP '{end_exclusive_dt.strftime('%Y-%m-%d')} 00:00:00'"
+    return start_ts, end_ts
+
 
 
 def handle_request(event_data: dict, context: Any) -> dict:
@@ -460,6 +484,14 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 + ", ".join(missing_athena_config)
             )
 
+        # Resolve billing period
+        bp = event.cost_period or ""
+        billing_period_out = exec_time.strftime("%Y-%m")
+        if bp:
+            m = re.match(r'^(\d{4}-\d{2})', bp.strip())
+            if m:
+                billing_period_out = m.group(1)
+
         # Re-read and re-validate the manifest dataFiles so normalizer can
         # independently confirm they stay within the allowed raw export prefix.
         manifest_columns = []
@@ -479,14 +511,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 
                 # Validate columns
                 finops_common.validate_manifest_columns(manifest_columns)
-                
-                # Resolve billing period
-                bp = event.cost_period or ""
-                billing_period_out = exec_time.strftime("%Y-%m")
-                if bp:
-                    m = re.match(r'^(\d{4}-\d{2})', bp.strip())
-                    if m:
-                        billing_period_out = m.group(1)
                 
                 # Validate data files
                 allowed_prefix = ingestion_details.get("allowed_raw_prefix") or cur_raw_export_prefix
@@ -508,17 +532,37 @@ def handle_request(event_data: dict, context: Any) -> dict:
         end_date = event.execution_date
 
         # SQL validation
-        validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket)
+        validate_sql_inputs(event.account_id, start_date, end_date, database, table, workgroup, results_bucket, billing_period_out)
 
         # Build select fields dynamically based on manifest columns
         select_fields = build_dynamic_select_fields(manifest_columns)
 
+        start_ts, end_ts = get_athena_timestamp_window(start_date, end_date)
+
+        # Validate generated timestamp literals to prevent injection
+        if not re.match(r"^TIMESTAMP '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'$", start_ts):
+            raise ValueError(f"Invalid start timestamp literal: {start_ts}")
+        if not re.match(r"^TIMESTAMP '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'$", end_ts):
+            raise ValueError(f"Invalid end timestamp literal: {end_ts}")
+
+        cur_raw_account_partition_key = os.environ.get("CUR_RAW_ACCOUNT_PARTITION_KEY") or ""
+        
+        where_clauses = [
+            f"billing_period = '{billing_period_out}'",
+            f"line_item_usage_account_id = '{event.account_id}'",
+            f"line_item_usage_start_date >= {start_ts}",
+            f"line_item_usage_start_date < {end_ts}"
+        ]
+        
+        if cur_raw_account_partition_key:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', cur_raw_account_partition_key):
+                raise ValueError(f"Invalid partition key configured: {cur_raw_account_partition_key}")
+            where_clauses.append(f"{cur_raw_account_partition_key} = '{event.account_id}'")
+
         query = f"""
         SELECT {select_fields}
         FROM {quote_identifier(table)}
-        WHERE line_item_usage_account_id = '{event.account_id}'
-          AND line_item_usage_start_date >= '{start_date}'
-          AND line_item_usage_start_date <= '{end_date}'
+        WHERE {" AND ".join(where_clauses)}
         """
 
         ath = get_athena_client()
@@ -658,7 +702,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             or ""
         )
         if not account_id or not service or cost < 0:
-            logger.info("Filtering out invalid cost record: %s", rec)
+            logger.info("Filtering out invalid cost record (account: %s, service: %s)", account_id, service)
             continue
 
         owner = rec.get("owner") or rec.get("resource_tags_user_owner") or ""

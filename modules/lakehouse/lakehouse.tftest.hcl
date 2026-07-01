@@ -123,3 +123,38 @@ run "validate_cur_export_policy_with_members" {
     error_message = "aws:SourceAccount must not contain caller account ID when member accounts are configured"
   }
 }
+
+run "validate_member_mode_raw_cur_table" {
+  command = plan
+
+  variables {
+    telemetry_member_account_ids = ["111111111111", "222222222222"]
+    cur_export_name              = "memberCUR"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.partition_keys[0].name == "source_account_id"
+    error_message = "The first partition key of raw cost table in member mode must be 'source_account_id'"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.partition_keys[1].name == "billing_period"
+    error_message = "The second partition key of raw cost table in member mode must be 'billing_period'"
+  }
+
+  assert {
+    condition     = length(aws_glue_catalog_table.raw_cur_data.partition_keys) == 2
+    error_message = "The raw cost table in member mode must have exactly 2 partition keys"
+  }
+
+  assert {
+    condition     = aws_glue_catalog_table.raw_cur_data.parameters["storage.location.template"] == "s3://tf2-finops-cur-export-bucket/$${source_account_id}/memberCUR/data/BILLING_PERIOD=$${billing_period}/"
+    error_message = "Storage template location is incorrect in member mode"
+  }
+
+  assert {
+    condition     = output.cur_raw_account_partition_key == "source_account_id"
+    error_message = "The cur_raw_account_partition_key output must be 'source_account_id' in member mode"
+  }
+}
+
