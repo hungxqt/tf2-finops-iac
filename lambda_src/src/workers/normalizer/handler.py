@@ -956,7 +956,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # - aws_cur_line_items is resource-level and large, so we return details_aws_cur_line_items (empty in S3_POINTER mode).
         # - aws_cost_explorer_daily and resource_utilization_metrics are returned only in RAW_JSON mode.
         "resource_utilization_metrics": resource_utilization_metrics if detect_request_mode == "RAW_JSON" else [],
-        "aws_cur_line_items": details_aws_cur_line_items,
+        "aws_cur_line_items": [],
         "aws_cost_explorer_daily": details_aws_cost_explorer_daily,
         "post_telemetry_window": post_telemetry_window,
         "missing_resources": missing_resources,

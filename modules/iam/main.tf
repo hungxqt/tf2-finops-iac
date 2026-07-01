@@ -634,8 +634,8 @@ resource "aws_iam_role_policy" "vpc_alb_caller_idempotency" {
 }
 
 resource "aws_iam_role_policy" "vpc_alb_caller_s3" {
-  name   = "vpc_alb_caller-s3-policy"
-  role   = aws_iam_role.workers["vpc_alb_caller"].id
+  name = "vpc_alb_caller-s3-policy"
+  role = aws_iam_role.workers["vpc_alb_caller"].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -645,8 +645,8 @@ resource "aws_iam_role_policy" "vpc_alb_caller_s3" {
         Resource = ["${var.lakehouse_bucket_arn}/*"]
       },
       {
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket", "s3:PutObject"]
+        Effect = "Allow"
+        Action = ["s3:ListBucket", "s3:PutObject"]
         Resource = [
           "arn:aws:s3:::company-cdo-*-telemetry",
           "arn:aws:s3:::company-cdo-*-telemetry/*"

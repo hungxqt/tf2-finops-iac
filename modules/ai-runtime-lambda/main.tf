@@ -175,9 +175,9 @@ resource "aws_iam_policy" "request" {
       ] : [],
       var.ai_request_s3_pointer_bucket_arn != "" ? [
         {
-          Sid      = "AIRequestS3PointerGet"
-          Effect   = "Allow"
-          Action   = ["s3:GetObject"]
+          Sid    = "AIRequestS3PointerGet"
+          Effect = "Allow"
+          Action = ["s3:GetObject"]
           Resource = concat(
             [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"],
             ["arn:aws:s3:::company-cdo-*-telemetry/*"]
