@@ -96,7 +96,7 @@ jobs:
         run: pip install checkov==3.2.524
 
       - name: Checkov Terraform scan
-        run: checkov -d . --framework terraform
+        run: checkov -d . --framework terraform --quiet
 
   plan:
     name: "Generate Terraform Plans"
