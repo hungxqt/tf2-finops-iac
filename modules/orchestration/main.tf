@@ -373,6 +373,38 @@ resource "aws_scheduler_schedule" "run_workflow" {
   }
 }
 
+# Refresh the static dashboard only after the complete multi-account workflow
+# succeeds, so the canonical JSON never represents a partial execution.
+resource "aws_cloudwatch_event_rule" "dashboard_summary_after_success" {
+  name        = "${var.project_name}-${var.environment}-dashboard-summary"
+  description = "Publishes dashboard-summary.json after a successful workflow"
+
+  event_pattern = jsonencode({
+    source      = ["aws.states"]
+    detail-type = ["Step Functions Execution Status Change"]
+    detail = {
+      status          = ["SUCCEEDED"]
+      stateMachineArn = [aws_sfn_state_machine.workflow.arn]
+    }
+  })
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "dashboard_summary_writer" {
+  rule      = aws_cloudwatch_event_rule.dashboard_summary_after_success.name
+  target_id = "DashboardSummaryWriter"
+  arn       = var.lambda_function_arns["dashboard_summary_writer"]
+}
+
+resource "aws_lambda_permission" "dashboard_summary_from_eventbridge" {
+  statement_id  = "AllowDashboardSummaryFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = var.lambda_function_arns["dashboard_summary_writer"]
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.dashboard_summary_after_success.arn
+}
+
 resource "terraform_data" "config_validation" {
   lifecycle {
     precondition {

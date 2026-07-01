@@ -22,7 +22,10 @@ def test_terraform_does_not_publish_frontend_static_assets():
 
 def test_dashboard_ui_covers_doc06_operational_surfaces():
     index = read(DASHBOARD_MODULE / "resources" / "index.html")
-    app = read(DASHBOARD_MODULE / "resources" / "assets" / "app.js")
+    # Vite code-splits lazy-loaded pages into separate chunks. Validate the
+    # complete production bundle instead of assuming every label is in app.js.
+    assets = DASHBOARD_MODULE / "resources" / "assets"
+    app = "\n".join(read(path) for path in sorted(assets.glob("*.js")))
 
     assert "TF2 FinOps Watch Dashboard" in index
     assert "Manual Approval" in app

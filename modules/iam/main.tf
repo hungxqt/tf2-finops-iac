@@ -24,7 +24,9 @@ data "aws_iam_policy_document" "boundary" {
         var.lakehouse_bucket_arn,
         "${var.lakehouse_bucket_arn}/*",
         var.audit_bucket_arn,
-        "${var.audit_bucket_arn}/*"
+        "${var.audit_bucket_arn}/*",
+        var.dashboard_data_bucket_arn,
+        "${var.dashboard_data_bucket_arn}/*"
       ],
       var.cur_source_bucket_arn != "" ? [
         var.cur_source_bucket_arn,
@@ -43,7 +45,9 @@ data "aws_iam_policy_document" "boundary" {
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
-      "dynamodb:UpdateItem"
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:Scan"
     ]
     resources = var.dynamodb_table_arns
   }
@@ -83,6 +87,7 @@ data "aws_iam_policy_document" "boundary" {
     resources = concat(
       compact([
         var.glue_database_arn != "" ? var.glue_database_arn : "",
+        var.dashboard_glue_table_arn,
         "arn:aws:glue:*:*:catalog"
       ]),
       var.glue_table_arns
@@ -249,7 +254,7 @@ data "aws_iam_policy_document" "lambda_trust" {
 }
 
 locals {
-  worker_names = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
+  worker_names = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller", "dashboard_summary_writer"]
 }
 
 # Lambda Worker Roles
@@ -633,6 +638,91 @@ data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {
     content {
       sid       = "VpcAlbCallerKMSAccess"
       actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      resources = var.kms_key_arns
+    }
+  }
+}
+
+# 8. Dashboard Summary Writer
+resource "aws_iam_role_policy" "dashboard_summary_writer" {
+  name   = "dashboard-summary-writer-policy"
+  role   = aws_iam_role.workers["dashboard_summary_writer"].id
+  policy = data.aws_iam_policy_document.dashboard_summary_writer.json
+}
+
+data "aws_iam_policy_document" "dashboard_summary_writer" {
+  statement {
+    sid       = "DashboardOperationalStateRead"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
+    resources = var.dynamodb_table_arns
+  }
+
+  statement {
+    sid       = "DashboardSummaryWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.dashboard_data_bucket_arn}/summaries/*"]
+  }
+
+  statement {
+    sid = "DashboardAthenaQuery"
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:StopQueryExecution",
+      "athena:GetWorkGroup"
+    ]
+    resources = [var.athena_workgroup_arn]
+  }
+
+  statement {
+    sid = "DashboardAthenaResults"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
+    resources = [
+      var.athena_results_bucket_arn,
+      "${var.athena_results_bucket_arn}/*"
+    ]
+  }
+
+  statement {
+    sid = "DashboardLakehouseFallbackRead"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject"
+    ]
+    resources = [
+      var.lakehouse_bucket_arn,
+      "${var.lakehouse_bucket_arn}/*"
+    ]
+  }
+
+  statement {
+    sid = "DashboardGlueRead"
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetTable",
+      "glue:GetPartitions"
+    ]
+    resources = concat(
+      compact([
+        var.glue_database_arn,
+        var.dashboard_glue_table_arn,
+        "arn:aws:glue:*:*:catalog"
+      ]),
+      var.glue_table_arns
+    )
+  }
+
+  dynamic "statement" {
+    for_each = length(var.kms_key_arns) > 0 ? [1] : []
+    content {
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:Encrypt"]
       resources = var.kms_key_arns
     }
   }

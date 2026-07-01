@@ -132,3 +132,13 @@ variable "trusted_tenant_ids" {
   description = "Allowed tenant IDs used as sts:ExternalId and aws:RequestTag/tenant_id conditions on the member telemetry ingestion role trust policy. Required when create_member_telemetry_ingestion_role = true."
   default     = []
 }
+
+variable "dashboard_data_bucket_arn" {
+  type        = string
+  description = "ARN of the S3 bucket containing materialized dashboard summaries"
+}
+
+variable "dashboard_glue_table_arn" {
+  type        = string
+  description = "ARN of the curated Glue table queried by the dashboard writer"
+}

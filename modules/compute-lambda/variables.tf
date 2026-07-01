@@ -197,4 +197,25 @@ variable "cur_raw_account_partition_key" {
   default     = ""
 }
 
+variable "dashboard_account_id" {
+  type        = string
+  description = "Member account whose curated costs are shown in the dashboard summary"
+}
+
+variable "dashboard_data_bucket_name" {
+  type        = string
+  description = "S3 bucket receiving the materialized dashboard summary"
+}
+
+variable "dashboard_summary_key" {
+  type        = string
+  description = "S3 object key for the current dashboard summary"
+  default     = "summaries/dashboard-summary.json"
+}
+
+variable "dashboard_lookback_days" {
+  type        = number
+  description = "Number of days included in dashboard spend trends"
+  default     = 90
+}
 

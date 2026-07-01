@@ -8,7 +8,7 @@ if (-not $BuildDir) {
     $BuildDir = New-Item -ItemType Directory -Force -Path (Join-Path $ParentDir ".build\lambda")
 }
 
-$Workers = @("state", "audit_writer", "containment_worker", "cost_puller", "normalizer", "router", "vpc_alb_caller", "trigger")
+$Workers = @("state", "audit_writer", "containment_worker", "cost_puller", "normalizer", "router", "vpc_alb_caller", "trigger", "dashboard_summary_writer")
 $LambdaSrcDir = Resolve-Path (Join-Path $PSScriptRoot "..\lambda_src")
 $SrcDir = Join-Path $LambdaSrcDir "src"
 
@@ -31,6 +31,13 @@ foreach ($worker in $workers) {
     
     $DestWorkerDir = Join-Path $DestWorkers $worker
     Copy-Item -Path (Join-Path $SrcDir "workers\$worker") -Destination $DestWorkerDir -Recurse -Force
+
+    if ($worker -eq "dashboard_summary_writer") {
+        Copy-Item `
+            -Path (Join-Path $PSScriptRoot "publish-dashboard-summary.py") `
+            -Destination (Join-Path $TempDir "dashboard_summary_publish.py") `
+            -Force
+    }
 
     # 3. Pip install dependencies if any
     $ReqFile = Join-Path $LambdaSrcDir "requirements.txt"
@@ -93,4 +100,3 @@ if (Test-Path $EdgeTempDir) {
 }
 
 Write-Host "Python Lambda packaging complete! Artifacts are in: $BuildDir" -ForegroundColor Green
-
