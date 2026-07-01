@@ -515,7 +515,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
         query = f"""
         SELECT {select_fields}
-        FROM {quote_identifier(database)}.{quote_identifier(table)}
+        FROM {quote_identifier(table)}
         WHERE line_item_usage_account_id = '{event.account_id}'
           AND line_item_usage_start_date >= '{start_date}'
           AND line_item_usage_start_date <= '{end_date}'

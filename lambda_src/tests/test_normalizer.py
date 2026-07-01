@@ -874,7 +874,11 @@ def test_normalizer_athena_query_integration():
     # Mode is RAW_JSON for small test fixtures; S3_POINTER for oversized payloads.
     assert resp["details"]["detect_request_mode"] in {"RAW_JSON", "S3_POINTER"}
     assert len(query_executed) == 1
-    assert "SELECT" in query_executed[0]["QueryString"]
+    query_str = query_executed[0]["QueryString"]
+    assert "SELECT" in query_str
+    assert 'FROM "test-tbl"' in query_str
+    assert "test-db" not in query_str
+    assert "`" not in query_str
     assert query_executed[0]["QueryExecutionContext"]["Database"] == "test-db"
     assert query_executed[0]["WorkGroup"] == "test-wg"
     assert get_status_calls[0] >= 2

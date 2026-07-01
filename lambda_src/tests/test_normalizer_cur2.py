@@ -34,9 +34,11 @@ class FakeAthena:
                 {"VarCharValue": "112233445566"},
             ]},
         ]
+        self.start_query_calls = []
         self.captured_queries = []
 
     def start_query_execution(self, **kwargs):
+        self.start_query_calls.append(kwargs)
         self.captured_queries.append(kwargs.get("QueryString", ""))
         return {"QueryExecutionId": "q-fixture"}
 
@@ -656,7 +658,12 @@ def test_normalizer_athena_identifier_quoting():
     query_str = fake_ath.captured_queries[0]
 
     # Verify database and table are quoted correctly in the FROM clause
-    assert 'FROM "tf2-finops_sandbox_database"."raw_cur_data"' in query_str
+    assert 'FROM "raw_cur_data"' in query_str
+    assert "tf2-finops_sandbox_database" not in query_str
+    assert "`" not in query_str
+    assert fake_ath.start_query_calls[0]["QueryExecutionContext"] == {
+        "Database": "tf2-finops_sandbox_database"
+    }
 
     # Clean up
     del os.environ["LAKEHOUSE_BUCKET_NAME"]
@@ -681,6 +688,7 @@ def test_quote_identifier_helper_invalid_rejections():
         "db table",
         "db\"table",
         "db'table",
+        "dbtable`",
         "",
         "   ",
         "db\n",
