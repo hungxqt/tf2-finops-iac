@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { ChevronDown } from "lucide-react";
 import { StatusPill } from "../ui/StatusPill";
 import { StatusTimeline } from "./StatusTimeline";
@@ -62,12 +62,10 @@ export function ContainmentTable({ summary }: ContainmentTableProps) {
           {summary.containment.map((item: Containment) => {
             const isExpanded = expandedId === item.audit_id;
             return (
-              <>
+              <Fragment key={item.audit_id}>
                 <tr
-                  key={item.audit_id}
-                  onClick={() => toggleRow(item.audit_id)}
                   className={cn(
-                    "border-b border-border-subtle/60 cursor-pointer transition-colors duration-100",
+                    "border-b border-border-subtle/60 transition-colors duration-100",
                     isExpanded ? "bg-surface-elevated" : "hover:bg-surface-elevated/40"
                   )}
                 >
@@ -102,19 +100,30 @@ export function ContainmentTable({ summary }: ContainmentTableProps) {
                   <td className="px-4 py-3 align-top">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-text-muted italic">Handled by Step Functions</span>
-                      <ChevronDown className={cn("w-3 h-3 text-text-muted transition-transform duration-200", isExpanded && "rotate-180")} />
+                      <button
+                        type="button"
+                        onClick={() => toggleRow(item.audit_id)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-border-subtle text-text-muted transition-colors hover:border-accent-cyan hover:text-accent-cyan focus:outline-none focus:ring-2 focus:ring-accent-cyan/40"
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? "Collapse" : "Expand"} actions log for ${item.audit_id}`}
+                      >
+                        <ChevronDown
+                          aria-hidden="true"
+                          className={cn("w-3 h-3 transition-transform duration-200", isExpanded && "rotate-180")}
+                        />
+                      </button>
                     </div>
                   </td>
                 </tr>
                 {isExpanded && (item.actions_log?.length ?? 0) > 0 && (
-                  <tr key={`${item.audit_id}-timeline`}>
+                  <tr>
                     <td colSpan={7} className="bg-surface-base/80 px-8 pb-3 border-b border-border-subtle">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted pt-3 pb-1">Actions Log</p>
                       <StatusTimeline log={item.actions_log ?? []} />
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>

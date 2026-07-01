@@ -30,18 +30,19 @@ interface CustomTooltipPayload {
   payload?: { anomaly?: boolean };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function CustomTooltip(props: any) {
-  const active = props.active as boolean | undefined;
-  const items  = props.payload as CustomTooltipPayload[] | undefined;
-  const label  = props.label as string | undefined;
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: CustomTooltipPayload[];
+  label?: string;
+}
+
+function CustomTooltip({ active, payload: items, label }: CustomTooltipProps) {
   if (!active || !items?.length) return null;
 
-  const itemList = items as CustomTooltipPayload[];
-  const actual   = itemList.find((p) => p.dataKey === "actual")?.value   ?? 0;
-  const baseline = itemList.find((p) => p.dataKey === "baseline")?.value ?? 0;
+  const actual   = items.find((p) => p.dataKey === "actual")?.value   ?? 0;
+  const baseline = items.find((p) => p.dataKey === "baseline")?.value ?? 0;
   const delta    = Number(actual) - Number(baseline);
-  const isAnomaly = itemList[0]?.payload?.anomaly;
+  const isAnomaly = items[0]?.payload?.anomaly;
 
   return (
     <div className="bg-surface-elevated border border-border-strong rounded-lg px-3 py-2 text-xs shadow-[var(--shadow-card)] min-w-[160px]">

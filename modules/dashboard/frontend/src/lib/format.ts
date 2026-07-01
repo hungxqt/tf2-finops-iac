@@ -28,9 +28,9 @@ export function formatDateTime(ts?: string): string {
   });
 }
 
-export function relativeTime(ts?: string): string {
+export function relativeTime(ts?: string, now = Date.now()): string {
   if (!ts) return "";
-  const diff = Date.now() - new Date(ts).getTime();
+  const diff = now - new Date(ts).getTime();
   const h = Math.floor(diff / 3600000);
   if (h < 1) return "< 1h ago";
   if (h < 24) return `${h}h ago`;

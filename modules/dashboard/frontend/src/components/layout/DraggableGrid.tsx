@@ -51,18 +51,16 @@ interface DraggableGridProps {
 export function DraggableGrid({ children, storageKey, baseGridClass }: DraggableGridProps) {
   const [isEditing, setIsEditing] = useState(false);
 
-  const savedOrder = (() => {
+  const itemIds = children.map((_, i) => `${storageKey}-item-${i}`);
+  const [order, setOrder] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(storageKey);
       if (raw) return JSON.parse(raw) as string[];
     } catch {
       // ignore
     }
-    return null;
-  })();
-
-  const itemIds = children.map((_, i) => `${storageKey}-item-${i}`);
-  const [order, setOrder] = useState<string[]>(savedOrder ?? itemIds);
+    return itemIds;
+  });
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })

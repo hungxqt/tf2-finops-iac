@@ -10,7 +10,7 @@ export function exportToCsv(rows: string[][], filename: string): void {
     })
   );
 
-  const bom = "﻿";
+  const bom = "\uFEFF";
   const csv = bom + header.join(",") + "\n" + escaped.map((r) => r.join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -18,8 +18,10 @@ export function exportToCsv(rows: string[][], filename: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
@@ -53,7 +55,10 @@ export function exportChartToPng(chartElement: HTMLElement | null, filename: str
     const a = document.createElement("a");
     a.href = pngUrl;
     a.download = filename.endsWith(".png") ? filename : `${filename}.png`;
+    a.style.display = "none";
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
   img.src = url;

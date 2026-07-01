@@ -3,7 +3,7 @@ import { Sun, Moon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ManualTriggerButton } from "../ui/ManualTriggerButton";
 import { formatDateTime } from "../../lib/format";
-import { useTheme } from "../../lib/theme";
+import { useTheme } from "../../lib/theme-context";
 import type { DashboardSummary } from "../../schema";
 
 interface TopbarProps {
