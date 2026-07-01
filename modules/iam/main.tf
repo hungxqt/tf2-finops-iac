@@ -634,6 +634,8 @@ resource "aws_iam_role_policy" "vpc_alb_caller_idempotency" {
 }
 
 resource "aws_iam_role_policy" "vpc_alb_caller_s3" {
+  # checkov:skip=CKV_AWS_356: "s3:GetObject/PutObject/ListBucket require wildcards to access account-specific telemetry buckets"
+  # checkov:skip=CKV_AWS_111: "s3:PutObject and s3:ListBucket are scoped to company-cdo telemetry buckets"
   name = "vpc_alb_caller-s3-policy"
   role = aws_iam_role.workers["vpc_alb_caller"].id
   policy = jsonencode({

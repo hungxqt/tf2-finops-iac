@@ -87,6 +87,8 @@ resource "aws_iam_role_policy_attachment" "request_vpc" {
 }
 
 resource "aws_iam_policy" "request" {
+  # checkov:skip=CKV_AWS_356: "s3:GetObject/ListBucket require wildcards to access account-specific telemetry buckets"
+  # checkov:skip=CKV_AWS_111: "s3:ListBucket is scoped to company-cdo telemetry buckets"
   name = "${var.project_name}-${var.environment}-ai-request-policy"
 
   policy = jsonencode({
