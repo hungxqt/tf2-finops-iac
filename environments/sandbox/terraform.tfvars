@@ -71,7 +71,7 @@ cur_export_bucket_name = "tf2-finops-cur-export-bucket-2"
 # S3 prefix under the CUR export bucket where AWS Data Exports writes raw CUR files.
 # This is typically the export name you configured in the AWS Billing Console.
 # Example: "finops-cur-export" → writes to s3://<bucket>/finops-cur-export/<export-name>/...
-cur_raw_prefix = ""
+cur_raw_prefix = "336805808730"
 
 # Account-keyed JSON map of CUR 2.0 export configurations.
 # Each entry key is the source AWS Account ID; each value contains:

@@ -104,9 +104,9 @@ def main():
     
     for i, d in enumerate(dates_to_replay):
         date_str = d.strftime("%Y-%m-%d")
-        exec_date_full = f"{date_str}T00:00:00Z"
+        exec_date_full = date_str
         run_id = f"rep-{date_str}-{str(uuid.uuid4())[:8]}"
-        correlation_id = f"corr-{run_id}"
+        correlation_id = str(uuid.uuid4())
         
         print(f"\n[{i+1}/{len(dates_to_replay)}] Starting replay execution for {date_str} (run_id: {run_id})...")
         
@@ -118,7 +118,7 @@ def main():
             "execution_date": exec_date_full,
             "cost_period": date_str,
             "is_ad_hoc": True,
-            "tenant_id": "tenant-default"
+            "tenant_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{account_id}"))
         }
         
         try:

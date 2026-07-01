@@ -473,8 +473,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.force_ce_fallback",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.force_ce_fallback",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.force_ce_fallback",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "MarkRunFailed"
         }
       ],
@@ -1217,11 +1225,7 @@
                   "target.$": "$.anomaly.resource_id",
                   "status": "COMPLETED"
                 },
-                "post_telemetry_window": {
-                  "data_source_type": "RAW_JSON",
-                  "telemetry_delay_event.$": "$.normalized.details.delayed_cur",
-                  "aws_cur_line_items.$": "$.normalized.details.aws_cur_line_items"
-                }
+                "post_telemetry_window.$": "$.normalized.details.post_telemetry_window"
               }
             },
             "ResultPath": "$.verify_result",

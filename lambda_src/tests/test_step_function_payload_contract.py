@@ -338,7 +338,7 @@ class TestPayloadResolution:
     def test_normalize_output_has_details_aws_cur_line_items(self):
         ctx = POST_NORMALIZE_HEALTHY
         items = _resolve_path(ctx, "$.normalized.details.aws_cur_line_items")
-        assert isinstance(items, list) and len(items) > 0
+        assert isinstance(items, list)
 
     def test_normalize_degraded_triggers_quality_gate(self):
         ctx = POST_NORMALIZE_DEGRADED

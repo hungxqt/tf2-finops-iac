@@ -513,12 +513,16 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # Build select fields dynamically based on manifest columns
         select_fields = build_dynamic_select_fields(manifest_columns)
 
+        # Parse exec_time to format standard timestamp strings for Presto/Athena literal representation
+        start_timestamp = exec_time.strftime("%Y-%m-%d 00:00:00")
+        end_timestamp = exec_time.strftime("%Y-%m-%d 23:59:59")
+
         query = f"""
         SELECT {select_fields}
         FROM {quote_identifier(table)}
         WHERE line_item_usage_account_id = '{event.account_id}'
-          AND line_item_usage_start_date >= '{start_date}'
-          AND line_item_usage_start_date <= '{end_date}'
+          AND line_item_usage_start_date >= TIMESTAMP '{start_timestamp}'
+          AND line_item_usage_start_date <= TIMESTAMP '{end_timestamp}'
         """
 
         ath = get_athena_client()
@@ -838,6 +842,30 @@ def handle_request(event_data: dict, context: Any) -> dict:
             len(ce_payload_bytes), raw_json_inline_max_bytes,
         )
 
+    # Evict raw telemetry data arrays to keep Step Functions execution state within limits in S3_POINTER mode.
+    # Downstream states must use S3_POINTER mode instead of reading inline arrays.
+    if detect_request_mode == "S3_POINTER":
+        details_aws_cur_line_items = []
+        details_aws_cost_explorer_daily = []
+    else:
+        details_aws_cur_line_items = cur_records
+        details_aws_cost_explorer_daily = ce_records
+
+    # Construct post_telemetry_window object for /v1/verify
+    if detect_request_mode == "RAW_JSON":
+        post_telemetry_window = {
+            "data_source_type": "RAW_JSON",
+            "telemetry_delay_event": True,
+            "aws_cost_explorer_daily": ce_records,
+            "aws_cur_line_items": []
+        }
+    else:
+        post_telemetry_window = {
+            "data_source_type": "S3_POINTER",
+            "telemetry_delay_event": telemetry_delay_event,
+            "s3_bucket_uri": s3_bucket_uri
+        }
+
     details = {
         "curated_data_uri": curated_data_uri,
         "schema_version": "3.2.0",
@@ -865,8 +893,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
         # For S3_POINTER mode the large arrays are present but BuildDetectRequestS3Pointer
         # explicitly omits aws_cur_line_items from the Step Functions body.
         "resource_utilization_metrics": resource_utilization_metrics,
-        "aws_cur_line_items": cur_records,
-        "aws_cost_explorer_daily": ce_records,
+        "aws_cur_line_items": details_aws_cur_line_items,
+        "aws_cost_explorer_daily": details_aws_cost_explorer_daily,
+        "post_telemetry_window": post_telemetry_window,
         "missing_resources": missing_resources,
         "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
         "comparison_window": comparison_window,
