@@ -132,20 +132,18 @@ def main():
     df_cur = df_cur.fillna("")
     df_ce = df_ce.fillna("")
     
-    # Convert dates to string format matching raw CUR data (timestamp)
-    # The normalizer expects 'line_item_usage_start_date' in ISO or string format, which Athena parses as timestamp.
-    # In pandas, we ensure they are string objects or datetimes.
-    df_cur["line_item_usage_start_date"] = pd.to_datetime(df_cur["line_item_usage_start_date"]).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    df_cur["line_item_usage_end_date"] = pd.to_datetime(df_cur["line_item_usage_end_date"]).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    df_cur["bill_billing_period_start_date"] = pd.to_datetime(df_cur["bill_billing_period_start_date"]).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Keep dates as pandas datetime64 objects to let pyarrow write them as Parquet timestamp types
+    df_cur["line_item_usage_start_date"] = pd.to_datetime(df_cur["line_item_usage_start_date"])
+    df_cur["line_item_usage_end_date"] = pd.to_datetime(df_cur["line_item_usage_end_date"])
+    df_cur["bill_billing_period_start_date"] = pd.to_datetime(df_cur["bill_billing_period_start_date"])
     
     # 7. Convert and upload CUR Parquet by Billing Period (Month)
     s3 = boto3.client("s3", region_name=args.region)
-    months = df_cur["line_item_usage_start_date"].str.slice(0, 7).unique()
+    months = df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m").unique()
     
     for month in months:
         print(f"Processing billing period: {month}...")
-        df_month = df_cur[df_cur["line_item_usage_start_date"].str.startswith(month)].copy()
+        df_month = df_cur[df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m") == month].copy()
         
         # Write to temporary Parquet file
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
@@ -155,13 +153,13 @@ def main():
             # We want to match Glue schema types
             # Map columns to correct types
             schema = pa.schema([
-                ("bill_billing_period_start_date", pa.string()),
+                ("bill_billing_period_start_date", pa.timestamp('ms')),
                 ("bill_payer_account_id", pa.string()),
                 ("line_item_usage_account_id", pa.string()),
                 ("line_item_usage_account_name", pa.string()),
                 ("line_item_line_item_type", pa.string()),
-                ("line_item_usage_start_date", pa.string()),
-                ("line_item_usage_end_date", pa.string()),
+                ("line_item_usage_start_date", pa.timestamp('ms')),
+                ("line_item_usage_end_date", pa.timestamp('ms')),
                 ("line_item_product_code", pa.string()),
                 ("line_item_usage_type", pa.string()),
                 ("line_item_operation", pa.string()),
@@ -184,6 +182,8 @@ def main():
             for col, pa_type in zip(schema.names, schema.types):
                 if pa_type == pa.float64():
                     df_month[col] = pd.to_numeric(df_month[col], errors='coerce').fillna(0.0).astype(float)
+                elif isinstance(pa_type, pa.TimestampType):
+                    df_month[col] = pd.to_datetime(df_month[col], errors='coerce')
                 else:
                     df_month[col] = df_month[col].astype(str)
             
@@ -252,7 +252,7 @@ def main():
         
         # Generate utilization metrics for instances active on this day
         # Look up instance IDs used on this date
-        day_df = df_cur[df_cur["line_item_usage_start_date"].str.startswith(date_str)]
+        day_df = df_cur[df_cur["line_item_usage_start_date"].dt.strftime("%Y-%m-%d") == date_str]
         day_instances = set()
         for rid in day_df["line_item_resource_id"].unique():
             if isinstance(rid, str) and rid.startswith("i-"):
