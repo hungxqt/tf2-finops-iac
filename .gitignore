@@ -4,7 +4,11 @@
 *.tfstate.*
 # *.tfvars
 *.tfvars.json
+# Environment-specific tfvars (contain account IDs, bucket names, secrets)
+# Use terraform.tfvars.example as template instead
 environments/sandbox/terraform.tfvars
+environments/staging/terraform.tfvars
+environments/prod/terraform.tfvars
 crash.log
 crash.*.log
 tfplan

@@ -24,14 +24,51 @@ jobs:
         with:
           terraform_version: "1.15.6"
 
-      # - name: Configure AWS Credentials
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-      #     aws-region: ap-southeast-1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ap-southeast-1
 
-      # - name: Check Drift
-      #   run: |
-      #     terraform -chdir=environments/sandbox init
-      #     terraform -chdir=environments/sandbox plan -detailed-exitcode
-      #     # Exit code 2 indicates drift. Handle alerting / create issue.
+      - name: Package Lambda zips
+        shell: pwsh
+        run: ./scripts/package-lambdas.ps1
+
+      - name: Terraform init (sandbox)
+        run: terraform -chdir=environments/sandbox init
+
+      - name: Terraform drift plan (sandbox)
+        id: drift
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          terraform -chdir=environments/sandbox plan -detailed-exitcode -out=drift-sandbox.tfplan
+          code=$?
+          echo "exitcode=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Create drift GitHub issue
+        if: steps.drift.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Terraform drift detected in sandbox';
+            const body = [
+              'Drift detection found that AWS does not match Git for `sandbox`.',
+              '',
+              `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              'Do NOT auto-apply this drift. Review the plan, decide whether to import/revert/manual-fix, then make the matching change through Git.'
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['terraform', 'drift', 'sandbox']
+            });
+
+      - name: Fail on Terraform error (exit code 1)
+        if: steps.drift.outputs.exitcode == '1'
+        run: exit 1

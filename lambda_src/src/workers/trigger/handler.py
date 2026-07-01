@@ -113,7 +113,13 @@ def handle_request(event: dict, context: Any) -> dict:
         "execution_date": datetime_utc_now_iso(),
     }
     if tenant_id:
-        execution_input["tenant_id"] = tenant_id
+        try:
+            uuid.UUID(tenant_id)
+            execution_input["tenant_id"] = tenant_id
+        except ValueError:
+            logger.warning("Received invalid tenant_id '%s', using DNS-derived UUID instead", tenant_id)
+            if account_id:
+                execution_input["tenant_id"] = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"tf2-finops:{account_id}"))
     if account_id:
         execution_input["account_id"] = account_id
 

@@ -11,6 +11,7 @@ locals {
       timeout     = 30
       memory_size = 256
       env = {
+        ENVIRONMENT             = var.environment
         RUN_STATE_TABLE_NAME    = lookup(var.dynamodb_table_names, "run_state", "")
         ERROR_BUDGET_TABLE_NAME = lookup(var.dynamodb_table_names, "error_budget", "")
       }
@@ -20,6 +21,7 @@ locals {
       timeout     = 120
       memory_size = 512
       env = {
+        ENVIRONMENT                           = var.environment
         LAKEHOUSE_BUCKET_NAME                 = var.lakehouse_bucket_name
         CUR_SOURCE_BUCKET                     = var.cur_source_bucket
         CUR_SOURCE_PREFIX                     = var.cur_source_prefix
@@ -38,6 +40,7 @@ locals {
       timeout     = 120
       memory_size = 512
       env = {
+        ENVIRONMENT                   = var.environment
         LAKEHOUSE_BUCKET_NAME         = var.lakehouse_bucket_name
         RUN_STATE_TABLE_NAME          = lookup(var.dynamodb_table_names, "run_state", "")
         ATHENA_WORKGROUP_NAME         = var.athena_workgroup_name
@@ -81,6 +84,7 @@ locals {
       timeout     = 90
       memory_size = 256
       env = {
+        ENVIRONMENT               = var.environment
         ALB_BASE_URL              = var.alb_base_url
         ALLOW_INSECURE_ALB_HTTP   = tostring(var.allow_insecure_alb_http)
         SIGV4_SERVICE_NAME        = var.sigv4_service_name

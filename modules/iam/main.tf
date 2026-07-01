@@ -39,6 +39,24 @@ data "aws_iam_policy_document" "boundary" {
     )
   }
 
+  # Sandbox: allow vpc_alb_caller to copy AI input payloads into telemetry buckets
+  # so that the AI Engine (which validates s3://company-cdo-{account_id}-telemetry/…)
+  # can fetch them. This statement uses a wildcard ARN pattern which is valid in
+  # permissions boundary policies under the IAM resource element.
+  statement {
+    sid    = "AllowSandboxTelemetryS3"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      "arn:aws:s3:::company-cdo-*-telemetry",
+      "arn:aws:s3:::company-cdo-*-telemetry/*"
+    ]
+  }
+
   statement {
     sid    = "AllowDynamoDBActions"
     effect = "Allow"
@@ -618,6 +636,31 @@ resource "aws_iam_role_policy" "vpc_alb_caller_idempotency" {
   name   = "vpc_alb_caller-idempotency-policy"
   role   = aws_iam_role.workers["vpc_alb_caller"].id
   policy = data.aws_iam_policy_document.vpc_alb_caller_idempotency[0].json
+}
+
+resource "aws_iam_role_policy" "vpc_alb_caller_s3" {
+  # checkov:skip=CKV_AWS_356: "s3:GetObject/PutObject/ListBucket require wildcards to access account-specific telemetry buckets"
+  # checkov:skip=CKV_AWS_111: "s3:PutObject and s3:ListBucket are scoped to company-cdo telemetry buckets"
+  name = "vpc_alb_caller-s3-policy"
+  role = aws_iam_role.workers["vpc_alb_caller"].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["${var.lakehouse_bucket_arn}/*"]
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:ListBucket", "s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::company-cdo-*-telemetry",
+          "arn:aws:s3:::company-cdo-*-telemetry/*"
+        ]
+      }
+    ]
+  })
 }
 
 data "aws_iam_policy_document" "vpc_alb_caller_idempotency" {

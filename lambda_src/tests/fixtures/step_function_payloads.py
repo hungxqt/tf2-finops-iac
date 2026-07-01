@@ -226,6 +226,11 @@ _NORMALIZED_HEALTHY_DETAILS = {
     "resource_utilization_metrics": [],
     "aws_cur_line_items": [],
     "aws_cost_explorer_daily": [],
+    "post_telemetry_window": {
+        "data_source_type": "S3_POINTER",
+        "telemetry_delay_event": False,
+        "s3_bucket_uri": f"s3://tf2-finops-lakehouse-bucket/ai-input/account_id={ACCOUNT_ID}/year=2026/month=06/day=27/{RUN_ID}_input.json.gz"
+    },
     "missing_resources": [],
     "current_ce_cost_gap_usd": 0.0,
     "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},
@@ -249,6 +254,11 @@ _NORMALIZED_POINTER_DETAILS = {
     "detect_request_mode": "S3_POINTER",
     "s3_bucket_uri": f"s3://company-cdo-{ACCOUNT_ID}-telemetry/{RUN_ID}_raw.json.gz",
     "s3_object_checksum": "d" * 64,
+    "post_telemetry_window": {
+        "data_source_type": "S3_POINTER",
+        "telemetry_delay_event": False,
+        "s3_bucket_uri": f"s3://company-cdo-{ACCOUNT_ID}-telemetry/{RUN_ID}_raw.json.gz"
+    },
 }
 
 POST_NORMALIZE_POINTER = {
@@ -290,6 +300,12 @@ _NORMALIZED_DEGRADED_DETAILS = {
     "resource_utilization_metrics": [],
     "aws_cur_line_items": [],
     "aws_cost_explorer_daily": [],
+    "post_telemetry_window": {
+        "data_source_type": "RAW_JSON",
+        "telemetry_delay_event": True,
+        "aws_cost_explorer_daily": [],
+        "aws_cur_line_items": []
+    },
     "missing_resources": ["AmazonEC2"],
     "current_ce_cost_gap_usd": 150.0,
     "comparison_window": {"start_date": EXECUTION_DATE, "end_date": EXECUTION_DATE},

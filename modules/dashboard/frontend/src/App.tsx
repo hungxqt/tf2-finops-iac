@@ -9,12 +9,12 @@ import { ErrorBoundary } from "./components/error/ErrorBoundary";
 import { PageErrorFallback } from "./components/error/PageErrorFallback";
 import type { DashboardSummary } from "./schema";
 
-const OverviewPage      = lazy(() => import("./pages/OverviewPage").then(m => ({ default: m.OverviewPage })));
-const EngineeringPage   = lazy(() => import("./pages/EngineeringPage").then(m => ({ default: m.EngineeringPage })));
-const ContainmentPage   = lazy(() => import("./pages/ContainmentPage").then(m => ({ default: m.ContainmentPage })));
-const CollaborationPage = lazy(() => import("./pages/CollaborationPage").then(m => ({ default: m.CollaborationPage })));
-const AuditPage         = lazy(() => import("./pages/AuditPage").then(m => ({ default: m.AuditPage })));
-const AdminPage         = lazy(() => import("./pages/AdminPage").then(m => ({ default: m.AdminPage })));
+import { OverviewPage } from "./pages/OverviewPage";
+import { EngineeringPage } from "./pages/EngineeringPage";
+import { ContainmentPage } from "./pages/ContainmentPage";
+import { CollaborationPage } from "./pages/CollaborationPage";
+import { AuditPage } from "./pages/AuditPage";
+import { AdminPage } from "./pages/AdminPage";
 
 function PageSkeleton() {
   return (

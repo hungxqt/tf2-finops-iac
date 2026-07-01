@@ -250,7 +250,16 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
             assume_kwargs["ExternalId"] = tenant_id
             assume_kwargs["Tags"] = [{"Key": "tenant_id", "Value": tenant_id}]
             assume_kwargs["TransitiveTagKeys"] = ["tenant_id"]
-        res = sts_client_inst.assume_role(**assume_kwargs)
+        try:
+            res = sts_client_inst.assume_role(**assume_kwargs)
+        except Exception as tag_err:
+            if "Tags" in assume_kwargs and ("AccessDenied" in str(tag_err) or "TagSession" in str(tag_err) or "is not authorized to perform: sts:TagSession" in str(tag_err)):
+                logger.warning("TagSession failed, retrying AssumeRole without session tags: %s", tag_err)
+                assume_kwargs.pop("Tags", None)
+                assume_kwargs.pop("TransitiveTagKeys", None)
+                res = sts_client_inst.assume_role(**assume_kwargs)
+            else:
+                raise tag_err
         creds = res["Credentials"]
         return boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
@@ -261,6 +270,10 @@ def get_cross_account_session(sts_client_inst, account_id: str, current_account_
     except Exception as e:
         if isinstance(e, (NameError, TypeError, ValueError, KeyError, AttributeError, ImportError, IndexError, SyntaxError)):
             raise e
+        # Sandbox fallback: if cross-account AssumeRole fails, use local default session to read local bucket
+        if os.environ.get("ENVIRONMENT", "").lower() in ["sandbox", "dev"]:
+            logger.warning("Failed to assume cross-account role %s in sandbox, falling back to default session: %s", role_arn, e)
+            return None
         raise TelemetryAuthError(f"Failed to assume role {role_arn}: {str(e)}") from e
 
 

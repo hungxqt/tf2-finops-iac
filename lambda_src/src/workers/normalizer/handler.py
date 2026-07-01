@@ -908,6 +908,30 @@ def handle_request(event_data: dict, context: Any) -> dict:
             len(ce_payload_bytes), raw_json_inline_max_bytes,
         )
 
+    # Evict raw telemetry data arrays to keep Step Functions execution state within limits in S3_POINTER mode.
+    # Downstream states must use S3_POINTER mode instead of reading inline arrays.
+    if detect_request_mode == "S3_POINTER":
+        details_aws_cur_line_items = []
+        details_aws_cost_explorer_daily = []
+    else:
+        details_aws_cur_line_items = cur_records
+        details_aws_cost_explorer_daily = ce_records
+
+    # Construct post_telemetry_window object for /v1/verify
+    if detect_request_mode == "RAW_JSON":
+        post_telemetry_window = {
+            "data_source_type": "RAW_JSON",
+            "telemetry_delay_event": True,
+            "aws_cost_explorer_daily": ce_records,
+            "aws_cur_line_items": []
+        }
+    else:
+        post_telemetry_window = {
+            "data_source_type": "S3_POINTER",
+            "telemetry_delay_event": telemetry_delay_event,
+            "s3_bucket_uri": s3_bucket_uri
+        }
+
     details = {
         "curated_data_uri": curated_data_uri,
         "schema_version": "3.2.0",
@@ -929,11 +953,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "s3_object_checksum": s3_object_checksum,
         "business_context": business_context,
         # Keep details payload under Step Functions' 256 KiB cap:
-        # - aws_cur_line_items is always resource-level and large, so we return [] in details.
+        # - aws_cur_line_items is resource-level and large, so we return details_aws_cur_line_items (empty in S3_POINTER mode).
         # - aws_cost_explorer_daily and resource_utilization_metrics are returned only in RAW_JSON mode.
         "resource_utilization_metrics": resource_utilization_metrics if detect_request_mode == "RAW_JSON" else [],
         "aws_cur_line_items": [],
-        "aws_cost_explorer_daily": ce_records if detect_request_mode == "RAW_JSON" else [],
+        "aws_cost_explorer_daily": details_aws_cost_explorer_daily,
+        "post_telemetry_window": post_telemetry_window,
         "missing_resources": missing_resources,
         "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
         "comparison_window": comparison_window,

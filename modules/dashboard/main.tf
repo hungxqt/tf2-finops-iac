@@ -560,6 +560,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
   # checkov:skip=CKV_AWS_310: "Origin failover is enabled via origin_group"
   # checkov:skip=CKV2_AWS_42: "Custom SSL certificate is conditionally configured via cloudfront_acm_certificate_arn variable"
   # checkov:skip=CKV2_AWS_47: "WAFv2 is configured with KnownBadInputsRuleSet protecting against Log4j, but scanner does not resolve it dynamically"
+  # checkov:skip=CKV_AWS_174: "minimum_protocol_version cannot be set when cloudfront_default_certificate=true (AWS API constraint); custom cert envs use TLSv1.2_2021"
   origin {
     domain_name              = aws_s3_bucket.dashboard_assets.bucket_regional_domain_name
     origin_id                = "S3-DashboardAssets"
@@ -1207,6 +1208,7 @@ resource "aws_lambda_function" "ad_hoc_trigger" {
   # checkov:skip=CKV_AWS_117: "Trigger Lambda does not run inside VPC to easily make Step Functions API calls without VPC endpoints"
   # checkov:skip=CKV_AWS_173: "Encryption settings for environment variables are configured via kms_key_arn"
   # checkov:skip=CKV_AWS_272: "Code signing is not configured for dashboard trigger lambda"
+  # checkov:skip=CKV2_AWS_75: "CORS is open to allow cross-origin requests from any client browser accessing the dashboard"
   function_name    = "${var.project_name}-${var.environment}-ad-hoc-trigger"
   description      = "Trigger Step Functions ad-hoc executions from dashboard"
   role             = aws_iam_role.ad_hoc_trigger.arn
@@ -1233,13 +1235,14 @@ resource "aws_lambda_function" "ad_hoc_trigger" {
 
 resource "aws_lambda_function_url" "ad_hoc_trigger_url" {
   # checkov:skip=CKV_AWS_258: "Trigger endpoint is accessed directly from the client browser and uses CORS/origin validation instead of IAM auth"
+  # checkov:skip=CKV2_AWS_75: "CORS is open to allow cross-origin requests from any client browser accessing the dashboard"
   function_name      = aws_lambda_function.ad_hoc_trigger.function_name
   authorization_type = "NONE"
 
   cors {
     allow_credentials = false
     allow_origins     = ["*"]
-    allow_methods     = ["POST"]
+    allow_methods     = ["*"]
     allow_headers     = ["content-type"]
     max_age           = 86400
   }

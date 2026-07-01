@@ -31,8 +31,16 @@ DEFAULT_ATHENA_RESULTS_BUCKET = "tf2-finops-sandbox-athena-results"
 DEFAULT_LAKEHOUSE_BUCKET = "tf2-finops-sandbox-lakehouse-bucket"
 DEFAULT_DASHBOARD_BUCKET = "tf2-finops-sandbox-dashboard-data"
 DEFAULT_DASHBOARD_KEY = "summaries/dashboard-summary.json"
-DEFAULT_ACCOUNT_ID = "336805808730"
 DEFAULT_TENANT_ID = "tf2-finops-sandbox"
+
+
+def get_caller_account_id(region: str = DEFAULT_REGION) -> str:
+    """Resolve the current AWS account ID dynamically via STS."""
+    try:
+        sts = boto3.client("sts", region_name=region)
+        return sts.get_caller_identity()["Account"]
+    except Exception as exc:
+        raise RuntimeError(f"Could not resolve account ID via STS: {exc}") from exc
 
 
 ddb_deserializer = TypeDeserializer()
@@ -161,6 +169,20 @@ def build_impacted(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
     return impacted
 
 
+def _read_parquet_bytes(body: bytes) -> list[dict[str, Any]]:
+    """Read a Parquet file from raw bytes using pyarrow, returns list of dicts."""
+    try:
+        import io
+        import pyarrow.parquet as pq
+        table = pq.read_table(io.BytesIO(body))
+        return table.to_pylist()
+    except ImportError:
+        return []
+    except Exception as exc:
+        print(f"[warn] pyarrow failed to read parquet: {exc}")
+        return []
+
+
 def load_curated_cost_rows_from_s3(
     s3: Any,
     *,
@@ -170,17 +192,29 @@ def load_curated_cost_rows_from_s3(
 ) -> list[dict[str, Any]]:
     """Read curated cost rows directly from S3.
 
-    Normalizer attempts to write Parquet, but in constrained environments it
-    falls back to JSON bytes while keeping the historical `_curated.parquet`
-    key suffix. Athena will reject those fallback objects; this direct reader
-    keeps the dashboard materializer useful until the normalizer package
-    includes a real Parquet writer in Lambda.
+    Scans ALL account_id= partition prefixes (not just the payer account) so
+    that data written under synthetic or legacy account IDs is also included.
+    Supports both real Parquet (via pyarrow) and JSON fallback formats.
     """
-    prefix = f"cost/curated/account_id={account_id}/"
+    # Discover all account_id= partition prefixes under cost/curated/
     paginator = s3.get_paginator("list_objects_v2")
+    prefixes_to_scan: list[str] = []
+    try:
+        resp = s3.list_objects_v2(Bucket=lakehouse_bucket, Prefix="cost/curated/", Delimiter="/")
+        for cp in resp.get("CommonPrefixes", []):
+            prefixes_to_scan.append(cp["Prefix"])
+    except Exception:
+        pass
+    # Always include the explicit payer account prefix as fallback
+    explicit = f"cost/curated/account_id={account_id}/"
+    if not prefixes_to_scan:
+        prefixes_to_scan = [explicit]
+
     objects: list[dict[str, Any]] = []
-    for page in paginator.paginate(Bucket=lakehouse_bucket, Prefix=prefix):
-        objects.extend(page.get("Contents", []))
+    for prefix in prefixes_to_scan:
+        for page in paginator.paginate(Bucket=lakehouse_bucket, Prefix=prefix):
+            objects.extend(page.get("Contents", []))
+
     objects.sort(key=lambda obj: obj.get("LastModified", dt.datetime.min.replace(tzinfo=dt.timezone.utc)), reverse=True)
 
     rows: list[dict[str, Any]] = []
@@ -192,7 +226,11 @@ def load_curated_cost_rows_from_s3(
             print(f"[warn] failed reading s3://{lakehouse_bucket}/{key}: {exc}")
             continue
         if body.startswith(b"PAR1"):
-            print(f"[warn] skipping real Parquet object without local parquet reader: s3://{lakehouse_bucket}/{key}")
+            parquet_rows = _read_parquet_bytes(body)
+            if parquet_rows:
+                rows.extend(parquet_rows)
+            else:
+                print(f"[warn] skipping unreadable Parquet (pyarrow not available or failed): s3://{lakehouse_bucket}/{key}")
             continue
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -211,11 +249,18 @@ def load_curated_cost_rows_from_s3(
 def build_spend_rows_from_cost_records(records: list[dict[str, Any]]) -> list[dict[str, str]]:
     daily: dict[str, float] = defaultdict(float)
     for record in records:
-        day = parse_date(record.get("timestamp") or record.get("date") or record.get("line_item_usage_start_date"))
+        # Normalizer writes CUR field names: line_item_usage_start_date, line_item_unblended_cost
+        day = parse_date(
+            record.get("line_item_usage_start_date")
+            or record.get("timestamp")
+            or record.get("date")
+        )
         if not day:
             continue
         daily[day] += clean_number(
-            record.get("unblended_cost")
+            record.get("line_item_unblended_cost")
+            if record.get("line_item_unblended_cost") is not None
+            else record.get("unblended_cost")
             if record.get("unblended_cost") is not None
             else record.get("cost")
         )
@@ -226,15 +271,32 @@ def build_impacted_rows_from_cost_records(records: list[dict[str, Any]], lookbac
     totals: dict[tuple[str, str], float] = defaultdict(float)
     owner_status: dict[tuple[str, str], str] = {}
     for record in records:
+        # Normalizer writes CUR field names
         cost = clean_number(
-            record.get("unblended_cost")
+            record.get("line_item_unblended_cost")
+            if record.get("line_item_unblended_cost") is not None
+            else record.get("unblended_cost")
             if record.get("unblended_cost") is not None
             else record.get("cost")
         )
-        owner = str(record.get("owner") or record.get("resource_tags_user_owner") or "untagged")
-        status = "missing owner" if owner == "untagged" else "valid"
-        service = str(record.get("service") or record.get("service_code") or "unknown")
-        squad = str(record.get("squad") or record.get("team") or "unassigned")
+        owner = str(
+            record.get("resource_tags_user_owner")
+            or record.get("owner")
+            or "untagged"
+        )
+        status = "missing owner" if owner in ("untagged", "", "None", None) else "valid"
+        service = str(
+            record.get("line_item_product_code")
+            or record.get("service")
+            or record.get("service_code")
+            or "unknown"
+        )
+        squad = str(
+            record.get("resource_tags_user_team")
+            or record.get("squad")
+            or record.get("team")
+            or "unassigned"
+        )
         for key in (("Service", service), ("Squad", squad)):
             totals[key] += cost
             if owner_status.get(key) != "missing owner":
@@ -286,7 +348,7 @@ def build_anomalies(anomaly_items: list[dict[str, Any]], dashboard_items: list[d
         anomalies.append({
             "anomaly_id": anomaly_id,
             "severity": str(item.get("severity") or "INFO").upper(),
-            "account_id": str(item.get("account_id") or DEFAULT_ACCOUNT_ID),
+            "account_id": str(item.get("account_id") or args.account_id),
             "account_name": str(item.get("account_name") or item.get("environment") or "Unknown account"),
             "service": str(item.get("service") or item.get("service_code") or item.get("anomaly_type") or "unknown"),
             "squad": str(item.get("squad") or item.get("owner") or "unassigned"),
@@ -318,7 +380,7 @@ def build_containment(audit_items: list[dict[str, Any]], dashboard_items: list[d
         containment.append({
             "audit_id": audit_id,
             "resource_id": str(item.get("resource_id") or "N/A"),
-            "account_id": str(item.get("account_id") or DEFAULT_ACCOUNT_ID),
+            "account_id": str(item.get("account_id") or args.account_id),
             "squad": str(item.get("squad") or item.get("owner") or "unassigned"),
             "action_type": action,
             "execution_mode": str(item.get("execution_mode") or item.get("execution_mode_applied") or "dry-run"),
@@ -564,7 +626,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-name", default=DEFAULT_PROJECT)
     parser.add_argument("--tenant-id", default=DEFAULT_TENANT_ID)
     parser.add_argument("--viewer-role", default="cdo")
-    parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
+    parser.add_argument("--account-id", default=None)
     parser.add_argument("--database", default=DEFAULT_DATABASE)
     parser.add_argument("--workgroup", default=DEFAULT_WORKGROUP)
     parser.add_argument("--athena-results-bucket", default=DEFAULT_ATHENA_RESULTS_BUCKET)
@@ -587,4 +649,9 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    publish_summary(parse_args())
+    args = parse_args()
+    # Auto-resolve account ID via STS if not explicitly provided
+    if not args.account_id:
+        args.account_id = get_caller_account_id(args.region)
+        print(f"[info] Resolved account ID via STS: {args.account_id}")
+    publish_summary(args)

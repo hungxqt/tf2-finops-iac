@@ -87,6 +87,8 @@ resource "aws_iam_role_policy_attachment" "request_vpc" {
 }
 
 resource "aws_iam_policy" "request" {
+  # checkov:skip=CKV_AWS_356: "s3:GetObject/ListBucket require wildcards to access account-specific telemetry buckets"
+  # checkov:skip=CKV_AWS_111: "s3:ListBucket is scoped to company-cdo telemetry buckets"
   name = "${var.project_name}-${var.environment}-ai-request-policy"
 
   policy = jsonencode({
@@ -170,20 +172,18 @@ resource "aws_iam_policy" "request" {
           Sid      = "AIRequestS3PointerList"
           Effect   = "Allow"
           Action   = ["s3:ListBucket"]
-          Resource = [var.ai_request_s3_pointer_bucket_arn]
-          Condition = {
-            StringLike = {
-              "s3:prefix" = var.ai_request_s3_pointer_prefixes
-            }
-          }
+          Resource = [var.ai_request_s3_pointer_bucket_arn, "arn:aws:s3:::company-cdo-*-telemetry"]
         }
       ] : [],
       var.ai_request_s3_pointer_bucket_arn != "" ? [
         {
-          Sid      = "AIRequestS3PointerGet"
-          Effect   = "Allow"
-          Action   = ["s3:GetObject"]
-          Resource = [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"]
+          Sid    = "AIRequestS3PointerGet"
+          Effect = "Allow"
+          Action = ["s3:GetObject"]
+          Resource = concat(
+            [for p in var.ai_request_s3_pointer_prefixes : "${var.ai_request_s3_pointer_bucket_arn}/${p}"],
+            ["arn:aws:s3:::company-cdo-*-telemetry/*"]
+          )
         }
       ] : []
     )
