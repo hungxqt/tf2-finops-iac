@@ -72,4 +72,8 @@ output "cloudfront_log_bucket_name" {
   value       = aws_s3_bucket.cloudfront_logs.id
 }
 
+output "cloudfront_distribution_arn" {
+  description = "The ARN of the CloudFront distribution"
+  value       = aws_cloudfront_distribution.dashboard.arn
+}
 

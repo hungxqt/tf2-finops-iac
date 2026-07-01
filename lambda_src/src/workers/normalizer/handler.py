@@ -99,6 +99,12 @@ def get_athena_client():
     return None
 
 
+def quote_identifier(identifier: str) -> str:
+    if not identifier or not re.match(r'^[a-zA-Z0-9_-]+\Z', identifier):
+        raise ValueError(f"Invalid identifier for quoting: {identifier}")
+    return f'"{identifier}"'
+
+
 def validate_sql_inputs(account_id: str, start_date: str, end_date: str, database: str, table: str, workgroup: str, results_bucket: str) -> None:
     if not re.match(r'^\d{12}$', account_id):
         raise ValueError(f"Invalid account ID: {account_id}")
@@ -509,7 +515,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
         query = f"""
         SELECT {select_fields}
-        FROM {database or 'db'}.{table or 'tbl'}
+        FROM {quote_identifier(table)}
         WHERE line_item_usage_account_id = '{event.account_id}'
           AND line_item_usage_start_date >= '{start_date}'
           AND line_item_usage_start_date <= '{end_date}'

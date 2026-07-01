@@ -7,8 +7,15 @@ interface AnomalyDetailProps {
   anomaly: Anomaly | undefined;
 }
 
-const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const currency = (v: number) => moneyFmt.format(Number(v || 0));
+const moneyFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 });
+const currency = (v: number) => {
+  const num = Number(v || 0);
+  if (num === 0) return "$0";
+  if (Math.abs(num) < 0.01) {
+    return `$${num.toFixed(6)}`;
+  }
+  return moneyFmt.format(num);
+};
 
 function dateLabel(value?: string) {
   if (!value) return "not published";

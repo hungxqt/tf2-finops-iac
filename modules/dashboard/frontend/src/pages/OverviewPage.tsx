@@ -25,6 +25,7 @@ function toTrend(summary: DashboardSummary): TrendPoint[] {
   }));
 }
 
+
 const pct = (v: number) =>
   `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(Number(v || 0))}%`;
 

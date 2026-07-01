@@ -10,6 +10,7 @@ interface ImpactBarChartProps {
 }
 
 
+
 const BAR_COLORS = ["#14b8a6", "#3b82f6", "#8b5cf6", "#f59e0b", "#06b6d4"];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

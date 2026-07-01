@@ -8,6 +8,7 @@ crash.log
 crash.*.log
 tfplan
 tfplan.json
+*.tfplan
 .terraform.lock.hcl.backup
 
 # Lambda build artifacts

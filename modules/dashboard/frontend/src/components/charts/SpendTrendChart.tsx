@@ -24,6 +24,7 @@ interface SpendTrendChartProps {
   data: TrendPoint[];
 }
 
+
 interface CustomTooltipPayload {
   dataKey?: string;
   value?: number;

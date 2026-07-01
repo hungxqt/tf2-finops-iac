@@ -115,10 +115,10 @@ variable "glue_database_arn" {
   default     = ""
 }
 
-variable "cur_data_table_arn" {
-  type        = string
-  description = "The ARN of the Glue Catalog table for curated cost data"
-  default     = ""
+variable "glue_table_arns" {
+  type        = list(string)
+  description = "Glue Catalog table ARNs that Lambda worker IAM may resolve through Athena"
+  default     = []
 }
 
 variable "ai_payload_idempotency_table_arn" {
