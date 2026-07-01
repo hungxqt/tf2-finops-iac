@@ -6,22 +6,22 @@
 
 ## Phạm vi
 
-- Thêm helper `quote_identifier` trong `lambda_src/src/workers/normalizer/handler.py` để kiểm tra và đặt dấu nháy ngược (backtick - \`) cho các định danh database và table của Athena (sửa đổi từ dấu nháy kép trước đó).
+- Thêm helper `quote_identifier` trong `lambda_src/src/workers/normalizer/handler.py` để kiểm tra và đặt dấu nháy kép (double quotes - ") cho các định danh table của Athena (sửa đổi từ dấu nháy ngược trước đó).
 - Đảm bảo kiểm tra regex nghiêm ngặt khớp với `^[a-zA-Z0-9_-]+\Z` (sử dụng `\Z` để từ chối các ký tự xuống dòng ở cuối).
-- Sửa đổi phần tạo SQL động trong `normalizer` để xuất ra tên Glue database và table được bao bởi dấu nháy ngược trong mệnh đề `FROM`: `FROM \`database_name\`.\`table_name\`` (đảm bảo các bảng chứa dấu gạch ngang phân giải đúng trong Athena).
-- Giữ nguyên `QueryExecutionContext={"Database": database}` với tên Glue database thô (không có dấu nháy) để đáp ứng yêu cầu của client.
-- Duy trì tính toàn vẹn của cấu hình tên (không đổi tên tài nguyên Terraform hoặc Glue database).
+- Sửa đổi phần tạo SQL động trong `normalizer` để xuất ra tên Glue table được bao bởi dấu nháy kép trong mệnh đề `FROM`: `FROM "table_name"` (loại bỏ tiền tố tên database để Athena phân giải chính xác bảng trong ngữ cảnh cơ sở dữ liệu đã chọn).
+- Giữ nguyên `QueryExecutionContext={"Database": database}` với tên Glue database thô (không có dấu nháy) để cung cấp ngữ cảnh bắt buộc.
+- Duy trì tính toàn vẹn của cấu hình tên (không đổi tên tài nguyên Terraform hoặc Glue database/table).
 - Cập nhật unit và regression tests trong `lambda_src/tests/test_normalizer_cur2.py`:
-  - `test_normalizer_athena_identifier_quoting`: Xác thực câu lệnh Athena được tạo ra bọc chính xác tên database và table trong dấu nháy ngược.
-  - `test_quote_identifier_helper_valid`: Kiểm thử các định danh hợp lệ chứa chữ cái, số, dấu gạch ngang và dấu gạch dưới, trả về chuỗi bọc trong dấu nháy ngược.
+  - `test_normalizer_athena_identifier_quoting`: Xác thực câu lệnh Athena được tạo ra bọc chính xác tên table trong dấu nháy kép, không chứa tiền tố database, không chứa dấu nháy ngược và truyền tên database trong `QueryExecutionContext`.
+  - `test_quote_identifier_helper_valid`: Kiểm thử các định danh hợp lệ chứa chữ cái, số, dấu gạch ngang và dấu gạch dưới, trả về chuỗi bọc trong dấu nháy kép.
   - `test_quote_identifier_helper_invalid_rejections`: Kiểm tra việc từ chối các đầu vào không an toàn (khoảng trắng, dấu chấm, dấu nháy kép/đơn, dấu nháy ngược, lệnh chấm phẩy, ký tự xuống dòng ở cuối).
+- Cập nhật các khẳng định hồi quy (regression assertions) trong `test_normalizer_athena_query_integration` trong `lambda_src/tests/test_normalizer.py` để xác minh câu lệnh truy vấn không chứa tiền tố database hoặc dấu nháy ngược, sử dụng dấu nháy kép bọc tên table và chỉ cung cấp database context trong `QueryExecutionContext`.
 
 ## Các file đã thay đổi
 
 - `lambda_src/src/workers/normalizer/handler.py`
 - `lambda_src/tests/test_normalizer_cur2.py`
-- `.gitignore` (thêm `*.tfplan` để bỏ qua các file plan cục bộ)
-- Xóa `environments/sandbox/normalizer-athena-identifier-fix.tfplan` (loại bỏ file plan được tracking)
+- `lambda_src/tests/test_normalizer.py`
 
 ## Lệnh kiểm tra
 
@@ -35,7 +35,7 @@ terraform fmt -check -recursive
 terraform -chdir=environments/sandbox init -backend=false
 terraform -chdir=environments/sandbox validate
 .\scripts\package-lambdas.ps1
-terraform -chdir=environments/sandbox plan -out="$env:TEMP\normalizer-athena-backtick-fix.tfplan"
+terraform -chdir=environments/sandbox plan -out="$env:TEMP\normalizer-athena-context-db-fix.tfplan"
 ```
 
 ## Kết quả
