@@ -244,7 +244,7 @@ Xem tài liệu hướng dẫn vận hành chi tiết tại [MANUAL_STEP_FUNCTIO
   "billing_period": "2026-03",
   "cost_period": "2026-03-28",
   "is_ad_hoc": true,
-  "tenant_id": "tenant-default"
+  "tenant_id": "tenant-synthetic"
 }
 ```
 

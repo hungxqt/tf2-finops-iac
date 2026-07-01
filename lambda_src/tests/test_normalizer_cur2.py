@@ -616,3 +616,79 @@ def test_build_dynamic_select_fields_valid_and_optional_columns():
     assert "NULL AS resource_tags_user_cost_center" in select_sql
 
 
+def test_normalizer_athena_identifier_quoting():
+    """
+    Test that normalizer quotes database and table identifiers in the SQL query.
+    """
+    account_id = "112233445566"
+    cur_bucket = "tf2-finops-cur-export-bucket"
+    manifest_bytes = _make_manifest(bucket=cur_bucket)
+
+    os.environ["LAKEHOUSE_BUCKET_NAME"] = "test-lakehouse"
+    os.environ["GLUE_DATABASE_NAME"] = "tf2-finops_sandbox_database"
+    os.environ["GLUE_TABLE_NAME"] = "raw_cur_data"
+    os.environ["ATHENA_WORKGROUP_NAME"] = "test-wg"
+    os.environ["ATHENA_RESULTS_BUCKET_NAME"] = "test-athena-results"
+
+    handler.s3_client = finops_common.FakeS3(
+        get_object_func=lambda b, k: manifest_bytes,
+        put_object_func=lambda b, k, v: None,
+    )
+    fake_ath = FakeAthena()
+    handler.athena_client = fake_ath
+
+    manifest_uri = f"s3://{cur_bucket}/finops-cur-export/finops-export/metadata/BILLING_PERIOD=2026-06/finops-export-Manifest.json"
+
+    resp = handler.handle_request(
+        {
+            "run_id": "run-quoted-sql",
+            "correlation_id": "corr-quoted-sql",
+            "account_id": account_id,
+            "cost_period": "2026-06",
+            "execution_date": "2026-06-24",
+            "ingestion": {"details": {"cur_manifest_uri": manifest_uri}},
+        },
+        None,
+    )
+
+    assert resp["status"] == "NORMALIZED"
+    assert len(fake_ath.captured_queries) == 1
+    query_str = fake_ath.captured_queries[0]
+
+    # Verify database and table are quoted correctly in the FROM clause
+    assert 'FROM "tf2-finops_sandbox_database"."raw_cur_data"' in query_str
+
+    # Clean up
+    del os.environ["LAKEHOUSE_BUCKET_NAME"]
+    del os.environ["GLUE_DATABASE_NAME"]
+    del os.environ["GLUE_TABLE_NAME"]
+    del os.environ["ATHENA_WORKGROUP_NAME"]
+    del os.environ["ATHENA_RESULTS_BUCKET_NAME"]
+    handler.s3_client = None
+    handler.athena_client = None
+
+
+def test_quote_identifier_helper_valid():
+    assert handler.quote_identifier("my_db") == '"my_db"'
+    assert handler.quote_identifier("my-db-123") == '"my-db-123"'
+    assert handler.quote_identifier("DatabaseName") == '"DatabaseName"'
+
+
+def test_quote_identifier_helper_invalid_rejections():
+    unsafe_inputs = [
+        "db; drop table xyz;",
+        "db.table",
+        "db table",
+        "db\"table",
+        "db'table",
+        "",
+        "   ",
+        "db\n",
+        "db\t",
+    ]
+    for inp in unsafe_inputs:
+        with pytest.raises(ValueError, match="Invalid identifier for quoting"):
+            handler.quote_identifier(inp)
+
+
+
