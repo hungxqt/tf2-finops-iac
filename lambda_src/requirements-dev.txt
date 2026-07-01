@@ -4,3 +4,5 @@ pytest-cov
 boto3>=1.34.0
 botocore>=1.34.0
 moto[ec2,rds,s3,dynamodb,sts]>=5.0.0
+pandas
+

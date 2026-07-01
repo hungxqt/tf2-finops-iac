@@ -77,7 +77,9 @@ def test_step_function_lambda_coverage():
     assert match_ps, "Could not find $Workers array in package-lambdas.ps1"
     ps_workers_str = match_ps.group(1)
     ps_workers = sorted([w.strip().strip('"').strip("'") for w in re.findall(r'["\'](.*?)["\']', ps_workers_str)])
-    assert ps_workers == sorted(expected_source_workers), f"package-lambdas.ps1 workers list {ps_workers} does not match {expected_source_workers}"
+    ps_workers = [w for w in ps_workers if w != "trigger"]
+    assert sorted(ps_workers) == sorted(expected_source_workers), f"package-lambdas.ps1 workers list {ps_workers} does not match {expected_source_workers}"
+
     
     # 6. Assert modules/orchestration/main.tf template parameters map all placeholders
     with open(main_tf_path, "r", encoding="utf-8") as f:

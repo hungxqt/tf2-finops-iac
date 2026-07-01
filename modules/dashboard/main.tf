@@ -1171,14 +1171,16 @@ resource "aws_iam_role" "ad_hoc_trigger" {
 }
 
 resource "aws_iam_role_policy" "ad_hoc_trigger" {
+  # checkov:skip=CKV_AWS_111: "IAM policy is restricted to write logs and start the specific Step Functions execution"
+  # checkov:skip=CKV_AWS_356: "Wildcard resource is restricted to CloudWatch logging actions"
   name = "ad-hoc-trigger-execution-policy"
   role = aws_iam_role.ad_hoc_trigger.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "states:StartExecution"
         ]
         Resource = [
@@ -1186,8 +1188,8 @@ resource "aws_iam_role_policy" "ad_hoc_trigger" {
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
@@ -1203,6 +1205,7 @@ resource "aws_lambda_function" "ad_hoc_trigger" {
   # checkov:skip=CKV_AWS_115: "Trigger lambda does not need reserved concurrency"
   # checkov:skip=CKV_AWS_116: "No DLQ is needed for simple ad-hoc execution trigger"
   # checkov:skip=CKV_AWS_117: "Trigger Lambda does not run inside VPC to easily make Step Functions API calls without VPC endpoints"
+  # checkov:skip=CKV_AWS_173: "Encryption settings for environment variables are configured via kms_key_arn"
   # checkov:skip=CKV_AWS_272: "Code signing is not configured for dashboard trigger lambda"
   function_name    = "${var.project_name}-${var.environment}-ad-hoc-trigger"
   description      = "Trigger Step Functions ad-hoc executions from dashboard"
@@ -1213,6 +1216,7 @@ resource "aws_lambda_function" "ad_hoc_trigger" {
   source_code_hash = fileexists("${path.module}/../../.build/lambda/trigger.zip") ? filebase64sha256("${path.module}/../../.build/lambda/trigger.zip") : null
   timeout          = 30
   memory_size      = 256
+  kms_key_arn      = var.dashboard_kms_key_arn
 
   environment {
     variables = {
@@ -1228,6 +1232,7 @@ resource "aws_lambda_function" "ad_hoc_trigger" {
 }
 
 resource "aws_lambda_function_url" "ad_hoc_trigger_url" {
+  # checkov:skip=CKV_AWS_258: "Trigger endpoint is accessed directly from the client browser and uses CORS/origin validation instead of IAM auth"
   function_name      = aws_lambda_function.ad_hoc_trigger.function_name
   authorization_type = "NONE"
 
@@ -1239,4 +1244,5 @@ resource "aws_lambda_function_url" "ad_hoc_trigger_url" {
     max_age           = 86400
   }
 }
+
 

@@ -1127,13 +1127,19 @@ resource "terraform_data" "destroy_guard" {
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "cur_export" {
+  # checkov:skip=CKV_AWS_18: "CUR export landing bucket does not need access logging (raw source only)"
+  # checkov:skip=CKV_AWS_21: "CUR export landing bucket does not need versioning (transient billing source data)"
+  # checkov:skip=CKV_AWS_145: "CUR export landing bucket uses default SSE-S3 encryption as SSE-KMS can interfere with bcm-data-exports service delivery"
   # checkov:skip=CKV_AWS_144: "CUR export landing bucket does not need cross-region replication (raw source only)"
+  # checkov:skip=CKV2_AWS_6: "Public access block is configured in a separate resource block below"
+  # checkov:skip=CKV2_AWS_61: "CUR export landing bucket lifecycle is managed dynamically by external billing exports"
   # checkov:skip=CKV2_AWS_62: "CUR export landing bucket is polled by cost_puller and does not need event notifications"
   count         = var.create_cur_export_bucket ? 1 : 0
   bucket        = local.cur_export_bucket_name
   force_destroy = var.destroyable
   tags          = var.tags
 }
+
 
 resource "aws_s3_bucket_public_access_block" "cur_export" {
   count                   = var.create_cur_export_bucket ? 1 : 0
