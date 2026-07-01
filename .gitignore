@@ -4,6 +4,7 @@
 *.tfstate.*
 # *.tfvars
 *.tfvars.json
+environments/sandbox/terraform.tfvars
 crash.log
 crash.*.log
 tfplan
