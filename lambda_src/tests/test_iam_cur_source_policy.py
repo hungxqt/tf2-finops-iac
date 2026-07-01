@@ -143,5 +143,9 @@ def test_glue_table_arns_iam_regression():
         
         assert "glue_table_arns" in iam_module_block, f"glue_table_arns missing in module 'iam' inside environments/{env}/main.tf"
         assert "raw_cur_table_arn" in iam_module_block, f"raw_cur_table_arn missing in module 'iam' inside environments/{env}/main.tf"
-        assert "cur_data_table_arn" not in iam_module_block, f"cur_data_table_arn should not be passed to module 'iam' inside environments/{env}/main.tf"
-
+        assert "dashboard_glue_table_arn" in iam_module_block, (
+            f"dashboard_glue_table_arn missing in module 'iam' inside environments/{env}/main.tf"
+        )
+        assert "module.lakehouse.cur_data_table_arn" in iam_module_block, (
+            f"dashboard writer curated table ARN missing in environments/{env}/main.tf"
+        )

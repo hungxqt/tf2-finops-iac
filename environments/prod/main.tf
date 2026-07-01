@@ -548,6 +548,8 @@ module "iam" {
   athena_workgroup_arn                   = module.lakehouse.athena_workgroup_arn
   glue_database_arn                      = module.lakehouse.glue_database_arn
   glue_table_arns                        = [module.lakehouse.raw_cur_table_arn]
+  dashboard_data_bucket_arn              = "arn:aws:s3:::${var.project_name}-${var.environment}-dashboard-data"
+  dashboard_glue_table_arn               = module.lakehouse.cur_data_table_arn
   tags                                   = var.tags
 }
 
@@ -631,6 +633,8 @@ module "compute_lambda" {
   cur_exports_json              = local.cur_exports_json
   cur_raw_export_prefix         = var.cur_raw_prefix
   cur_raw_account_partition_key = module.lakehouse.cur_raw_account_partition_key
+  dashboard_account_id          = try(var.telemetry_member_account_ids[0], data.aws_caller_identity.current.account_id)
+  dashboard_data_bucket_name    = "${var.project_name}-${var.environment}-dashboard-data"
 }
 
 # 7. Orchestration Module
@@ -701,4 +705,3 @@ module "dashboard" {
   destroyable                         = var.destroyable
   state_machine_arn                   = module.orchestration.state_machine_arn
 }
-
