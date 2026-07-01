@@ -169,6 +169,20 @@ def build_impacted(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
     return impacted
 
 
+def _read_parquet_bytes(body: bytes) -> list[dict[str, Any]]:
+    """Read a Parquet file from raw bytes using pyarrow, returns list of dicts."""
+    try:
+        import io
+        import pyarrow.parquet as pq
+        table = pq.read_table(io.BytesIO(body))
+        return table.to_pylist()
+    except ImportError:
+        return []
+    except Exception as exc:
+        print(f"[warn] pyarrow failed to read parquet: {exc}")
+        return []
+
+
 def load_curated_cost_rows_from_s3(
     s3: Any,
     *,
@@ -178,17 +192,29 @@ def load_curated_cost_rows_from_s3(
 ) -> list[dict[str, Any]]:
     """Read curated cost rows directly from S3.
 
-    Normalizer attempts to write Parquet, but in constrained environments it
-    falls back to JSON bytes while keeping the historical `_curated.parquet`
-    key suffix. Athena will reject those fallback objects; this direct reader
-    keeps the dashboard materializer useful until the normalizer package
-    includes a real Parquet writer in Lambda.
+    Scans ALL account_id= partition prefixes (not just the payer account) so
+    that data written under synthetic or legacy account IDs is also included.
+    Supports both real Parquet (via pyarrow) and JSON fallback formats.
     """
-    prefix = f"cost/curated/account_id={account_id}/"
+    # Discover all account_id= partition prefixes under cost/curated/
     paginator = s3.get_paginator("list_objects_v2")
+    prefixes_to_scan: list[str] = []
+    try:
+        resp = s3.list_objects_v2(Bucket=lakehouse_bucket, Prefix="cost/curated/", Delimiter="/")
+        for cp in resp.get("CommonPrefixes", []):
+            prefixes_to_scan.append(cp["Prefix"])
+    except Exception:
+        pass
+    # Always include the explicit payer account prefix as fallback
+    explicit = f"cost/curated/account_id={account_id}/"
+    if not prefixes_to_scan:
+        prefixes_to_scan = [explicit]
+
     objects: list[dict[str, Any]] = []
-    for page in paginator.paginate(Bucket=lakehouse_bucket, Prefix=prefix):
-        objects.extend(page.get("Contents", []))
+    for prefix in prefixes_to_scan:
+        for page in paginator.paginate(Bucket=lakehouse_bucket, Prefix=prefix):
+            objects.extend(page.get("Contents", []))
+
     objects.sort(key=lambda obj: obj.get("LastModified", dt.datetime.min.replace(tzinfo=dt.timezone.utc)), reverse=True)
 
     rows: list[dict[str, Any]] = []
@@ -200,7 +226,11 @@ def load_curated_cost_rows_from_s3(
             print(f"[warn] failed reading s3://{lakehouse_bucket}/{key}: {exc}")
             continue
         if body.startswith(b"PAR1"):
-            print(f"[warn] skipping real Parquet object without local parquet reader: s3://{lakehouse_bucket}/{key}")
+            parquet_rows = _read_parquet_bytes(body)
+            if parquet_rows:
+                rows.extend(parquet_rows)
+            else:
+                print(f"[warn] skipping unreadable Parquet (pyarrow not available or failed): s3://{lakehouse_bucket}/{key}")
             continue
         try:
             payload = json.loads(body.decode("utf-8"))
