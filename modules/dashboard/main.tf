@@ -560,6 +560,7 @@ resource "aws_cloudfront_distribution" "dashboard" {
   # checkov:skip=CKV_AWS_310: "Origin failover is enabled via origin_group"
   # checkov:skip=CKV2_AWS_42: "Custom SSL certificate is conditionally configured via cloudfront_acm_certificate_arn variable"
   # checkov:skip=CKV2_AWS_47: "WAFv2 is configured with KnownBadInputsRuleSet protecting against Log4j, but scanner does not resolve it dynamically"
+  # checkov:skip=CKV_AWS_174: "minimum_protocol_version cannot be set when cloudfront_default_certificate=true (AWS API constraint); custom cert envs use TLSv1.2_2021"
   origin {
     domain_name              = aws_s3_bucket.dashboard_assets.bucket_regional_domain_name
     origin_id                = "S3-DashboardAssets"
