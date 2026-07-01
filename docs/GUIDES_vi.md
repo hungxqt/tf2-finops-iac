@@ -593,14 +593,31 @@ Bộ replay mô phỏng các dữ liệu đo lường thô của AWS CUR 2.0 / D
 
 ### 14.2 Các bước Thực hiện Replay
 
-1. **Bước 1: Chuẩn bị và tải dữ liệu lên S3**
-   Chạy script chuẩn bị dữ liệu. Script này sẽ tự động đọc các tệp CSV giả lập từ thư mục `docs/synthetic-data/`, chuyển đổi chúng sang định dạng Parquet, tạo tệp manifest CUR 2.0 tương ứng, tạo ngữ cảnh business/traffic và tải lên S3:
+1. **Bước 1: Tạo ngữ cảnh Business Context JSON**
+   Chạy script tạo ngữ cảnh để sinh tệp JSON ngữ cảnh và dữ liệu Cost Explorer giả lập một cách nhất quán (deterministic):
+   
+   Để tạo ngữ cảnh **toàn bộ 92 ngày** (01/03/2026 đến 31/05/2026):
    ```powershell
-   python ./scripts/prepare_replay.py
+   python ./scripts/generate_business_context.py --scope full --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context.json
    ```
-   *Lưu ý: Script sẽ in ra đường dẫn S3 URI của tệp ngữ cảnh vừa tạo (ví dụ: `s3://<lakehouse-bucket>/replay/business_context.json`).*
+   
+   Để tạo ngữ cảnh **smoke test** chỉ chứa các khung thời gian kiểm thử (bao gồm đệm lookback cho Cost Explorer):
+   ```powershell
+   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context-smoke.json
+   ```
+   
+   Để tải trực tiếp tệp ngữ cảnh vừa tạo lên bucket S3 Sandbox lakehouse (ví dụ: `s3://<lakehouse-bucket>/replay/business_context.json`), hãy thêm tham số `--upload`:
+   ```powershell
+   python ./scripts/generate_business_context.py --scope full --account-id <real-sandbox-account-id> --upload
+   ```
 
-2. **Bước 2: Bật Chế độ Replay trong Terraform**
+2. **Bước 2: Chuẩn bị và tải dữ liệu CUR lên S3**
+   Chạy script chuẩn bị dữ liệu để chuyển đổi các tệp CSV giả lập sang định dạng Parquet CUR 2.0 theo tháng, tạo manifest, và tải lên S3:
+   ```powershell
+   python ./scripts/prepare_replay.py --account-id <real-sandbox-account-id>
+   ```
+
+3. **Bước 3: Bật Chế độ Replay trong Terraform**
    Mở tệp `environments/sandbox/terraform.tfvars` và cấu hình các tham số sau:
    ```hcl
    synthetic_replay_enabled              = true
@@ -613,7 +630,7 @@ Bộ replay mô phỏng các dữ liệu đo lường thô của AWS CUR 2.0 / D
    cd ../..
    ```
 
-3. **Bước 3: Chạy Replay Backtest**
+4. **Bước 4: Chạy Replay Backtest**
    Chạy script runner với chế độ mong muốn (`smoke`, `warmup`, hoặc `full`):
    ```powershell
    # Chế độ smoke: chạy thử nghiệm 3 ngày (01/03/2026 đến 03/03/2026)

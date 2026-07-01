@@ -646,14 +646,31 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
 
 ### 15.2 Step-by-Step Replay Execution
 
-1. **Step 1: Staging raw telemetry to S3**
-   Run the replay preparation script. It automatically reads the synthetic CSV files from `docs/synthetic-data/`, converts them to Parquet format, generates appropriate CUR 2.0 Data Exports manifests, generates business/traffic context, and uploads them to S3:
+1. **Step 1: Generate Replay Business Context JSON**
+   Run the deterministic context generator script. It builds a deterministic JSON file matching `docs/synthetic-data`.
+   
+   To generate a **full 92-day** context (covering 2026-03-01 to 2026-05-31):
    ```powershell
-   python ./scripts/prepare_replay.py
+   python ./scripts/generate_business_context.py --scope full --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context.json
    ```
-   *Note: This script will print the exact S3 URI of the generated business context file (e.g., `s3://<lakehouse-bucket>/replay/business_context.json`).*
+   
+   To generate a **smoke test** context covering selected validation windows (including lookback padding for Cost Explorer):
+   ```powershell
+   python ./scripts/generate_business_context.py --scope smoke --account-id <real-sandbox-account-id> --output .build/synthetic-replay/business_context-smoke.json
+   ```
+   
+   To upload the generated context directly to the Sandbox S3 lakehouse bucket (e.g. `s3://<lakehouse-bucket>/replay/business_context.json`), add the `--upload` flag:
+   ```powershell
+   python ./scripts/generate_business_context.py --scope full --account-id <real-sandbox-account-id> --upload
+   ```
 
-2. **Step 2: Enable Replay Mode in Terraform**
+2. **Step 2: Stage CUR Telemetry to S3**
+   Run the replay preparation script to convert raw CSV records to monthly snappy Parquet files, generate CUR 2.0 Data Exports manifests, and upload them to the sandbox S3 bucket:
+   ```powershell
+   python ./scripts/prepare_replay.py --account-id <real-sandbox-account-id>
+   ```
+
+3. **Step 3: Enable Replay Mode in Terraform**
    Open `environments/sandbox/terraform.tfvars` and set the following parameters:
    ```hcl
    synthetic_replay_enabled              = true
@@ -666,13 +683,13 @@ The replay harness simulates raw AWS CUR 2.0 / Data Exports and Cost Explorer te
    cd ../..
    ```
 
-3. **Step 3: Trigger Replay Backtest**
+4. **Step 4: Trigger Replay Backtest**
    Run the replay runner script with the desired mode (`smoke`, `warmup`, or `full`):
    ```powershell
    # Smoke mode: runs a 3-day test execution (2026-03-01 to 2026-03-03)
    python ./scripts/run_replay.py --mode smoke
 
-   # Warmup mode: replays cost data up to theRDS anomaly date (2026-03-01 to 2026-03-20)
+   # Warmup mode: replays cost data up to the RDS anomaly date (2026-03-01 to 2026-03-20)
    python ./scripts/run_replay.py --mode warmup
 
    # Full backtest mode: replays the full 3-month dataset (2026-03-01 to 2026-05-31)

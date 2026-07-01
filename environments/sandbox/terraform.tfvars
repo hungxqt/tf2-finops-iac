@@ -99,4 +99,4 @@ scheduler_enabled = true
 
 # Sandbox-only Synthetic Replay Harness Configurations
 synthetic_replay_enabled              = true
-synthetic_replay_business_context_uri = ""
+synthetic_replay_business_context_uri = "s3://tf2-finops-sandbox-lakehouse-bucket/replay/business_context.json"
