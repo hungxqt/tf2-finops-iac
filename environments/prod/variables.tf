@@ -26,12 +26,12 @@ variable "tags" {
   }
 }
 
-variable "request_image_uri" {
+variable "request_image_digest" {
   type        = string
-  description = "ECR image URI with immutable digest for the AI Request Lambda function"
+  description = "ECR image digest (sha256 hash) for the AI Request Lambda function"
   validation {
-    condition     = can(regex("@sha256:[a-fA-F0-9]{64}$", var.request_image_uri))
-    error_message = "The request_image_uri must be pinned to an immutable image digest (e.g. name@sha256:<64-hex-characters>)."
+    condition     = can(regex("^sha256:[a-fA-F0-9]{64}$", var.request_image_digest))
+    error_message = "The request_image_digest must be a valid sha256 hash (e.g. sha256:<64-hex-characters>)."
   }
 }
 

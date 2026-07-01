@@ -9,13 +9,13 @@ tags = {
 }
 
 # AI Engine Lambda Container Images (must be digest-pinned to satisfy validation)
-request_image_uri = "093490087544.dkr.ecr.ap-southeast-1.amazonaws.com/tf2-finops/ai-engine@sha256:feb534a2c1aabd20c4811250ad1c3ef63d78247e1e25772f8fc51aee8eb3e242"
+request_image_digest = "sha256:feb534a2c1aabd20c4811250ad1c3ef63d78247e1e25772f8fc51aee8eb3e242"
 
 # S3 Cross-Region Replication region
 replica_region = "ap-southeast-2"
 
 # CloudFront Custom Domain Configuration (ACM certificate must be in us-east-1)
-cloudfront_acm_certificate_arn = "arn:aws:acm:us-east-1:093490087544:certificate/7f6569f4-d240-4ea4-9fc6-a4ba5a260764"
+cloudfront_acm_certificate_arn = ""
 cloudfront_aliases             = ["dashboard-sandbox.hungtran.id.vn"]
 
 # CloudFront Geo-restrictions
@@ -23,7 +23,7 @@ dashboard_geo_restriction_type      = "blacklist"
 dashboard_geo_restriction_locations = ["CU", "IR", "KP", "SY"]
 
 # ACM Certificate ARN for the internal ALB HTTPS listener
-alb_certificate_arn = "arn:aws:acm:us-east-1:093490087544:certificate/7f6569f4-d240-4ea4-9fc6-a4ba5a260764"
+alb_certificate_arn = ""
 
 # Route 53 parameters (Optional)
 private_hosted_zone_id = ""

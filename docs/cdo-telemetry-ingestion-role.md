@@ -9,7 +9,7 @@
             "Sid": "AllowAssumeFromCostPullerRoles",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::093490087544:root"
+                "AWS": "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:root"
             },
             "Action": "sts:AssumeRole",
             "Condition": {
@@ -21,9 +21,9 @@
                 },
                 "ArnEquals": {
                     "aws:PrincipalArn": [
-                        "arn:aws:iam::093490087544:role/tf2-finops-sandbox-cost_puller-role",
-                        "arn:aws:iam::093490087544:role/tf2-finops-staging-cost_puller-role",
-                        "arn:aws:iam::093490087544:role/tf2-finops-prod-cost_puller-role"
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-sandbox-cost_puller-role",
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-staging-cost_puller-role",
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-prod-cost_puller-role"
                     ]
                 }
             }
@@ -32,7 +32,7 @@
             "Sid": "AllowTenantSessionTag",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::093490087544:root"
+                "AWS": "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:root"
             },
             "Action": "sts:TagSession",
             "Condition": {
@@ -47,9 +47,9 @@
                 },
                 "ArnEquals": {
                     "aws:PrincipalArn": [
-                        "arn:aws:iam::093490087544:role/tf2-finops-sandbox-cost_puller-role",
-                        "arn:aws:iam::093490087544:role/tf2-finops-staging-cost_puller-role",
-                        "arn:aws:iam::093490087544:role/tf2-finops-prod-cost_puller-role"
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-sandbox-cost_puller-role",
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-staging-cost_puller-role",
+                        "arn:aws:iam::<MANAGEMENT_ACCOUNT_ID>:role/tf2-finops-prod-cost_puller-role"
                     ]
                 }
             }
