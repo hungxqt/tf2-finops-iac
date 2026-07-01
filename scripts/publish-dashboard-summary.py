@@ -31,8 +31,16 @@ DEFAULT_ATHENA_RESULTS_BUCKET = "tf2-finops-sandbox-athena-results"
 DEFAULT_LAKEHOUSE_BUCKET = "tf2-finops-sandbox-lakehouse-bucket"
 DEFAULT_DASHBOARD_BUCKET = "tf2-finops-sandbox-dashboard-data"
 DEFAULT_DASHBOARD_KEY = "summaries/dashboard-summary.json"
-DEFAULT_ACCOUNT_ID = "336805808730"
 DEFAULT_TENANT_ID = "tf2-finops-sandbox"
+
+
+def get_caller_account_id(region: str = DEFAULT_REGION) -> str:
+    """Resolve the current AWS account ID dynamically via STS."""
+    try:
+        sts = boto3.client("sts", region_name=region)
+        return sts.get_caller_identity()["Account"]
+    except Exception as exc:
+        raise RuntimeError(f"Could not resolve account ID via STS: {exc}") from exc
 
 
 ddb_deserializer = TypeDeserializer()
@@ -286,7 +294,7 @@ def build_anomalies(anomaly_items: list[dict[str, Any]], dashboard_items: list[d
         anomalies.append({
             "anomaly_id": anomaly_id,
             "severity": str(item.get("severity") or "INFO").upper(),
-            "account_id": str(item.get("account_id") or DEFAULT_ACCOUNT_ID),
+            "account_id": str(item.get("account_id") or args.account_id),
             "account_name": str(item.get("account_name") or item.get("environment") or "Unknown account"),
             "service": str(item.get("service") or item.get("service_code") or item.get("anomaly_type") or "unknown"),
             "squad": str(item.get("squad") or item.get("owner") or "unassigned"),
@@ -318,7 +326,7 @@ def build_containment(audit_items: list[dict[str, Any]], dashboard_items: list[d
         containment.append({
             "audit_id": audit_id,
             "resource_id": str(item.get("resource_id") or "N/A"),
-            "account_id": str(item.get("account_id") or DEFAULT_ACCOUNT_ID),
+            "account_id": str(item.get("account_id") or args.account_id),
             "squad": str(item.get("squad") or item.get("owner") or "unassigned"),
             "action_type": action,
             "execution_mode": str(item.get("execution_mode") or item.get("execution_mode_applied") or "dry-run"),
@@ -564,7 +572,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-name", default=DEFAULT_PROJECT)
     parser.add_argument("--tenant-id", default=DEFAULT_TENANT_ID)
     parser.add_argument("--viewer-role", default="cdo")
-    parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
+    parser.add_argument("--account-id", default=None)
     parser.add_argument("--database", default=DEFAULT_DATABASE)
     parser.add_argument("--workgroup", default=DEFAULT_WORKGROUP)
     parser.add_argument("--athena-results-bucket", default=DEFAULT_ATHENA_RESULTS_BUCKET)
@@ -587,4 +595,9 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    publish_summary(parse_args())
+    args = parse_args()
+    # Auto-resolve account ID via STS if not explicitly provided
+    if not args.account_id:
+        args.account_id = get_caller_account_id(args.region)
+        print(f"[info] Resolved account ID via STS: {args.account_id}")
+    publish_summary(args)
