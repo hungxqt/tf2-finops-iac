@@ -928,15 +928,12 @@ def handle_request(event_data: dict, context: Any) -> dict:
         "s3_bucket_uri": s3_bucket_uri,
         "s3_object_checksum": s3_object_checksum,
         "business_context": business_context,
-        # resource_utilization_metrics and CUR/CE arrays are always included in the
-        # normalizer output so downstream states can read them if needed.
-        # For RAW_JSON mode the Step Functions ChooseDetectRequestMode state will
-        # build the inline body directly from these fields.
-        # For S3_POINTER mode the large arrays are present but BuildDetectRequestS3Pointer
-        # explicitly omits aws_cur_line_items from the Step Functions body.
-        "resource_utilization_metrics": resource_utilization_metrics,
-        "aws_cur_line_items": cur_records,
-        "aws_cost_explorer_daily": ce_records,
+        # Keep details payload under Step Functions' 256 KiB cap:
+        # - aws_cur_line_items is always resource-level and large, so we return [] in details.
+        # - aws_cost_explorer_daily and resource_utilization_metrics are returned only in RAW_JSON mode.
+        "resource_utilization_metrics": resource_utilization_metrics if detect_request_mode == "RAW_JSON" else [],
+        "aws_cur_line_items": [],
+        "aws_cost_explorer_daily": ce_records if detect_request_mode == "RAW_JSON" else [],
         "missing_resources": missing_resources,
         "current_ce_cost_gap_usd": current_ce_cost_gap_usd,
         "comparison_window": comparison_window,
