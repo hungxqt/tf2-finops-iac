@@ -3,7 +3,7 @@
 
 locals {
   lambda_archive_dir = "${path.module}/../../.build/lambda"
-  workers            = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
+  workers            = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller", "dashboard_summary_writer"]
 
   worker_configs = {
     state = {
@@ -91,6 +91,29 @@ locals {
         REQUEST_TIMEOUT_SECONDS   = "60"
         IDEMPOTENCY_TABLE_NAME    = lookup(var.dynamodb_table_names, "ai_payload_idempotency", "")
         RAW_JSON_INLINE_MAX_BYTES = tostring(var.raw_json_inline_max_bytes)
+      }
+    }
+    dashboard_summary_writer = {
+      description = "FinOps Watch worker - publishes the materialized dashboard summary"
+      timeout     = 300
+      memory_size = 1024
+      env = {
+        ENVIRONMENT                = var.environment
+        PROJECT_NAME               = var.project_name
+        TENANT_ID                  = "${var.project_name}-${var.environment}"
+        DASHBOARD_VIEWER_ROLE      = "cdo"
+        DASHBOARD_ACCOUNT_ID       = var.dashboard_account_id
+        DASHBOARD_DATA_BUCKET      = var.dashboard_data_bucket_name
+        DASHBOARD_SUMMARY_KEY      = var.dashboard_summary_key
+        DASHBOARD_LOOKBACK_DAYS    = tostring(var.dashboard_lookback_days)
+        GLUE_DATABASE_NAME         = var.glue_database_name
+        ATHENA_WORKGROUP_NAME      = var.athena_workgroup_name
+        ATHENA_RESULTS_BUCKET_NAME = var.athena_results_bucket_name
+        LAKEHOUSE_BUCKET_NAME      = var.lakehouse_bucket_name
+        RUN_STATE_TABLE_NAME       = lookup(var.dynamodb_table_names, "run_state", "")
+        ANOMALY_TABLE_NAME         = lookup(var.dynamodb_table_names, "anomaly", "")
+        AUDIT_TABLE_NAME           = lookup(var.dynamodb_table_names, "audit", "")
+        DASHBOARD_VIEWS_TABLE_NAME = lookup(var.dynamodb_table_names, "dashboard_views", "")
       }
     }
   }

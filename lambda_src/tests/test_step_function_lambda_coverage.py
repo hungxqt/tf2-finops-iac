@@ -12,8 +12,9 @@ def test_step_function_lambda_coverage():
     package_script_path = os.path.join(base_dir, "scripts/package-lambdas.ps1")
     workers_dir = os.path.join(base_dir, "lambda_src/src/workers")
     
-    # 6 source-owned workers
-    expected_source_workers = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller"]
+    # Source-owned workers. The dashboard writer is triggered by EventBridge
+    # after the workflow, so it intentionally has no ASL placeholder.
+    expected_source_workers = ["state", "cost_puller", "normalizer", "router", "audit_writer", "containment_worker", "vpc_alb_caller", "dashboard_summary_writer"]
     
     # 1. Assert required files exist
     assert os.path.exists(asl_path), "statemachine.json file does not exist"
@@ -143,4 +144,3 @@ def test_reintroduction_of_retired_async_detection_resources():
                         content = f.read()
                     for term in forbidden_terms:
                         assert term not in content, f"Forbidden term '{term}' found in {file_path}"
-
