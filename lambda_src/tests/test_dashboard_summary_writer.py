@@ -1,10 +1,23 @@
+import argparse
+import importlib.util
 import sys
 from types import ModuleType
 from pathlib import Path
 
+import pytest
+
 from workers.dashboard_summary_writer import handler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_publisher():
+    path = REPO_ROOT / "scripts" / "publish-dashboard-summary.py"
+    spec = importlib.util.spec_from_file_location("dashboard_summary_publish_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def _set_env(monkeypatch):
@@ -84,3 +97,94 @@ def test_eventbridge_triggers_writer_only_after_success():
     assert 'status          = ["SUCCEEDED"]' in orchestration
     assert 'var.lambda_function_arns["dashboard_summary_writer"]' in orchestration
     assert 'resource "aws_lambda_permission" "dashboard_summary_from_eventbridge"' in orchestration
+
+
+def test_spend_fallback_keeps_only_latest_run_per_account_and_day():
+    publisher = _load_publisher()
+    records = [
+        {
+            "account_id": "123",
+            "timestamp": "2026-03-01T00:00:00Z",
+            "idempotency_key": "old-run",
+            "curated_at": "2026-07-01T10:00:00Z",
+            "cost": 100,
+        },
+        {
+            "account_id": "123",
+            "timestamp": "2026-03-01T00:00:00Z",
+            "idempotency_key": "new-run",
+            "curated_at": "2026-07-01T11:00:00Z",
+            "cost": 40,
+        },
+        {
+            "account_id": "123",
+            "timestamp": "2026-03-01T01:00:00Z",
+            "idempotency_key": "new-run",
+            "curated_at": "2026-07-01T11:00:01Z",
+            "cost": 2,
+        },
+    ]
+
+    assert publisher.build_spend_rows_from_cost_records(records) == [
+        {"day": "2026-03-01", "actual_cost": "42.0"}
+    ]
+
+
+def test_athena_query_ranks_latest_execution_per_account_and_day():
+    publisher = _load_publisher()
+    args = argparse.Namespace(
+        database="finops",
+        account_id="123",
+        lookback_days=90,
+    )
+
+    query = publisher.curated_cost_cte(args)
+
+    assert "PARTITION BY account_id, usage_day" in query
+    assert "ORDER BY execution_updated_at DESC, execution_id DESC" in query
+    assert "WHERE ranked_executions.execution_rank = 1" in query
+
+
+def test_empty_spend_does_not_overwrite_existing_snapshot(monkeypatch):
+    publisher = _load_publisher()
+
+    class FakeS3:
+        def __init__(self):
+            self.put_calls = []
+
+        def get_paginator(self, _name):
+            class EmptyPaginator:
+                def paginate(self, **_kwargs):
+                    return [{"Contents": []}]
+
+            return EmptyPaginator()
+
+        def put_object(self, **kwargs):
+            self.put_calls.append(kwargs)
+
+    fake_s3 = FakeS3()
+
+    class FakeSession:
+        def client(self, name, **_kwargs):
+            if name == "s3":
+                return fake_s3
+            return object()
+
+    monkeypatch.setattr(publisher.boto3, "Session", lambda **_kwargs: FakeSession())
+    monkeypatch.setattr(publisher, "athena_or_empty", lambda *_args, **_kwargs: [])
+    args = argparse.Namespace(
+        region="ap-southeast-1",
+        database="finops",
+        workgroup="primary",
+        athena_results_bucket="results",
+        athena_timeout_seconds=1,
+        account_id="123",
+        lookback_days=90,
+        lakehouse_bucket="lakehouse",
+        max_curated_objects=10,
+    )
+
+    with pytest.raises(RuntimeError, match="preserving the existing dashboard snapshot"):
+        publisher.publish_summary(args)
+
+    assert fake_s3.put_calls == []
