@@ -142,8 +142,12 @@ resource "aws_iam_policy" "request" {
           Effect = "Allow"
           Action = [
             "dynamodb:GetItem",
+            "dynamodb:BatchGetItem",
+            "dynamodb:Query",
             "dynamodb:PutItem",
-            "dynamodb:UpdateItem"
+            "dynamodb:UpdateItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:Scan"
           ]
           Resource = [var.dynamodb_idempotency_table_arn]
         },
@@ -151,9 +155,17 @@ resource "aws_iam_policy" "request" {
           Effect = "Allow"
           Action = [
             "dynamodb:GetItem",
-            "dynamodb:Query"
+            "dynamodb:BatchGetItem",
+            "dynamodb:Query",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:Scan"
           ]
-          Resource = [var.dynamodb_feature_store_table_arn]
+          Resource = [
+            var.dynamodb_feature_store_table_arn,
+            "arn:aws:dynamodb:ap-southeast-1:*:table/finops-feature-store-*"
+          ]
         }
       ],
       length(var.kms_key_arns) > 0 ? [

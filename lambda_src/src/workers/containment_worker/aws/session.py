@@ -47,6 +47,14 @@ def assume_containment_role(
     Returns:
         boto3.Session with member account credentials
     """
+    # If role_name is empty, fallback to the parent session directly (useful in Sandbox/Smoke mode)
+    if not role_name:
+        logger.warning(
+            "role_name is empty. Falling back to parent session credentials (expected in Sandbox/Smoke mode).",
+            extra={"account_id": account_id, "anomaly_id": anomaly_id}
+        )
+        return session
+
     sts = session.client("sts")
     role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
 

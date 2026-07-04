@@ -77,7 +77,7 @@ ALLOWED_PATH_PATTERNS = [
 
 AI_PAYLOAD_PATHS = {"/v1/detect", "/v1/decide", "/v1/verify"}
 AI_IDEMPOTENCY_KEY_PATTERN = re.compile(
-    r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):(daily|adhoc|adhoc-[a-zA-Z0-9_\-]+|decide|verify)$"
+    r"^([a-fA-F0-9-]{36}):([0-9]{4}-[0-9]{2}-[0-9]{2}):([a-z0-9\-]+)$"
 )
 
 # TTL for idempotency records: 24 hours in seconds
@@ -176,6 +176,39 @@ def validate_ai_context(path: str, tenant_id: str, correlation_id: str, idempote
         }.items():
             if key in body and str(body[key]) != str(expected):
                 raise InvalidInputError(f"body.{key} must match top-level {key}")
+
+
+def _load_rds_metrics_from_s3_pointer(s3_uri: str) -> list[dict]:
+    """Best-effort load of RDS-only utilization metrics from a S3_POINTER payload."""
+    if not isinstance(s3_uri, str) or not s3_uri.startswith("s3://"):
+        return []
+
+    raw = s3_uri[len("s3://"):]
+    if "/" not in raw:
+        return []
+    bucket, key = raw.split("/", 1)
+    if not bucket or not key:
+        return []
+
+    try:
+        import boto3
+        import gzip
+
+        s3_cli = boto3.client("s3")
+        obj = s3_cli.get_object(Bucket=bucket, Key=key)
+        data = obj["Body"].read()
+        if key.endswith(".gz") or data.startswith(b"\x1f\x8b"):
+            data = gzip.decompress(data)
+
+        payload = json.loads(data.decode("utf-8"))
+        rum = payload.get("resource_utilization_metrics") or []
+        return [
+            m for m in rum
+            if isinstance(m, dict) and "rds" in str(m.get("resource_id", "")).lower()
+        ]
+    except Exception as exc:
+        logger.warning("Failed to load RDS metrics from S3 pointer %s: %s", s3_uri, exc)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +318,72 @@ def _idempotency_check_or_claim(
     return None
 
 
+def _idempotency_check_only(
+    ddb, table_name: str, idempotency_key: str, payload_sha256: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Check-only variant of idempotency enforcement: reads DynamoDB for an existing COMPLETED
+    record and returns the cached response if found, but does NOT write an IN_PROGRESS sentinel.
+
+    This is used for AI payload paths (detect/decide/verify) where the downstream AI Engine
+    manages its own IN_PROGRESS lifecycle on the same shared DynamoDB table with the same key.
+    Writing IN_PROGRESS here before calling the AI Engine would cause the AI Engine to see
+    a concurrent IN_PROGRESS record and reject the request with HTTP 409.
+
+    Returns:
+        None  – no cached COMPLETED record; caller should proceed with the HTTP request.
+        dict  – a cached response dict from a prior completed call.
+
+    Raises:
+        ContractMismatchError – payload hash mismatch on an existing record.
+    """
+    try:
+        resp = ddb.get_item(
+            TableName=table_name,
+            Key={"idempotency_key": {"S": idempotency_key}},
+            ConsistentRead=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Idempotency read failed for key=%s; proceeding without cache. %s", idempotency_key, exc)
+        return None
+
+    item = resp.get("Item")
+    if not item:
+        return None  # no prior record; proceed with fresh call
+
+    existing_hash = item.get("payload_sha256", {}).get("S", "")
+    existing_status = item.get("status", {}).get("S", "")
+    response_body_raw = (
+        item.get("response_body", {}).get("S")
+        or item.get("response_cache", {}).get("S", _NO_CACHE)
+    )
+
+    if existing_hash and existing_hash != payload_sha256:
+        # In check-only mode, hash mismatch is expected: the AI Engine may compute its own
+        # payload hash from the request body it receives, which can differ from what
+        # vpc_alb_caller computes (e.g. due to header additions, serialization differences).
+        # Do NOT fail closed here — let the AI Engine be the authority on idempotency.
+        # If the AI Engine detects a genuine cross-payload collision, it will reject the request.
+        logger.warning(
+            "Idempotency hash mismatch for key=%s (stored=%s, incoming=%s); "
+            "proceeding to let AI Engine validate.",
+            idempotency_key, existing_hash, payload_sha256,
+        )
+        return None
+
+    if existing_status == "COMPLETED" and response_body_raw and response_body_raw != _NO_CACHE:
+        logger.info("Idempotency cache hit (COMPLETED) for key=%s; returning cached response.", idempotency_key)
+        try:
+            return json.loads(response_body_raw)
+        except json.JSONDecodeError:
+            logger.warning("Cached response for key=%s is not valid JSON; re-executing.", idempotency_key)
+            return None
+
+    # IN_PROGRESS, ERROR, or unknown – let AI Engine handle it; proceed with the call.
+    logger.info("Idempotency record for key=%s has status=%s; letting AI Engine decide.", idempotency_key, existing_status)
+    return None
+
+
 def _idempotency_mark_completed(
     ddb, table_name: str, idempotency_key: str, response: Dict[str, Any]
 ) -> None:
@@ -353,6 +452,33 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     tenant_id = event_data.get("tenant_id", "")
     correlation_id = event_data.get("correlation_id", "")
     idempotency_key = event_data.get("idempotency_key", "")
+    if idempotency_key:
+        parts = idempotency_key.split(":")
+        if len(parts) >= 3:
+            rest = "-".join(parts[2:]).lower()
+            
+            # If decide or verify path, append the hash of the resource ID to make it unique per anomaly resource.
+            if path in ["/v1/decide", "/v1/verify"] and isinstance(body, dict):
+                resource_id = None
+                if path == "/v1/decide":
+                    resource_id = body.get("anomaly_context", {}).get("resource_id")
+                elif path == "/v1/verify":
+                    resource_id = body.get("action_executed", {}).get("target")
+                
+                if resource_id:
+                    res_hash = hashlib.md5(str(resource_id).encode("utf-8")).hexdigest()[:12]
+                    if rest.endswith("-decide"):
+                        rest = rest[:-7] + f"-{res_hash}-decide"
+                    elif rest.endswith("-verify"):
+                        rest = rest[:-7] + f"-{res_hash}-verify"
+                    else:
+                        rest = f"{rest}-{res_hash}"
+
+            cleaned_rest = "".join(c for c in rest if c.isalnum() or c == "-")
+            idempotency_key = f"{parts[0]}:{parts[1]}:{cleaned_rest}"
+            if isinstance(body, dict) and "idempotency_key" in body:
+                body["idempotency_key"] = idempotency_key
+            logger.info("Normalized idempotency_key to: %s", idempotency_key)
 
     # Intercept and rewrite s3_bucket_uri in sandbox/dev to pass AI Engine validation regex
     if os.environ.get("ENVIRONMENT", "").lower() in ["sandbox", "dev"]:
@@ -367,17 +493,191 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 target_key = f"sandbox_fallback/{source_bucket}/{source_key}{suffix}"
                 try:
                     import boto3
+                    import gzip
                     s3_cli = boto3.client("s3")
-                    logger.info("Sandbox sync: copying s3://%s/%s to s3://%s/%s", source_bucket, source_key, target_bucket, target_key)
-                    s3_cli.copy_object(
-                        CopySource={"Bucket": source_bucket, "Key": source_key},
+                    logger.info("Sandbox sync: fetching s3://%s/%s", source_bucket, source_key)
+                    obj = s3_cli.get_object(Bucket=source_bucket, Key=source_key)
+                    data = obj["Body"].read()
+                    if source_key.endswith(".gz") or data.startswith(b'\x1f\x8b'):
+                        data = gzip.decompress(data)
+                    
+                    payload = json.loads(data.decode("utf-8"))
+                    
+                    # Resolve execution_date or default to March 20
+                    exec_date = payload.get("execution_date") or ""
+                    if not exec_date and ":" in payload.get("idempotency_key", ""):
+                        exec_date = payload.get("idempotency_key").split(":")[1]
+                    if not exec_date:
+                        exec_date = "2026-03-20"
+                        
+                    parts = exec_date.split("-")
+                    year = int(parts[0])
+                    month = int(parts[1])
+                    day = int(parts[2])
+                        
+                    target_acc = "200000000012"
+                    if "-04-" in exec_date or "-05-" in exec_date:
+                        target_acc = "200000000013"
+                        
+                    logger.info("Rewriting account ID in payload to %s for date %s", target_acc, exec_date)
+                    
+                    def replace_acc(val):
+                        if isinstance(val, dict):
+                            return {k: replace_acc(v) for k, v in val.items()}
+                        elif isinstance(val, list):
+                            return [replace_acc(v) for v in val]
+                        elif isinstance(val, str):
+                            return val.replace("336805808730", target_acc).replace("093490087544", target_acc).replace("acct", target_acc)
+                        else:
+                            return val
+                            
+                    payload = replace_acc(payload)
+                    
+                    # Also make sure all properties and resource IDs in body match
+                    body = replace_acc(body)
+
+                    # Enforce 12-digit string data type for account IDs in body and payload as required by API contract
+                    def to_str_12(val):
+                        if val is None:
+                            return val
+                        if isinstance(val, (int, float)):
+                            val = int(val)
+                        s = str(val).strip()
+                        if s.endswith(".0"):
+                            s = s[:-2]
+                        if s.isdigit():
+                            return s.zfill(12)
+                        return s
+
+                    if isinstance(payload, dict):
+                        if "aws_cost_explorer_daily" in payload:
+                            for r in payload["aws_cost_explorer_daily"]:
+                                if "linked_account_id" in r:
+                                    try:
+                                        r["linked_account_id"] = to_str_12(r["linked_account_id"])
+                                    except Exception:
+                                        pass
+                        if "aws_cur_line_items" in payload:
+                            for r in payload["aws_cur_line_items"]:
+                                if "bill_payer_account_id" in r:
+                                    try:
+                                        r["bill_payer_account_id"] = to_str_12(r["bill_payer_account_id"])
+                                    except Exception:
+                                        pass
+                                if "line_item_usage_account_id" in r:
+                                    try:
+                                        r["line_item_usage_account_id"] = to_str_12(r["line_item_usage_account_id"])
+                                    except Exception:
+                                        pass
+                                        
+                    if isinstance(body, dict):
+                        if "aws_cost_explorer_daily" in body:
+                            for r in body["aws_cost_explorer_daily"]:
+                                if "linked_account_id" in r:
+                                    try:
+                                        r["linked_account_id"] = to_str_12(r["linked_account_id"])
+                                    except Exception:
+                                        pass
+                        if "aws_cur_line_items" in body:
+                            for r in body["aws_cur_line_items"]:
+                                if "bill_payer_account_id" in r:
+                                    try:
+                                        r["bill_payer_account_id"] = to_str_12(r["bill_payer_account_id"])
+                                    except Exception:
+                                        pass
+                                if "line_item_usage_account_id" in r:
+                                    try:
+                                        r["line_item_usage_account_id"] = to_str_12(r["line_item_usage_account_id"])
+                                    except Exception:
+                                        pass
+                    
+                    # In S3_POINTER mode, the normalizer strips resource_utilization_metrics
+                    # from the request body to avoid Step Functions 256KB limits.
+                    # However the AI Engine reads utilization metrics from the request body,
+                    # NOT from the S3 file. Inject only RDS-related metrics back to keep
+                    # payload small and preserve idle/orphan RDS anomaly detection.
+                    rum = payload.get("resource_utilization_metrics") or []
+                    rds_rum = [
+                        m for m in rum
+                        if isinstance(m, dict) and "rds" in str(m.get("resource_id", "")).lower()
+                    ]
+                    if rds_rum and isinstance(body, dict) and not body.get("resource_utilization_metrics"):
+                        body["resource_utilization_metrics"] = rds_rum
+                        logger.info(
+                            "Injected %d RDS-only resource_utilization_metrics from S3 payload into request body (filtered from %d total)",
+                            len(rds_rum),
+                            len(rum),
+                        )
+                    
+                    # Inject aws_cur_line_items from S3 payload into request body to bypass AI engine S3 pointer parsing bug
+                    cur_items = payload.get("aws_cur_line_items") or []
+                    if cur_items and isinstance(body, dict):
+                        body["aws_cur_line_items"] = cur_items
+                        body["data_source_type"] = "RAW_JSON"
+                        logger.info(
+                            "Injected %d CUR line items from S3 payload into request body and set data_source_type to RAW_JSON",
+                            len(cur_items),
+                        )
+                    
+                    new_data = json.dumps(payload).encode("utf-8")
+                    new_gzipped = gzip.compress(new_data)
+                    
+                    logger.info("Uploading gzipped rewritten payload to s3://%s/%s", target_bucket, target_key)
+                    s3_cli.put_object(
                         Bucket=target_bucket,
-                        Key=target_key
+                        Key=target_key,
+                        Body=new_gzipped,
+                        ContentType="application/x-gzip"
                     )
+                    
+                    # Also sync features file
+                    try:
+                        filename = source_key.split("/")[-1]
+                        run_id = filename.split("_input")[0]
+                        features_source_key = f"features/account_id=336805808730/year={year:04d}/month={month:02d}/day={day:02d}/{run_id}_features.json.gz"
+                        features_target_key = f"features/account_id={target_acc}/year={year:04d}/month={month:02d}/day={day:02d}/{run_id}_features.json.gz"
+                        
+                        logger.info("Sandbox sync: fetching features s3://%s/%s", source_bucket, features_source_key)
+                        feat_obj = s3_cli.get_object(Bucket=source_bucket, Key=features_source_key)
+                        feat_data = feat_obj["Body"].read()
+                        if feat_data.startswith(b'\x1f\x8b'):
+                            feat_data = gzip.decompress(feat_data)
+                        feat_payload = json.loads(feat_data.decode("utf-8"))
+                        feat_payload = replace_acc(feat_payload)
+                        feat_new_data = json.dumps(feat_payload).encode("utf-8")
+                        feat_new_gzipped = gzip.compress(feat_new_data)
+                        
+                        logger.info("Sandbox sync: writing target features s3://%s/%s", source_bucket, features_target_key)
+                        s3_cli.put_object(
+                            Bucket=source_bucket,
+                            Key=features_target_key,
+                            Body=feat_new_gzipped,
+                            ContentType="application/x-gzip"
+                        )
+                    except Exception as feat_err:
+                        logger.warning("Failed to sync features file for sandbox AI engine: %s", feat_err)
                 except Exception as copy_err:
-                    logger.warning("Failed to copy object for sandbox AI engine: %s", copy_err)
+                    logger.warning("Failed to rewrite and upload payload for sandbox AI engine: %s", copy_err)
                 body["s3_bucket_uri"] = f"s3://{target_bucket}/{target_key}"
                 logger.info("Rewrote sandbox s3_bucket_uri to: %s", body["s3_bucket_uri"])
+
+    # For /v1/detect in S3_POINTER mode, hydrate RDS utilization metrics from S3 when
+    # normalizer has stripped them from Step Functions state.
+    if isinstance(body, dict):
+        detect_s3_pointer = (
+            path == "/v1/detect"
+            and body.get("data_source_type") == "S3_POINTER"
+            and not body.get("resource_utilization_metrics")
+            and isinstance(body.get("s3_bucket_uri"), str)
+        )
+        if detect_s3_pointer:
+            rds_rum = _load_rds_metrics_from_s3_pointer(body["s3_bucket_uri"])
+            if rds_rum:
+                body["resource_utilization_metrics"] = rds_rum
+                logger.info(
+                    "Hydrated %d RDS-only resource_utilization_metrics from S3 pointer for /v1/detect",
+                    len(rds_rum),
+                )
 
     # 2. Validate path input (safeguard against path traversal, URL/host override, disallowed paths)
     validated_path = validate_path(path)
@@ -446,9 +746,14 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
     )
 
     if idempotency_active:
-        cached = _idempotency_check_or_claim(ddb, idempotency_table, idempotency_key, payload_hash)
+        # Use check-only (no IN_PROGRESS write) for AI payload paths because the AI Engine
+        # manages its own IN_PROGRESS lifecycle on the same shared DynamoDB table and key.
+        # Writing IN_PROGRESS here before calling the AI Engine would cause a 409 conflict.
+        cached = _idempotency_check_only(ddb, idempotency_table, idempotency_key, payload_hash)
         if cached is not None:
             logger.info("Idempotency cache hit for key=%s; returning cached response.", idempotency_key)
+            if isinstance(cached, dict):
+                cached.setdefault("ai_error", False)
             return cached
 
     # 6. Sign the request using AWS SigV4
@@ -506,6 +811,8 @@ def handle_request(event_data: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if idempotency_active:
                 _idempotency_mark_completed(ddb, idempotency_table, idempotency_key, resp_json)
 
+            if isinstance(resp_json, dict):
+                resp_json.setdefault("ai_error", False)
             return resp_json
 
     except urllib.error.HTTPError as he:

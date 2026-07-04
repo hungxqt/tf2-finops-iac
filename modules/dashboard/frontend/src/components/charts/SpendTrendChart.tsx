@@ -172,25 +172,7 @@ export function SpendTrendChart({ data }: SpendTrendChartProps) {
             isAnimationActive={true}
             animationDuration={1200}
           />
-          <Brush
-            dataKey="date"
-            height={24}
-            stroke="#2d4a6e"
-            fill="#111827"
-            travellerWidth={8}
-            strokeWidth={1}
-            gap={4}
-            padding={{ top: 0, bottom: 0, left: 12, right: 12 }}
-          >
-            <Area
-              type="monotone"
-              dataKey="actual"
-              stroke="#3b82f6"
-              fill="#3b82f6"
-              fillOpacity={0.15}
-              isAnimationActive={false}
-            />
-          </Brush>
+          
           {anomalyPoints.length > 0 && (
             <Scatter
               data={anomalyPoints}

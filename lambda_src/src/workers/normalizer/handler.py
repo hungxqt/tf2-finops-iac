@@ -484,6 +484,11 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
         s3_bucket_uri = raw_uri
 
+    # Load Cost Explorer fallback records from ingestion details if present
+    if not ce_records and ingestion_details:
+        ce_records = ingestion_details.get("aws_cost_explorer_daily", [])
+        ce_records = sanitize_ce_records(ce_records)
+
     if not telemetry_delay_event:
         # CUR ready path — cur_manifest_uri is required
         if not cur_manifest_uri:
@@ -677,7 +682,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             "idempotency_key": ai_idempotency_key,
             "request_timestamp": request_timestamp,
             "aws_cur_line_items": cur_records,
-            "aws_cost_explorer_daily": [],
+            "aws_cost_explorer_daily": ce_records,
             "resource_utilization_metrics": resource_utilization_metrics,
             "business_context": business_context,
             "quality": {

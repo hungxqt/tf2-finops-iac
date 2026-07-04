@@ -97,23 +97,28 @@ function Invoke-LambdaProbe {
 
     Write-Host "  [PROBE] $ProbeName : $Description"
 
-    $PayloadJson    = $Payload | ConvertTo-Json -Depth 10 -Compress
-    $EncodedPayload = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($PayloadJson))
+    $PayloadJson = $Payload | ConvertTo-Json -Depth 10 -Compress
+    $PayloadFile = Join-Path $env:TEMP "probe_payload.json"
+    $ResponseFile = Join-Path $env:TEMP "lambda_probe_response.json"
+
+    # Write payload JSON to temp file with UTF-8 encoding (no BOM)
+    [System.IO.File]::WriteAllText($PayloadFile, $PayloadJson)
+    if (Test-Path $ResponseFile) { Remove-Item $ResponseFile -Force }
 
     try {
         $RawResult = aws lambda invoke `
             --function-name $LambdaFunctionName `
             --region $Region `
-            --payload $EncodedPayload `
+            --payload "file://$PayloadFile" `
             --cli-binary-format raw-in-base64-out `
-            /tmp/lambda_probe_response.json `
+            $ResponseFile `
             --query "StatusCode" `
             --output text 2>&1
 
         $LambdaStatusCode = $RawResult.Trim()
         $ResponseBody = ""
-        if (Test-Path "/tmp/lambda_probe_response.json") {
-            $ResponseBody = Get-Content "/tmp/lambda_probe_response.json" -Raw
+        if (Test-Path $ResponseFile) {
+            $ResponseBody = Get-Content $ResponseFile -Raw
         }
 
         return @{
@@ -186,9 +191,17 @@ function Assert-ProbeNegative {
     return $false
 }
 
+function Get-SafeBody {
+    param([string]$body)
+    if ($null -eq $body) { return "" }
+    if ($body.Length -gt 500) { return $body.Substring(0, 500) }
+    return $body
+}
+
 # ── Base payload ──────────────────────────────────────────────────────────────
 $BaseBody = @{
-    data_source_type  = "RAW_JSON"
+    data_source_type  = "S3_POINTER"
+    s3_bucket_uri     = "s3://tf2-finops-sandbox-lakehouse-bucket/replay/business_context.json"
     tenant_id         = $TenantId
     correlation_id    = $CorrelationId
     idempotency_key   = $IdempotencyKey
@@ -197,7 +210,7 @@ $BaseBody = @{
     business_context  = @{
         linked_account_id = "000000000000"
         traffic_volume    = 1
-        traffic_source    = "INTEGRITY_GATE"
+        traffic_source    = "Synthetic"
         campaign_flag     = $false
         load_test_flag    = $false
         migration_flag    = $false
@@ -234,7 +247,7 @@ $Results.probes += @{
     name   = "POSITIVE_DETECT"
     passed = $P1Pass
     status = $PositiveResult.LambdaStatusCode
-    body   = ($PositiveResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $PositiveResult.ResponseBody)
 }
 if (-not $P1Pass) { $Results.compliant = $false }
 Write-Host ""
@@ -260,7 +273,7 @@ $Results.probes += @{
     name   = "REPLAY_STALE_TS"
     passed = $P2Pass
     status = $ReplayResult.LambdaStatusCode
-    body   = ($ReplayResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $ReplayResult.ResponseBody)
     note   = "ALB does not enforce SigV4; replay enforcement is at AI Lambda level"
 }
 if (-not $P2Pass) { $Results.compliant = $false }
@@ -284,7 +297,7 @@ $Results.probes += @{
     name = "MISSING_AUTH"
     passed = $P3Pass
     status = $AuthResult.LambdaStatusCode
-    body   = ($AuthResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $AuthResult.ResponseBody)
     note   = "Fail-closed enforced at VpcAlbCallerLambda level (ConfigMissingError) when credentials absent"
 }
 if (-not $P3Pass) { $Results.compliant = $false }
@@ -307,7 +320,7 @@ $Results.probes += @{
     name = "HASH_MISMATCH"
     passed = $P4Pass
     status = $HashResult.LambdaStatusCode
-    body   = ($HashResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $HashResult.ResponseBody)
     note   = "Hash enforcement at AI Lambda level. CDO embeds correct hash; mismatch = payload tampering"
 }
 if (-not $P4Pass) { $Results.compliant = $false }
@@ -315,8 +328,8 @@ Write-Host ""
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 Write-Host "================================================================"
-$PassCount = ($Results.probes | Where-Object { $_.passed }).Count
-$TotalCount = $Results.probes.Count
+$PassCount = @($Results.probes | Where-Object { $_.passed }).Count
+$TotalCount = @($Results.probes).Count
 
 if ($Results.compliant) {
     Write-Host " RESULT: COMPLIANT ($PassCount/$TotalCount probes passed)" -ForegroundColor Green

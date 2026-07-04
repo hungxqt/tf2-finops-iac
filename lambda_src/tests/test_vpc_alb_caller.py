@@ -241,6 +241,181 @@ def test_vpc_alb_caller_invalid_json_response(mock_urlopen):
         handler.handle_request(event_data, None)
 
 
+@patch("urllib.request.urlopen")
+def test_sandbox_s3_pointer_injects_rds_metrics_only(mock_urlopen, monkeypatch):
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.read.return_value = b'{"success": true}'
+    mock_urlopen.return_value.__enter__.return_value = mock_response
+
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+
+    rewritten_payload = {
+        "execution_date": "2026-03-20",
+        "resource_utilization_metrics": [
+            {"resource_id": "i-0123456789abcdef0", "cpu_utilization": 1.0},
+            {"resource_id": "arn:aws:rds:ap-southeast-1:336805808730:db:orphan-db", "cpu_utilization": 2.0},
+            {"resource_id": "RDS:db-nonprod-01", "cpu_utilization": 3.0},
+            {"resource_id": "arn:aws:lambda:ap-southeast-1:336805808730:function:x", "cpu_utilization": 4.0},
+        ],
+    }
+
+    class FakeS3Client:
+        def __init__(self):
+            self.put_calls = []
+
+        def get_object(self, Bucket, Key):
+            if Key == "path/input.json":
+                body = MagicMock()
+                body.read.return_value = json.dumps(rewritten_payload).encode("utf-8")
+                return {"Body": body}
+            raise Exception("not found")
+
+        def put_object(self, **kwargs):
+            self.put_calls.append(kwargs)
+            return {}
+
+    fake_s3 = FakeS3Client()
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: fake_s3)
+
+    event_data = valid_ai_event()
+    event_data["body"] = {
+        **event_data["body"],
+        "data_source_type": "S3_POINTER",
+        "account_id": "336805808730",
+        "s3_bucket_uri": "s3://source-bucket/path/input.json",
+        "resource_utilization_metrics": [],
+    }
+
+    handler.handle_request(event_data, None)
+
+    request = mock_urlopen.call_args.args[0]
+    sent_body = json.loads(request.data.decode("utf-8"))
+    sent_metrics = sent_body.get("resource_utilization_metrics", [])
+    sent_ids = [m.get("resource_id", "") for m in sent_metrics]
+
+    assert len(sent_metrics) == 2
+    assert all("rds" in rid.lower() for rid in sent_ids)
+    assert any("orphan-db" in rid for rid in sent_ids)
+
+
+@patch("urllib.request.urlopen")
+def test_sandbox_s3_pointer_does_not_override_existing_metrics(mock_urlopen, monkeypatch):
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.read.return_value = b'{"success": true}'
+    mock_urlopen.return_value.__enter__.return_value = mock_response
+
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+
+    rewritten_payload = {
+        "execution_date": "2026-03-20",
+        "resource_utilization_metrics": [
+            {"resource_id": "arn:aws:rds:ap-southeast-1:336805808730:db:orphan-db", "cpu_utilization": 2.0},
+        ],
+    }
+
+    class FakeS3Client:
+        def get_object(self, Bucket, Key):
+            if Key == "path/input.json":
+                body = MagicMock()
+                body.read.return_value = json.dumps(rewritten_payload).encode("utf-8")
+                return {"Body": body}
+            raise Exception("not found")
+
+        def put_object(self, **kwargs):
+            return {}
+
+    fake_s3 = FakeS3Client()
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: fake_s3)
+
+    existing_metrics = [{"resource_id": "keep-this", "cpu_utilization": 9.9}]
+    event_data = valid_ai_event()
+    event_data["body"] = {
+        **event_data["body"],
+        "data_source_type": "S3_POINTER",
+        "account_id": "336805808730",
+        "s3_bucket_uri": "s3://source-bucket/path/input.json",
+        "resource_utilization_metrics": existing_metrics,
+    }
+
+    handler.handle_request(event_data, None)
+
+    request = mock_urlopen.call_args.args[0]
+    sent_body = json.loads(request.data.decode("utf-8"))
+    assert sent_body.get("resource_utilization_metrics") == existing_metrics
+
+
+@patch("urllib.request.urlopen")
+def test_detect_s3_pointer_hydrates_rds_metrics_outside_sandbox(mock_urlopen, monkeypatch):
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.read.return_value = b'{"success": true}'
+    mock_urlopen.return_value.__enter__.return_value = mock_response
+
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+
+    payload = {
+        "resource_utilization_metrics": [
+            {"resource_id": "i-abc", "cpu_utilization": 10.0},
+            {"resource_id": "arn:aws:rds:ap-southeast-1:111111111111:db:rds-prod-1", "cpu_utilization": 2.2},
+            {"resource_id": "RDS:db-prod-2", "cpu_utilization": 1.1},
+        ]
+    }
+
+    class FakeS3Client:
+        def get_object(self, Bucket, Key):
+            assert Bucket == "tf2-finops-sandbox-lakehouse-bucket"
+            assert Key == "ai-input/path/input.json.gz"
+            import gzip
+            body = MagicMock()
+            body.read.return_value = gzip.compress(json.dumps(payload).encode("utf-8"))
+            return {"Body": body}
+
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: FakeS3Client())
+
+    event_data = valid_ai_event()
+    event_data["body"] = {
+        **event_data["body"],
+        "data_source_type": "S3_POINTER",
+        "s3_bucket_uri": "s3://tf2-finops-sandbox-lakehouse-bucket/ai-input/path/input.json.gz",
+        "resource_utilization_metrics": [],
+    }
+
+    handler.handle_request(event_data, None)
+
+    request = mock_urlopen.call_args.args[0]
+    sent_body = json.loads(request.data.decode("utf-8"))
+    sent_metrics = sent_body.get("resource_utilization_metrics", [])
+    assert len(sent_metrics) == 2
+    assert all("rds" in str(m.get("resource_id", "")).lower() for m in sent_metrics)
+
+
+@patch("urllib.request.urlopen")
+def test_detect_s3_pointer_invalid_uri_keeps_empty_metrics(mock_urlopen):
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.read.return_value = b'{"success": true}'
+    mock_urlopen.return_value.__enter__.return_value = mock_response
+
+    event_data = valid_ai_event()
+    event_data["body"] = {
+        **event_data["body"],
+        "data_source_type": "S3_POINTER",
+        "s3_bucket_uri": "not-a-s3-uri",
+        "resource_utilization_metrics": [],
+    }
+
+    handler.handle_request(event_data, None)
+
+    request = mock_urlopen.call_args.args[0]
+    sent_body = json.loads(request.data.decode("utf-8"))
+    assert sent_body.get("resource_utilization_metrics") == []
+
+
 # ---------------------------------------------------------------------------
 # Request Integrity Header Tests (Section 3 blockers)
 # ---------------------------------------------------------------------------

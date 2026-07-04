@@ -472,6 +472,9 @@ def handle_request(event_data: dict, context: Any) -> dict:
     missing_cloudwatch = False
     estimated_billing = False
 
+    replay_enabled = os.environ.get("SYNTHETIC_REPLAY_ENABLED", "false").lower() == "true"
+    replay_bc_uri = os.environ.get("SYNTHETIC_REPLAY_BUSINESS_CONTEXT_URI", "")
+
     status = "READY"
 
     if cur_delayed:
@@ -480,9 +483,6 @@ def handle_request(event_data: dict, context: Any) -> dict:
 
         ce_throttled = False
         ce_response = None
-
-        replay_enabled = os.environ.get("SYNTHETIC_REPLAY_ENABLED", "false").lower() == "true"
-        replay_bc_uri = os.environ.get("SYNTHETIC_REPLAY_BUSINESS_CONTEXT_URI", "")
 
         replay_bc_data = None
         if replay_enabled and replay_bc_uri and local_s3:
@@ -504,7 +504,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
             
             for r in raw_ce_list:
                 r_date = r.get("date")
-                if r_date and start_date_limit <= r_date < end_date_limit:
+                if r_date and start_date_limit <= r_date <= end_date_limit:
                     projected_id = event.account_id
                     ce_records.append({
                         "date": r_date,
@@ -639,6 +639,40 @@ def handle_request(event_data: dict, context: Any) -> dict:
             if cost_val < 0:
                 negative_cost_record_count += 1
                 negative_cost_total_usd += float(cost_val)
+
+    # Sandbox-only: Load Cost Explorer fallback records for AI Engine baseline even if CUR is ready
+    if not cur_delayed and replay_enabled and replay_bc_uri and local_s3:
+        try:
+            bc_bucket, bc_key = finops_common.parse_s3_uri(replay_bc_uri)
+            bc_obj = local_s3.get_object(bc_bucket, bc_key)
+            if isinstance(bc_obj, dict) and "Body" in bc_obj:
+                bc_bytes = bc_obj["Body"].read()
+            else:
+                bc_bytes = bc_obj
+            replay_bc_data_ce = json.loads(bc_bytes.decode("utf-8"))
+            
+            if replay_bc_data_ce:
+                raw_ce_list = replay_bc_data_ce.get("cost_explorer_daily", [])
+                start_date_limit = (exec_time - timedelta(days=ce_lookback_window)).strftime("%Y-%m-%d")
+                end_date_limit = exec_time.strftime("%Y-%m-%d")
+                
+                for r in raw_ce_list:
+                    r_date = r.get("date")
+                    if r_date and start_date_limit <= r_date < end_date_limit:
+                        projected_id = event.account_id
+                        ce_records.append({
+                            "date": r_date,
+                            "linked_account_id": projected_id,
+                            "linked_account_name": r.get("linked_account_name", projected_id),
+                            "service": r.get("service", ""),
+                            "service_code": r.get("service_code", ""),
+                            "region": r.get("region", "global"),
+                            "unblended_cost": float(r.get("unblended_cost", 0.0)),
+                            "is_estimated": bool(r.get("is_estimated", False))
+                        })
+                logger.info("Synthetic replay (CUR ready): loaded %d CE fallback records for %s to %s", len(ce_records), start_date_limit, end_date_limit)
+        except Exception as e:
+            logger.warning("Failed to load synthetic CE records in CUR-ready mode: %s", e)
 
     # ── CUR-ready manifest validation already completed upfront ──
 
@@ -850,6 +884,7 @@ def handle_request(event_data: dict, context: Any) -> dict:
                 "negative_cost_total_usd": negative_cost_total_usd
             },
             "resource_utilization_metrics": utilization_metrics,
+            "aws_cost_explorer_daily": ce_records,
             "business_context": [
                 {
                     "linked_account_id": event.account_id,

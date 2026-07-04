@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--table-name", help="DynamoDB account policy table name.")
     parser.add_argument("--poll-interval", type=int, default=5, help="Polling interval in seconds for SFN executions.")
     parser.add_argument("--tenant-id", help="Tenant ID to use for the replay (must be a UUID). If omitted, generates a random UUID.")
+    parser.add_argument("--start-date", help="Custom start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", help="Custom end date (YYYY-MM-DD)")
     
     args = parser.parse_args()
     
@@ -91,13 +93,20 @@ def main():
     # Smoke: 2026-03-01 to 2026-03-03
     # Warmup: 2026-03-01 to 2026-03-20 (up to the RDS orphan anomaly date)
     # Full: 2026-03-01 to 2026-05-31
-    start_date = datetime.date(2026, 3, 1)
-    if args.mode == "smoke":
-        end_date = datetime.date(2026, 3, 3)
-    elif args.mode == "warmup":
-        end_date = datetime.date(2026, 3, 20)
+    if args.start_date:
+        start_date = datetime.datetime.strptime(args.start_date, "%Y-%m-%d").date()
     else:
-        end_date = datetime.date(2026, 5, 31)
+        start_date = datetime.date(2026, 3, 1)
+
+    if args.end_date:
+        end_date = datetime.datetime.strptime(args.end_date, "%Y-%m-%d").date()
+    else:
+        if args.mode == "smoke":
+            end_date = datetime.date(2026, 3, 3)
+        elif args.mode == "warmup":
+            end_date = datetime.date(2026, 3, 20)
+        else:
+            end_date = datetime.date(2026, 5, 31)
         
     delta = end_date - start_date
     dates_to_replay = [start_date + datetime.timedelta(days=i) for i in range(delta.days + 1)]
