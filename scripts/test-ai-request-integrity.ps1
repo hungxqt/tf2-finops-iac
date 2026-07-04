@@ -191,6 +191,13 @@ function Assert-ProbeNegative {
     return $false
 }
 
+function Get-SafeBody {
+    param([string]$body)
+    if ($null -eq $body) { return "" }
+    if ($body.Length -gt 500) { return $body.Substring(0, 500) }
+    return $body
+}
+
 # ── Base payload ──────────────────────────────────────────────────────────────
 $BaseBody = @{
     data_source_type  = "S3_POINTER"
@@ -240,7 +247,7 @@ $Results.probes += @{
     name   = "POSITIVE_DETECT"
     passed = $P1Pass
     status = $PositiveResult.LambdaStatusCode
-    body   = ($PositiveResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $PositiveResult.ResponseBody)
 }
 if (-not $P1Pass) { $Results.compliant = $false }
 Write-Host ""
@@ -266,7 +273,7 @@ $Results.probes += @{
     name   = "REPLAY_STALE_TS"
     passed = $P2Pass
     status = $ReplayResult.LambdaStatusCode
-    body   = ($ReplayResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $ReplayResult.ResponseBody)
     note   = "ALB does not enforce SigV4; replay enforcement is at AI Lambda level"
 }
 if (-not $P2Pass) { $Results.compliant = $false }
@@ -290,7 +297,7 @@ $Results.probes += @{
     name = "MISSING_AUTH"
     passed = $P3Pass
     status = $AuthResult.LambdaStatusCode
-    body   = ($AuthResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $AuthResult.ResponseBody)
     note   = "Fail-closed enforced at VpcAlbCallerLambda level (ConfigMissingError) when credentials absent"
 }
 if (-not $P3Pass) { $Results.compliant = $false }
@@ -313,7 +320,7 @@ $Results.probes += @{
     name = "HASH_MISMATCH"
     passed = $P4Pass
     status = $HashResult.LambdaStatusCode
-    body   = ($HashResult.ResponseBody | Select-Object -First 500)
+    body   = (Get-SafeBody $HashResult.ResponseBody)
     note   = "Hash enforcement at AI Lambda level. CDO embeds correct hash; mismatch = payload tampering"
 }
 if (-not $P4Pass) { $Results.compliant = $false }

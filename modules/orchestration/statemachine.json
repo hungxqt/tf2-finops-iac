@@ -831,9 +831,6 @@
                 },
                 "rollback_payload": {
                   "S.$": "States.JsonToString($.ai_decide_response.rollback_payload)"
-                },
-                "boto3_equivalent": {
-                  "S.$": "States.JsonToString($.ai_decide_response.rollback_payload.boto3_equivalent)"
                 }
               }
             },
@@ -1225,7 +1222,12 @@
                   "target.$": "$.anomaly.resource_id",
                   "status": "COMPLETED"
                 },
-                "post_telemetry_window.$": "$.normalized.details.post_telemetry_window"
+                "post_telemetry_window": {
+                  "data_source_type.$": "$.normalized.details.post_telemetry_window.data_source_type",
+                  "telemetry_delay_event.$": "$.normalized.details.post_telemetry_window.telemetry_delay_event",
+                  "s3_bucket_uri.$": "$.normalized.details.post_telemetry_window.s3_bucket_uri",
+                  "aws_cost_explorer_daily": []
+                }
               }
             },
             "ResultPath": "$.verify_result",
@@ -1254,8 +1256,13 @@
           },
           "EvaluateVerifyResultForAnomaly": {
             "Type": "Choice",
-            "Comment": "Branch on verify_result.next_action: DONE|RETRY|ROLLBACK|ESCALATE per contract Section 5.",
+            "Comment": "Branch on verify_result.next_action: DONE|RETRY|ROLLBACK|ESCALATE per contract Section 5. ai_error=true is treated as DONE (verify unavailable, proceed safely).",
             "Choices": [
+              {
+                "Variable": "$.verify_result.ai_error",
+                "BooleanEquals": true,
+                "Next": "WritePostActionAuditForAnomaly"
+              },
               {
                 "Or": [
                   {

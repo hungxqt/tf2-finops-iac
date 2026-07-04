@@ -582,7 +582,7 @@ module "ai_runtime_lambda" {
   aws_region               = var.aws_region
   private_subnet_ids       = module.networking.private_subnet_ids
   lambda_security_group_id = module.compute_lambda.lambda_security_group_id
-  request_image_uri        = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/tf2-finops/ai-engine@${var.request_image_digest}"
+  request_image_uri        = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.project_name}-ai-wrapper@${var.request_image_digest}"
 
 
   vpc_id                 = module.networking.vpc_id
@@ -593,7 +593,7 @@ module "ai_runtime_lambda" {
   alb_access_logs_bucket = module.lakehouse.logging_bucket_name
 
   secret_arns  = []
-  kms_key_arns = [module.lakehouse.data_kms_key_arn]
+  kms_key_arns = [module.lakehouse.data_kms_key_arn, module.lakehouse.ddb_kms_key_arn]
   tags         = var.tags
   destroyable  = var.destroyable
 

@@ -138,28 +138,83 @@ class ContainmentInput:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ContainmentInput":
+        # Support both nested Step Functions context and flat dict formats.
+        # SFN passes the full state context: anomaly fields are under d["anomaly"],
+        # AI response under d["ai_decide_response"], policy under d["account_policy"],
+        # and containment mode under d["ai"]["recommended_containment_mode"].
+
+        # --- Resolve anomaly sub-object ---
+        anomaly = d.get("anomaly", {})
+        ai_decide = d.get("ai_decide_response", {})
+        ai_summary = d.get("ai", {})
+        account_policy = d.get("account_policy", {})
+
+        # anomaly_id: flat key preferred, fallback to nested
+        anomaly_id = d.get("anomaly_id") or anomaly.get("anomaly_id", "")
+        resource_id = d.get("resource_id") or anomaly.get("resource_id", "")
+        anomaly_type = d.get("anomaly_type") or anomaly.get("anomaly_type", "unknown")
+        severity = d.get("severity") or anomaly.get("severity", "medium")
+        environment = d.get("environment") or account_policy.get("environment", "sandbox")
+        account_id = d.get("account_id") or account_policy.get("account_id", "")
+
+        # recommended_containment_mode: flat > ai summary > ai_decide action_plan
+        recommended_containment_mode = (
+            d.get("recommended_containment_mode")
+            or ai_summary.get("recommended_containment_mode")
+            or (ai_decide.get("action_plan") or [{}])[0].get("action", "tag-for-review")
+        )
+
+        # applied_payload: flat > ai_decide.applied_payload
+        # The AI Engine returns applied_payload as {"action_type": ..., "aws_cli_command": ...}
+        # but Boto3Payload.from_dict expects {"service", "method", "parameters"}.
+        # Build a compatible Boto3Payload from whatever is available.
+        raw_applied = d.get("applied_payload") or ai_decide.get("applied_payload", {})
+        raw_rollback = d.get("rollback_payload") or ai_decide.get("rollback_payload", {})
+
+        def _to_boto3_payload(raw: dict[str, Any]) -> Boto3Payload:
+            """Coerce AI Engine applied/rollback payload to Boto3Payload format."""
+            if "service" in raw and "method" in raw:
+                return Boto3Payload.from_dict(raw)
+            # AI Engine returns action_type + aws_cli_command format; wrap it.
+            return Boto3Payload(
+                service=raw.get("action_type", "unknown"),
+                method=raw.get("aws_cli_command", raw.get("aws_cli_rollback_command", "unknown")),
+                parameters=raw,
+            )
+
+        # audit_config: flat > synthesise from SFN environment variables
+        raw_audit = d.get("audit_config") or {}
+        if not raw_audit:
+            import os
+            raw_audit = {
+                "audit_bucket": os.environ.get("AUDIT_BUCKET_NAME", ""),
+                "audit_prefix": "audit/",
+                "dashboard_table": os.environ.get("DASHBOARD_CACHE_TABLE") or os.environ.get("DASHBOARD_VIEWS_TABLE_NAME", ""),
+                "rollback_cache_table": os.environ.get("ROLLBACK_CACHE_TABLE") or os.environ.get("ROLLBACK_CACHE_TABLE_NAME", ""),
+            }
+
         return cls(
-            run_id=d["run_id"],
-            anomaly_id=d["anomaly_id"],
-            correlation_id=d["correlation_id"],
+            run_id=d.get("run_id", ""),
+            anomaly_id=anomaly_id,
+            correlation_id=d.get("correlation_id", ""),
             model_version=d.get("model_version", "unknown"),
-            anomaly_type=d.get("anomaly_type", "unknown"),
-            confidence=float(d.get("confidence", 0.0)),
-            severity=d.get("severity", "medium"),
+            anomaly_type=anomaly_type,
+            confidence=float(d.get("confidence") or anomaly.get("confidence_score", 0.0)),
+            severity=severity,
             explanation=d.get("explanation", ""),
             data_confidence=d.get("data_confidence", DATA_CONFIDENCE_HIGH),
-            resource_id=d["resource_id"],
-            resource_owner=d.get("resource_owner", ""),
-            account_id=d["account_id"],
-            environment=d["environment"],
-            containment_role_name=d["containment_role_name"],
+            resource_id=resource_id,
+            resource_owner=d.get("resource_owner") or anomaly.get("responsible_team", ""),
+            account_id=account_id,
+            environment=environment,
+            containment_role_name=d.get("containment_role_name", ""),
             external_id=d.get("external_id", ""),
-            execution_mode=d["execution_mode"],
+            execution_mode=d.get("execution_mode", MODE_TAG),
             approval_status=d.get("approval_status", APPROVAL_PENDING),
-            recommended_containment_mode=d.get("recommended_containment_mode", "tag-for-review"),
-            applied_payload=Boto3Payload.from_dict(d["applied_payload"]),
-            rollback_payload=Boto3Payload.from_dict(d["rollback_payload"]),
-            audit_config=AuditWriterConfig.from_dict(d["audit_config"]),
+            recommended_containment_mode=recommended_containment_mode,
+            applied_payload=_to_boto3_payload(raw_applied),
+            rollback_payload=_to_boto3_payload(raw_rollback),
+            audit_config=AuditWriterConfig.from_dict(raw_audit),
             tenant_id=d.get("tenant_id", ""),
             evidence_uri=d.get("evidence_uri", ""),
             cost_window_start=d.get("cost_window_start", ""),

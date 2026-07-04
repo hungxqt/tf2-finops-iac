@@ -648,12 +648,15 @@ resource "aws_iam_role_policy" "vpc_alb_caller_s3" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = ["${var.lakehouse_bucket_arn}/*"]
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Resource = [
+          var.lakehouse_bucket_arn,
+          "${var.lakehouse_bucket_arn}/*"
+        ]
       },
       {
         Effect = "Allow"
-        Action = ["s3:ListBucket", "s3:PutObject"]
+        Action = ["s3:ListBucket", "s3:PutObject", "s3:GetObject"]
         Resource = [
           "arn:aws:s3:::company-cdo-*-telemetry",
           "arn:aws:s3:::company-cdo-*-telemetry/*"

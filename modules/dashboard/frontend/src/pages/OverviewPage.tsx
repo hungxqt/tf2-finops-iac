@@ -41,7 +41,7 @@ export function OverviewPage({ summary }: OverviewPageProps) {
 
   const trend = useMemo(() => {
     const points = toTrend(summary);
-    return points.slice(-Math.max(2, Math.ceil(filters.range / 7)));
+    return points.slice(-filters.range);
   }, [filters.range, summary]);
 
   const totalSpend    = trend.reduce((s, p) => s + p.actual,   0);
