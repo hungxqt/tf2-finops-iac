@@ -27,6 +27,10 @@ function toTrend(summary: DashboardSummary): TrendPoint[] {
   }));
 }
 
+export function sliceTrendForRange(points: TrendPoint[], range: number): TrendPoint[] {
+  return points.slice(-Math.max(2, range));
+}
+
 export function OverviewPage({ summary }: OverviewPageProps) {
   const [filters, setFilters] = useState<FilterState>({ account: "all", service: "all", squad: "all", range: 90 });
   const spendChartRef = useRef<HTMLDivElement>(null);

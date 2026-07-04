@@ -264,9 +264,54 @@ def load_curated_cost_rows_from_s3(
     return rows
 
 
+def deduplicate_cost_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the newest replay/run for each account and usage date.
+
+    A replay writes a complete replacement dataset for a date. Summing every
+    curated object therefore multiplies that day's spend. Records belonging to
+    the same run are identified by idempotency/correlation metadata, and the
+    run with the newest ``curated_at`` wins.
+    """
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    run_updated_at: dict[tuple[str, str, str], str] = {}
+
+    for record in records:
+        day = parse_date(record.get("timestamp") or record.get("date") or record.get("line_item_usage_start_date"))
+        if not day:
+            continue
+        account_id = str(
+            record.get("account_id")
+            or record.get("line_item_usage_account_id")
+            or record.get("linked_account_id")
+            or "unknown"
+        )
+        run_id = str(
+            record.get("idempotency_key")
+            or record.get("correlation_id")
+            or record.get("run_id")
+            or "__legacy__"
+        )
+        key = (account_id, day, run_id)
+        grouped[key].append(record)
+        run_updated_at[key] = max(run_updated_at.get(key, ""), str(record.get("curated_at") or ""))
+
+    latest_run_by_day: dict[tuple[str, str], tuple[str, str]] = {}
+    for account_id, day, run_id in grouped:
+        candidate = (run_updated_at[(account_id, day, run_id)], run_id)
+        day_key = (account_id, day)
+        if candidate > latest_run_by_day.get(day_key, ("", "")):
+            latest_run_by_day[day_key] = candidate
+
+    selected: list[dict[str, Any]] = []
+    for (account_id, day, run_id), run_records in grouped.items():
+        if run_id == latest_run_by_day[(account_id, day)][1]:
+            selected.extend(run_records)
+    return selected
+
+
 def build_spend_rows_from_cost_records(records: list[dict[str, Any]]) -> list[dict[str, str]]:
     daily: dict[str, float] = defaultdict(float)
-    for record in records:
+    for record in deduplicate_cost_records(records):
         # Normalizer writes CUR field names: line_item_usage_start_date, line_item_unblended_cost
         day = parse_date(
             record.get("line_item_usage_start_date")
@@ -288,7 +333,7 @@ def build_spend_rows_from_cost_records(records: list[dict[str, Any]]) -> list[di
 def build_impacted_rows_from_cost_records(records: list[dict[str, Any]], lookback_days: int) -> list[dict[str, str]]:
     totals: dict[tuple[str, str], float] = defaultdict(float)
     owner_status: dict[tuple[str, str], str] = {}
-    for record in records:
+    for record in deduplicate_cost_records(records):
         # Normalizer writes CUR field names
         cost = clean_number(
             record.get("line_item_unblended_cost")
@@ -478,6 +523,55 @@ def latest_run_id(run_state_items: list[dict[str, Any]]) -> str:
     return str(sorted_items[0].get("run_id") or sorted_items[0].get("idempotency_key") or "unknown")
 
 
+def curated_cost_cte(args: argparse.Namespace) -> str:
+    """Athena CTE selecting the newest curated execution per account/day."""
+    return f"""
+WITH curated AS (
+  SELECT
+    *,
+    substr(timestamp, 1, 10) AS usage_day,
+    coalesce(
+      nullif(idempotency_key, ''),
+      nullif(correlation_id, ''),
+      "$path"
+    ) AS execution_id
+  FROM "{args.database}"."cur_data"
+  WHERE account_id = '{args.account_id}'
+    AND year >= year(current_date - interval '{args.lookback_days}' day)
+    AND substr(timestamp, 1, 10) <> ''
+),
+executions AS (
+  SELECT
+    account_id,
+    usage_day,
+    execution_id,
+    max(coalesce(curated_at, '')) AS execution_updated_at
+  FROM curated
+  GROUP BY account_id, usage_day, execution_id
+),
+ranked_executions AS (
+  SELECT
+    account_id,
+    usage_day,
+    execution_id,
+    row_number() OVER (
+      PARTITION BY account_id, usage_day
+      ORDER BY execution_updated_at DESC, execution_id DESC
+    ) AS execution_rank
+  FROM executions
+),
+selected AS (
+  SELECT curated.*
+  FROM curated
+  JOIN ranked_executions
+    ON curated.account_id = ranked_executions.account_id
+   AND curated.usage_day = ranked_executions.usage_day
+   AND curated.execution_id = ranked_executions.execution_id
+  WHERE ranked_executions.execution_rank = 1
+)
+"""
+
+
 def publish_summary(args: argparse.Namespace) -> dict[str, Any]:
     session = boto3.Session(region_name=args.region)
     athena = session.client("athena")
@@ -492,7 +586,7 @@ def publish_summary(args: argparse.Namespace) -> dict[str, Any]:
             workgroup=args.workgroup,
             output_bucket=args.athena_results_bucket,
             timeout_seconds=args.athena_timeout_seconds,
-            query=f"""
+            query=curated_cost_cte(args) + """
 SELECT
     substr(timestamp, 1, 10) AS day,
     sum(coalesce(unblended_cost, cost, 0)) AS actual_cost
@@ -513,8 +607,8 @@ ORDER BY day ASC
             workgroup=args.workgroup,
             output_bucket=args.athena_results_bucket,
             timeout_seconds=args.athena_timeout_seconds,
-            query=f"""
-WITH base AS (
+            query=curated_cost_cte(args) + f""",
+base AS (
   SELECT
         service,
         account_id,
@@ -612,6 +706,11 @@ LIMIT 20
             spend_rows = build_spend_rows_from_cost_records(cost_records)
         if not impacted_rows:
             impacted_rows = build_impacted_rows_from_cost_records(cost_records, args.lookback_days)
+
+    if not spend_rows:
+        raise RuntimeError(
+            "No curated spend rows were found; preserving the existing dashboard snapshot"
+        )
 
     anomaly_items = scan_table(dynamodb, args.anomaly_table, args.scan_limit)
     audit_items = scan_table(dynamodb, args.audit_table, args.scan_limit)
