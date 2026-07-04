@@ -46,10 +46,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Package Lambda zips
-        shell: pwsh
-        run: ./scripts/package-lambdas.ps1
-
       - name: Terraform format check
         run: terraform fmt -check -recursive
 
